@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Администрирование — Fraktalex</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f7f8fa; --ink:#15202b; --muted:#5b6671;
+    --line:#e3e7ec; --accent:#2563a8; --accent-ink:#1d4e85; --pos:#1f8a5b; --warn:#c0492e;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5}
+  .wrap{max-width:980px;margin:0 auto;padding:20px 16px 80px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:14px 0 18px;border-bottom:1px solid var(--line);margin-bottom:22px}
+  .brand{font-weight:700}.brand small{display:block;font-weight:500;color:var(--muted);font-size:12px}
+  .who{font-size:13px;color:var(--muted)} .who button{background:none;border:0;color:var(--accent);cursor:pointer;font-size:13px;margin-left:10px}
+  h1{font-size:20px;margin:0 0 16px} h2{font-size:16px;margin:0 0 12px}
+  label{display:block;font-size:13px;color:var(--muted);margin:0 0 6px}
+  input,textarea,select{width:100%;font-family:inherit;font-size:15px;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  input[type=number]{font-family:var(--mono)} textarea{resize:vertical;min-height:54px}
+  input:focus,textarea:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+  .btn{display:inline-flex;align-items:center;gap:7px;border:0;cursor:pointer;background:var(--accent);color:#fff;font-size:15px;font-weight:600;font-family:inherit;padding:10px 18px;border-radius:10px}
+  .btn:hover{background:var(--accent-ink)} .btn[disabled]{opacity:.5;cursor:default}
+  .btn.ghost{background:#fff;color:var(--accent);border:1px solid var(--line)} .btn.ghost:hover{border-color:var(--accent)}
+  .btn.sm{padding:6px 11px;font-size:13px;border-radius:8px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:140px}
+  .panel{border:1px solid var(--line);border-radius:14px;padding:18px;background:#fff;margin:0 0 18px}
+  .tabs{display:flex;gap:6px;margin:0 0 20px;border-bottom:1px solid var(--line)}
+  .tabs button{background:none;border:0;cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;color:var(--muted);padding:10px 14px;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);font-weight:600}
+  td.num,th.num{font-family:var(--mono);text-align:right;white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .tag.created{color:var(--muted)} .tag.notified{color:var(--accent-ink);background:#eef5fb;border-color:#c7dcef}
+  .tag.submitted{color:var(--pos);background:#f0faf4;border-color:#bfe3cf}
+  .notice{padding:11px 13px;border-radius:10px;font-size:14px;margin:0 0 14px}
+  .notice.err{background:#fcefec;color:var(--warn)} .notice.ok{background:#f0faf4;color:var(--pos)}
+  .hint{font-family:var(--mono);font-size:13px;color:var(--accent-ink);background:#eef5fb;border-radius:8px;padding:8px 12px;margin:0 0 14px;display:inline-block}
+  .empty{color:var(--muted);padding:24px 0;text-align:center}
+  .hidden{display:none} .scroll{overflow-x:auto} .muted{color:var(--muted);font-size:13px}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .modal{position:fixed;inset:0;background:rgba(20,30,40,.4);display:flex;align-items:center;justify-content:center;padding:16px;z-index:10}
+  .modal .box{background:#fff;border-radius:16px;max-width:640px;width:100%;max-height:86vh;overflow:auto;padding:22px}
+  .modal h2{display:flex;justify-content:space-between;align-items:center}
+  .x{background:none;border:0;font-size:22px;cursor:pointer;color:var(--muted);line-height:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">Fraktalex<small>Администрирование отчётности</small></div>
+    <div class="who" id="who"></div>
+  </header>
+
+  <section id="gate">
+    <div class="panel" style="max-width:420px;margin:40px auto">
+      <h1>Вход администратора</h1>
+      <div id="gateErr"></div>
+      <label for="pin">PIN администратора</label>
+      <input id="pin" type="password" autocomplete="current-password" placeholder="••••••••" onkeydown="if(event.key==='Enter')gateLogin()">
+      <div style="height:14px"></div>
+      <button class="btn" id="gateBtn" onclick="gateLogin()">Войти</button>
+    </div>
+  </section>
+
+  <main id="app" class="hidden">
+    <div class="tabs">
+      <button id="tab-projects" class="active" onclick="switchTab('projects')">Проекты</button>
+      <button id="tab-assignments" onclick="switchTab('assignments')">Отчёты сотрудников</button>
+      <button id="tab-data" onclick="switchTab('data')">Собранные данные</button>
+    </div>
+
+    <!-- ПРОЕКТЫ -->
+    <section id="view-projects">
+      <div class="panel">
+        <h2>Новый проект</h2>
+        <div id="projErr"></div>
+        <div class="row">
+          <div style="flex:2"><label>Название проекта *</label><input id="p_name" placeholder="Модернизация VHF, Алматы"></div>
+          <div style="flex:2"><label>Заказчик</label><input id="p_customer" placeholder="SkyGrid"></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div style="max-width:120px"><label>Валюта</label>
+            <select id="p_currency" onchange="projHint()"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option></select></div>
+          <div><label>Общая сумма *</label><input id="p_total" type="number" min="0" step="0.01" placeholder="0" oninput="projHint()"></div>
+          <div><label>Рейт в час *</label><input id="p_rate" type="number" min="0" step="0.01" placeholder="0" oninput="projHint()"></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div><label>Начало работ</label><input id="p_start" type="date"></div>
+          <div><label>Окончание работ</label><input id="p_end" type="date"></div>
+        </div>
+        <div style="height:14px"></div>
+        <span class="hint" id="p_hint">Часы рассчитаются автоматически</span><br>
+        <button class="btn" id="p_btn" onclick="createProject()">Создать проект</button>
+      </div>
+      <div class="panel">
+        <h2>Проекты</h2>
+        <div class="scroll"><table id="projTable"><tbody><tr><td class="empty">Загрузка…</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- НАЗНАЧЕНИЯ -->
+    <section id="view-assignments" class="hidden">
+      <div class="panel">
+        <h2>Назначить отчёт сотруднику</h2>
+        <p class="muted">Валюта, сумма и рейт берутся из проекта. Рейт/сумму можно переопределить под конкретного сотрудника — часы пересчитаются.</p>
+        <div id="asgErr"></div>
+        <div class="row">
+          <div style="flex:2"><label>Проект *</label><select id="a_project" onchange="asgFill()"></select></div>
+          <div style="flex:2"><label>Email сотрудника *</label><input id="a_email" type="email" placeholder="name@company.com"></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div><label>Рейт в час <span id="a_curlbl"></span></label><input id="a_rate" type="number" min="0" step="0.01" oninput="asgHint()"></div>
+          <div><label>Сумма <span id="a_curlbl2"></span></label><input id="a_alloc" type="number" min="0" step="0.01" oninput="asgHint()"></div>
+        </div>
+        <div style="height:10px"></div>
+        <div><label>Комментарий сотруднику</label><textarea id="a_comment" placeholder="Что именно нужно отразить в отчёте"></textarea></div>
+        <div style="height:14px"></div>
+        <span class="hint" id="a_hint">Выберите проект</span><br>
+        <button class="btn" id="a_btn" onclick="createAssignment()">Создать отчёт</button>
+      </div>
+      <div class="panel">
+        <h2>Отчёты сотрудников</h2>
+        <div class="scroll"><table id="asgTable"><tbody><tr><td class="empty">Загрузка…</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- ДАННЫЕ -->
+    <section id="view-data" class="hidden">
+      <div class="panel">
+        <h2>Собранные данные</h2>
+        <p class="muted">Все строки также в Google-таблице (лист <b>Entries</b>). Файл → Скачать → Microsoft Excel (.xlsx).</p>
+        <div id="dataErr"></div>
+        <div class="scroll"><table id="dataTable"><tbody><tr><td class="empty">Загрузка…</td></tr></tbody></table></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="modal" class="modal hidden">
+  <div class="box"><h2><span id="m_title">Отчёт</span><button class="x" onclick="closeModal()">×</button></h2><div id="m_body"></div></div>
+</div>
+
+<script>
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
+const SYM = {USD:'$', EUR:'€'};
+const $ = id=>document.getElementById(id);
+const cur = c=>SYM[c]||'$';
+const esc = s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const money = n=>(Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const hrs = n=>(Math.round((+n||0)*100)/100).toLocaleString('ru-RU');
+const calcH = (t,r)=> (+r>0 ? Math.round((+t/+r)*100)/100 : 0);
+function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
+
+let PIN = sessionStorage.getItem('fx_pin') || '';
+let PROJECTS = [], ASSIGNMENTS = [];
+
+async function api(action, payload={}){
+  const res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
+  const data = await res.json();
+  if(!data.ok) throw new Error(data.error||'Ошибка сервера');
+  return data;
+}
+
+async function gateLogin(){
+  const pin = $('pin').value; notice('gateErr','','');
+  if(!pin){ notice('gateErr','err','Введите PIN.'); return; }
+  const b=$('gateBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>'; PIN = pin;
+  try{ await api('admin_login'); sessionStorage.setItem('fx_pin', PIN); enterApp(); }
+  catch(e){ notice('gateErr','err', esc(e.message)); PIN=''; }
+  finally{ b.disabled=false; b.textContent='Войти'; }
+}
+function logout(){ sessionStorage.removeItem('fx_pin'); location.reload(); }
+function enterApp(){
+  $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
+  $('who').innerHTML = 'Администратор <button onclick="logout()">Выйти</button>';
+  loadProjects(); loadAssignments();
+}
+function switchTab(t){
+  ['projects','assignments','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='assignments') loadAssignments();
+}
+
+// ── Проекты ──
+function projHint(){
+  const t=$('p_total').value, r=$('p_rate').value, s=cur($('p_currency').value);
+  $('p_hint').textContent = (+r>0) ? `≈ ${hrs(calcH(t,r))} ч  (сумма ${s}${money(t)} ÷ рейт ${s}${money(r)}/ч)` : 'Укажите сумму и рейт — посчитаю часы';
+}
+async function loadProjects(){
+  try{
+    const r = await api('list_projects'); PROJECTS = r.projects;
+    const tb = $('projTable').querySelector('tbody');
+    if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">Проектов пока нет.</td></tr>'; }
+    else{
+      tb.innerHTML = '<tr><th>Проект</th><th>Заказчик</th><th class="num">Сумма</th><th class="num">Рейт</th><th class="num">Часы</th><th>Сроки</th></tr>'+
+      PROJECTS.map(p=>{const s=cur(p.Currency);return `<tr>
+        <td>${esc(p.Name)}</td><td>${esc(p.Customer)}</td>
+        <td class="num">${s}${money(p.TotalAmount)}</td>
+        <td class="num">${s}${money(p.Rate)}/ч</td>
+        <td class="num">${hrs(p.Hours)}</td>
+        <td class="muted">${esc(p.StartDate||'')}${p.EndDate?' → '+esc(p.EndDate):''}</td></tr>`;}).join('');
+    }
+    $('a_project').innerHTML = PROJECTS.length
+      ? PROJECTS.map(p=>`<option value="${p.ProjectID}">${esc(p.Name)}${p.Customer?' — '+esc(p.Customer):''}</option>`).join('')
+      : '<option value="">Сначала создайте проект</option>';
+    asgFill();
+  }catch(e){ notice('projErr','err', esc(e.message)); }
+}
+async function createProject(){
+  notice('projErr','',''); const name=$('p_name').value.trim();
+  if(!name){ notice('projErr','err','Укажите название проекта.'); return; }
+  if(!(+$('p_rate').value>0)){ notice('projErr','err','Укажите рейт больше нуля.'); return; }
+  const b=$('p_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  try{
+    await api('create_project', { name, customer:$('p_customer').value.trim(),
+      currency:$('p_currency').value, totalAmount:$('p_total').value, rate:$('p_rate').value,
+      startDate:$('p_start').value, endDate:$('p_end').value });
+    ['p_name','p_customer','p_total','p_rate','p_start','p_end'].forEach(id=>$(id).value=''); projHint();
+    await loadProjects(); notice('projErr','ok','Проект создан.');
+  }catch(e){ notice('projErr','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Создать проект'; }
+}
+
+// ── Назначения ──
+function asgProject(){ return PROJECTS.find(p=>p.ProjectID===$('a_project').value); }
+function asgFill(){
+  const p = asgProject();
+  if(p){ $('a_rate').value=p.Rate; $('a_alloc').value=p.TotalAmount;
+    const s=cur(p.Currency); $('a_curlbl').textContent=`(${s})`; $('a_curlbl2').textContent=`(${s})`; }
+  asgHint();
+}
+function asgHint(){
+  const p=asgProject(); if(!p){ $('a_hint').textContent='Выберите проект'; return; }
+  const s=cur(p.Currency), r=$('a_rate').value, t=$('a_alloc').value;
+  $('a_hint').textContent = (+r>0) ? `≈ ${hrs(calcH(t,r))} ч  (${s}${money(t)} ÷ ${s}${money(r)}/ч)` : 'Укажите рейт';
+}
+async function loadAssignments(){
+  try{
+    const r = await api('list_assignments'); ASSIGNMENTS = r.assignments;
+    const tb = $('asgTable').querySelector('tbody');
+    if(!ASSIGNMENTS.length){ tb.innerHTML='<tr><td class="empty">Отчётов пока нет.</td></tr>'; return; }
+    tb.innerHTML = '<tr><th>Проект</th><th>Сотрудник</th><th class="num">Рейт</th><th class="num">Часы</th><th>Статус</th><th></th></tr>'+
+    ASSIGNMENTS.map(a=>{const s=cur(a.Currency);return `<tr>
+      <td>${esc(a.ProjectName)}<div class="muted">${esc(a.Customer||'')}</div></td>
+      <td>${esc(a.EmployeeEmail)}</td>
+      <td class="num">${s}${money(a.Rate)}/ч</td>
+      <td class="num">${hrs(a.AllocatedHours)}</td>
+      <td><span class="tag ${esc(a.Status)}">${statusRu(a.Status)}</span></td>
+      <td style="white-space:nowrap">
+        <button class="btn ghost sm" onclick="notify('${a.AssignmentID}', this)">Письмо</button>
+        ${a.Status==='submitted'?`<button class="btn sm" onclick="viewReport('${a.AssignmentID}')">Отчёт</button>`:''}
+      </td></tr>`;}).join('');
+  }catch(e){ notice('asgErr','err', esc(e.message)); }
+}
+function statusRu(s){return {created:'Создан',notified:'Отправлено письмо',submitted:'Отчёт получен'}[s]||s;}
+async function createAssignment(){
+  notice('asgErr','',''); const projectId=$('a_project').value, email=$('a_email').value.trim();
+  if(!projectId){ notice('asgErr','err','Выберите проект.'); return; }
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('asgErr','err','Введите корректный email.'); return; }
+  if(!(+$('a_rate').value>0)){ notice('asgErr','err','Рейт должен быть больше нуля.'); return; }
+  const b=$('a_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  try{
+    await api('create_assignment', { projectId, email, rate:$('a_rate').value, allocatedAmount:$('a_alloc').value, comment:$('a_comment').value.trim() });
+    $('a_email').value=''; $('a_comment').value=''; asgFill();
+    await loadAssignments(); notice('asgErr','ok','Отчёт назначен. Отправьте письмо кнопкой «Письмо».');
+  }catch(e){ notice('asgErr','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Создать отчёт'; }
+}
+async function notify(aid, btn){
+  const old=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{ await api('notify',{assignmentId:aid}); btn.textContent='Отправлено ✓'; await loadAssignments(); }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent=old; }
+}
+
+async function viewReport(aid){
+  try{
+    const r = await api('admin_get_report',{assignmentId:aid});
+    const a=r.assignment, items=r.items||[], s=cur(a.Currency);
+    let H=0,M=0; items.forEach(it=>{H+=+it.Hours||0;M+=+it.Amount||0;});
+    $('m_title').textContent = a.ProjectName;
+    $('m_body').innerHTML = `
+      <p class="muted">${esc(a.EmployeeEmail)} · рейт ${s}${money(a.Rate)}/ч · отчитаться за ${hrs(a.AllocatedHours)} ч (${s}${money(a.AllocatedAmount)})</p>
+      ${items.length?`<div class="scroll"><table>
+        <tr><th>#</th><th>Описание</th><th class="num">Часы</th><th class="num">${s}</th></tr>
+        ${items.map((it,i)=>`<tr><td>${i+1}</td><td>${esc(it.ItemDescription)}</td><td class="num">${hrs(it.Hours)}</td><td class="num">${money(it.Amount)}</td></tr>`).join('')}
+        <tr><td></td><td><b>Итого</b></td><td class="num"><b>${hrs(H)}</b></td><td class="num"><b>${money(M)}</b></td></tr>
+      </table></div>`:'<p class="empty">Сотрудник ещё не внёс данные.</p>'}`;
+    $('modal').classList.remove('hidden');
+  }catch(e){ alert(e.message); }
+}
+function closeModal(){ $('modal').classList.add('hidden'); }
+
+async function loadData(){
+  try{
+    const r = await api('list_entries'); const rows=r.entries||[];
+    const tb=$('dataTable').querySelector('tbody');
+    if(!rows.length){ tb.innerHTML='<tr><td class="empty">Данных пока нет.</td></tr>'; return; }
+    let H=0; rows.forEach(x=>{H+=+x.Hours||0;});
+    tb.innerHTML='<tr><th>Проект</th><th>Сотрудник</th><th>Описание</th><th class="num">Часы</th><th class="num">Сумма</th></tr>'+
+      rows.map(x=>{const s=cur(x.Currency);return `<tr><td>${esc(x.ProjectName)}</td><td>${esc(x.EmployeeEmail)}</td>
+        <td>${esc(x.ItemDescription)}</td><td class="num">${hrs(x.Hours)}</td><td class="num">${s}${money(x.Amount)}</td></tr>`;}).join('')+
+      `<tr><td colspan="3"><b>Итого часов</b></td><td class="num"><b>${hrs(H)}</b></td><td></td></tr>`;
+  }catch(e){ notice('dataErr','err', esc(e.message)); }
+}
+
+(function init(){
+  if(APPS_SCRIPT_URL.startsWith('PASTE')){ notice('gateErr','err','Не настроен APPS_SCRIPT_URL в admin.html.'); }
+  if(PIN){ enterApp(); }
+})();
+</script>
+</body>
+</html>
