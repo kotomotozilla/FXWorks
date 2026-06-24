@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Отчёты — Fraktalex</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f7f8fa; --ink:#15202b; --muted:#5b6671;
+    --line:#e3e7ec; --accent:#2563a8; --accent-ink:#1d4e85;
+    --pos:#1f8a5b; --warn:#c0492e;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-text-size-adjust:100%}
+  .wrap{max-width:760px;margin:0 auto;padding:20px 16px 80px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:14px 0 18px;border-bottom:1px solid var(--line);margin-bottom:24px}
+  .brand{font-weight:700;letter-spacing:.2px}
+  .brand small{display:block;font-weight:500;color:var(--muted);font-size:12px;letter-spacing:.3px}
+  .who{font-size:13px;color:var(--muted);font-family:var(--mono)}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:14px}
+  label{display:block;font-size:13px;color:var(--muted);margin:0 0 6px}
+  input,textarea,select{width:100%;font-family:inherit;font-size:15px;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 12px}
+  input[type=number]{font-family:var(--mono)}
+  textarea{resize:vertical;min-height:64px}
+  input:focus,textarea:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+  .btn{display:inline-flex;align-items:center;gap:8px;border:0;cursor:pointer;background:var(--accent);color:#fff;font-size:15px;font-weight:600;font-family:inherit;padding:11px 18px;border-radius:10px}
+  .btn:hover{background:var(--accent-ink)} .btn[disabled]{opacity:.5;cursor:default}
+  .btn.ghost{background:#fff;color:var(--accent);border:1px solid var(--line)} .btn.ghost:hover{border-color:var(--accent)}
+  .btn.sm{padding:7px 12px;font-size:13px;border-radius:8px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:0}
+  .card{border:1px solid var(--line);border-radius:14px;padding:16px;margin:0 0 12px;background:#fff}
+  .card .meta{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--muted);font-size:13px;margin:6px 0 0}
+  .card .meta b{color:var(--ink);font-family:var(--mono);font-weight:600}
+  .pname{font-size:17px;font-weight:700;margin:0}
+  .pcust{color:var(--muted);font-size:13px;margin:2px 0 0}
+  .hoursline{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--accent-ink);margin:10px 0 0}
+  .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .tag.done{color:var(--pos);border-color:#bfe3cf;background:#f0faf4}
+  .tag.todo{color:var(--accent-ink);border-color:#c7dcef;background:#eef5fb}
+  .cardfoot{display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:10px}
+  .comment{background:var(--panel);border-radius:10px;padding:10px 12px;font-size:13px;margin-top:10px;color:#2b3742}
+  .dash{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:14px 0 18px}
+  .dash .cell{background:#fff;padding:12px 14px}
+  .dash .cell.lead{background:#eef5fb}
+  .dash .k{font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+  .dash .v{font-family:var(--mono);font-size:18px;font-weight:600;margin-top:3px}
+  .dash .v.pos{color:var(--pos)} .dash .v.warn{color:var(--warn)}
+  @media(max-width:560px){.dash{grid-template-columns:repeat(2,1fr)}}
+  .meter{height:8px;border-radius:999px;background:var(--line);overflow:hidden;margin:0 0 18px}
+  .meter>i{display:block;height:100%;background:var(--accent);width:0;transition:width .25s}
+  .meter>i.over{background:var(--warn)}
+  .item{border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 10px;background:#fff}
+  .item .hd{display:flex;justify-content:space-between;align-items:center;margin:0 0 8px}
+  .item .hd .n{font-size:12px;color:var(--muted);font-family:var(--mono)}
+  .item .amt{font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .iconbtn{border:0;background:none;color:var(--warn);cursor:pointer;font-size:13px;padding:4px}
+  .hrs{max-width:140px}
+  .notice{padding:11px 13px;border-radius:10px;font-size:14px;margin:0 0 14px}
+  .notice.err{background:#fcefec;color:var(--warn)} .notice.ok{background:#f0faf4;color:var(--pos)}
+  .empty{color:var(--muted);text-align:center;padding:40px 0}
+  .back{background:none;border:0;color:var(--accent);cursor:pointer;font-size:14px;padding:0;margin:0 0 14px}
+  .hidden{display:none}
+  .spin{display:inline-block;width:16px;height:16px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">Fraktalex<small>Сбор отчётности</small></div>
+    <div class="who" id="who"></div>
+  </header>
+
+  <section id="screen-login">
+    <h1>Вход для сотрудника</h1>
+    <p class="sub">Введите рабочий email, на который пришло уведомление — увидите свои отчёты.</p>
+    <div id="loginErr"></div>
+    <label for="email">Email</label>
+    <input id="email" type="email" inputmode="email" autocomplete="email" placeholder="name@company.com">
+    <div style="height:14px"></div>
+    <button class="btn" id="loginBtn" onclick="login()">Показать мои отчёты</button>
+  </section>
+
+  <section id="screen-list" class="hidden">
+    <h1>Мои отчёты</h1>
+    <p class="sub" id="listSub"></p>
+    <div id="listErr"></div>
+    <div id="cards"></div>
+  </section>
+
+  <section id="screen-report" class="hidden">
+    <button class="back" onclick="backToList()">← К списку отчётов</button>
+    <h1 id="rName"></h1>
+    <p class="sub" id="rMeta"></p>
+    <div id="rComment"></div>
+
+    <div class="dash">
+      <div class="cell lead"><div class="k">Отчитаться за</div><div class="v" id="dHours">—</div></div>
+      <div class="cell"><div class="k">Рейт</div><div class="v" id="dRate">—</div></div>
+      <div class="cell"><div class="k">Отчитано</div><div class="v" id="dDone">—</div></div>
+      <div class="cell"><div class="k">Остаток</div><div class="v pos" id="dLeft">—</div></div>
+    </div>
+    <div class="meter"><i id="meterBar"></i></div>
+
+    <div id="items"></div>
+    <button class="btn ghost sm" onclick="addItem()">+ Добавить пункт</button>
+
+    <div style="height:18px"></div>
+    <div id="submitMsg"></div>
+    <button class="btn" id="submitBtn" onclick="submitReport()">Отправить отчёт</button>
+  </section>
+</div>
+
+<script>
+// ── НАСТРОЙКА ──
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
+const SYM = {USD:'$', EUR:'€'};
+
+async function api(action, payload){
+  const res = await fetch(APPS_SCRIPT_URL, {
+    method:'POST', redirect:'follow',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify(Object.assign({action}, payload))
+  });
+  const data = await res.json();
+  if(!data.ok) throw new Error(data.error || 'Ошибка сервера');
+  return data;
+}
+
+const $ = id => document.getElementById(id);
+const cur = c => SYM[c] || '$';
+const fmtMoney = n => (Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtH = n => (Math.round((+n||0)*100)/100).toLocaleString('ru-RU');
+function show(id){['screen-login','screen-list','screen-report'].forEach(s=>$(s).classList.add('hidden'));$(id).classList.remove('hidden');}
+function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+let STATE = { email:'', current:null };
+
+async function login(){
+  const email = $('email').value.trim().toLowerCase();
+  notice('loginErr','','');
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('loginErr','err','Введите корректный email.'); return; }
+  const btn = $('loginBtn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    const r = await api('list_my_assignments', {email});
+    STATE.email = r.email; $('who').textContent = r.email;
+    renderList(r.assignments); show('screen-list');
+    const aid = new URLSearchParams(location.search).get('aid');
+    if(aid) openReport(aid);
+  }catch(e){ notice('loginErr','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Показать мои отчёты'; }
+}
+
+function renderList(items){
+  $('listSub').textContent = items.length ? `${items.length} ${plural(items.length,'отчёт','отчёта','отчётов')} для заполнения` : '';
+  if(!items.length){ $('cards').innerHTML = '<div class="empty">Назначенных отчётов пока нет.</div>'; return; }
+  $('cards').innerHTML = items.map(a=>{
+    const done = a.Status==='submitted', s = cur(a.Currency);
+    return `<div class="card">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:start">
+        <div>
+          <p class="pname">${esc(a.ProjectName)}</p>
+          ${a.Customer?`<p class="pcust">Заказчик: ${esc(a.Customer)}</p>`:''}
+        </div>
+        <span class="tag ${done?'done':'todo'}">${done?'Отправлен':'К заполнению'}</span>
+      </div>
+      <div class="hoursline">Отчитаться за ${fmtH(a.AllocatedHours)} ч</div>
+      <div class="meta">
+        <span>Рейт: <b>${s}${fmtMoney(a.Rate)}/ч</b></span>
+        <span>Сумма: <b>${s}${fmtMoney(a.AllocatedAmount)}</b></span>
+        ${a.StartDate?`<span>Начало: <b>${esc(a.StartDate)}</b></span>`:''}
+        ${a.EndDate?`<span>Окончание: <b>${esc(a.EndDate)}</b></span>`:''}
+      </div>
+      ${a.Comment?`<div class="comment">💬 ${esc(a.Comment)}</div>`:''}
+      <div class="cardfoot"><span></span>
+        <button class="btn sm" onclick="openReport('${a.AssignmentID}')">${done?'Изменить отчёт':'Заполнить отчёт'}</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+function plural(n,a,b,c){const m=n%100,d=n%10;if(m>=11&&m<=14)return c;if(d===1)return a;if(d>=2&&d<=4)return b;return c;}
+
+async function openReport(aid){
+  try{
+    const r = await api('get_assignment', {email:STATE.email, assignmentId:aid});
+    STATE.current = r.assignment; const a = r.assignment, s = cur(a.Currency);
+    $('rName').textContent = a.ProjectName;
+    $('rMeta').textContent = [a.Customer?'Заказчик: '+a.Customer:'', a.StartDate&&a.EndDate?`${a.StartDate} → ${a.EndDate}`:''].filter(Boolean).join('   •   ');
+    $('rComment').innerHTML = a.Comment ? `<div class="comment">💬 ${esc(a.Comment)}</div>` : '';
+    $('dHours').textContent = fmtH(a.AllocatedHours)+' ч';
+    $('dRate').textContent = s+fmtMoney(a.Rate)+'/ч';
+    notice('submitMsg','','');
+    $('items').innerHTML='';
+    const existing = (r.items||[]);
+    if(existing.length){ existing.forEach(it=>addItem(it.ItemDescription, it.Hours)); } else { addItem(); }
+    recalc(); show('screen-report'); window.scrollTo(0,0);
+  }catch(e){ notice('listErr','err', esc(e.message)); }
+}
+function backToList(){ login(); }
+
+function addItem(desc='', hours=''){
+  const div = document.createElement('div'); div.className='item';
+  div.innerHTML = `
+    <div class="hd"><span class="n"></span><span class="amt">${cur(STATE.current&&STATE.current.Currency)}0.00</span></div>
+    <textarea placeholder="Краткое описание выполненных работ" oninput="recalc()">${esc(desc)}</textarea>
+    <div style="height:8px"></div>
+    <div class="row" style="align-items:end">
+      <div class="hrs"><label>Часы</label>
+        <input type="number" min="0" step="0.25" placeholder="0" value="${hours!==''&&hours!=null?hours:''}" oninput="recalc()"></div>
+      <div style="flex:0 0 auto"><button class="iconbtn" onclick="this.closest('.item').remove();recalc()">Удалить</button></div>
+    </div>`;
+  $('items').appendChild(div); renumber();
+}
+function renumber(){[...document.querySelectorAll('#items .item')].forEach((el,i)=>{el.querySelector('.n').textContent='Пункт '+(i+1);});}
+
+function recalc(){
+  renumber(); const a = STATE.current; if(!a) return;
+  const rate = +a.Rate||0, s = cur(a.Currency);
+  const maxHours = +a.AllocatedHours||0, budget = maxHours*rate;
+  let hours=0;
+  document.querySelectorAll('#items .item').forEach(el=>{
+    const h = parseFloat((el.querySelector('input').value||'').replace(',','.'))||0;
+    hours += h; el.querySelector('.amt').textContent = s+fmtMoney(h*rate);
+  });
+  const money = hours*rate, leftHours = maxHours-hours, leftMoney = budget-money;
+  const over = leftHours < -0.005;
+
+  $('dDone').textContent = `${fmtH(hours)} ч · ${s}${fmtMoney(money)}`;
+  const left = $('dLeft');
+  left.textContent = `${fmtH(leftHours)} ч · ${s}${fmtMoney(leftMoney)}`;
+  left.className = 'v ' + (over?'warn':'pos');
+
+  const bar = $('meterBar'), pct = maxHours>0 ? Math.min(100, hours/maxHours*100) : 0;
+  bar.style.width = pct+'%'; bar.classList.toggle('over', over);
+
+  notice('submitMsg', over?'err':'', over ? `Превышение на ${fmtH(-leftHours)} ч. Отправить можно, но проверьте часы.` : '');
+}
+
+async function submitReport(){
+  const items = [...document.querySelectorAll('#items .item')].map(el=>({
+    description: el.querySelector('textarea').value.trim(),
+    hours: parseFloat((el.querySelector('input').value||'').replace(',','.'))||0
+  })).filter(it=>it.description||it.hours>0);
+  if(!items.length){ notice('submitMsg','err','Добавьте хотя бы один пункт с описанием и часами.'); return; }
+
+  const btn=$('submitBtn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    const r = await api('submit_report', {email:STATE.email, assignmentId:STATE.current.AssignmentID, items});
+    const s = cur(STATE.current.Currency);
+    notice('submitMsg','ok', `Отчёт отправлен: ${fmtH(r.totals.hours)} ч на ${s}${fmtMoney(r.totals.amount)}. Спасибо!`);
+  }catch(e){ notice('submitMsg','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Отправить отчёт'; }
+}
+
+(function init(){
+  const p = new URLSearchParams(location.search), em = p.get('email');
+  if(em){ $('email').value = em; }
+  if(APPS_SCRIPT_URL.startsWith('PASTE')){ notice('loginErr','err','Не настроен APPS_SCRIPT_URL в employee.html.'); }
+})();
+</script>
+</body>
+</html>
