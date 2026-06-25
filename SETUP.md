@@ -8,7 +8,7 @@ Three files:
 | `admin.html` | GitHub Pages | admin panel |
 | `employee.html` | GitHub Pages | employee page |
 
-The "Excel table on Google Drive" is the Google Sheet itself (the **Entries** tab). Export to `.xlsx`: in the sheet, **File → Download → Microsoft Excel**.
+The "Excel table on Google Drive" is the Google Sheet itself. Export to `.xlsx`: in the sheet, **File → Download → Microsoft Excel**.
 
 ---
 
@@ -18,20 +18,17 @@ The "Excel table on Google Drive" is the Google Sheet itself (the **Entries** ta
 2. In the sheet: **Extensions → Apps Script**. Delete the boilerplate and paste all of `Code.gs`.
 3. In the `CONFIG` block at the top, set:
    - `ADMIN_PASSCODE` — a long random admin PIN (don't share it).
-   - `EMPLOYEE_BASE_URL` — link to the employee page (after Step 2, format: `https://USERNAME.github.io/REPO/employee.html`).
+   - `EMPLOYEE_BASE_URL` — link to the employee page (after Step 2: `https://USERNAME.github.io/REPO/employee.html`).
    - `ADMIN_BASE_URL` — link to the admin panel (used in the "report ready" email button).
-   - `ADMIN_EMAIL` — address that receives "report ready" notifications. If empty, the script owner's address is used.
+   - `ADMIN_EMAIL` — address that receives "report ready" notifications (recommended to set explicitly).
    - `SHEET_ID` — can stay empty if the script is opened from the sheet itself.
-4. (Optional) run the `setup` function once to create the tabs. They are also created on first request.
-5. **Deploy → New deployment → type "Web app"**:
-   - Execute as: **Me**
-   - Who has access: **Anyone**
-6. Approve the Gmail/Sheets permissions (needed to send mail and write to the sheet).
-7. Copy the **Web app URL** (`https://script.google.com/macros/s/.../exec`).
+4. **Deploy → New deployment → type "Web app"**: Execute as **Me**, Who has access **Anyone**. Approve the Gmail/Sheets permissions.
+5. Copy the **Web app URL** (`https://script.google.com/macros/s/.../exec`).
 
 Check: open that URL in a browser — it should return `{"ok":true,"service":"fraktalex-reports",...}`.
 
 > After any code change you must **Deploy → Manage deployments → ✏️ → New version**, otherwise the changes won't apply.
+> The backend self-heals sheet structure: if a tab has an outdated header row, it is renamed to `<Tab>_old_<timestamp>` and a fresh one is created (no data is destroyed).
 
 ---
 
@@ -40,10 +37,8 @@ Check: open that URL in a browser — it should return `{"ok":true,"service":"fr
 1. In `admin.html` and `employee.html`, replace `PASTE_YOUR_WEB_APP_URL_HERE` with the Web app URL from Step 1.
 2. Upload both files to a GitHub repository.
 3. **Settings → Pages → Source: Deploy from branch**, branch `main`, folder `/root`. Save.
-4. After a minute the pages are live:
-   - admin: `https://USERNAME.github.io/REPO/admin.html`
-   - employee: `https://USERNAME.github.io/REPO/employee.html`
-5. Go back to Apps Script, fill in `EMPLOYEE_BASE_URL` and `ADMIN_BASE_URL`, and publish a new deployment version.
+4. After a minute the pages are live (`.../admin.html`, `.../employee.html`).
+5. Back in Apps Script, fill in `EMPLOYEE_BASE_URL` and `ADMIN_BASE_URL`, and publish a new deployment version.
 
 ---
 
@@ -51,44 +46,48 @@ Check: open that URL in a browser — it should return `{"ok":true,"service":"fr
 
 **Administrator** (`admin.html`):
 1. Sign in with the PIN.
-2. **Employees** → add people: full name, email, rate, currency. (Re-adding the same email updates the record.)
-3. **Projects** → create a project: name, customer, employee, comment. That's it — rate and currency come from the employee's record.
-4. Next to each project — the **Release** button: the task becomes available to the employee and they get an email. Until released, the employee can't see it.
-5. **Recall** takes the task back — it becomes unavailable to the employee (any draft is preserved; on the next release they continue from it).
-6. When the employee submits, the status becomes "Submitted", you get an email, and the **Report** button shows the activities and totals. A per-report summary also appears in **Collected data**.
+2. **Employees** → add people: full name, email, rate, currency, and a **password** (the employee signs in with email + password). Re-adding the same email updates the record; leave password blank to keep the old one.
+3. **Projects** → create a project with just **name** and **customer**.
+4. Open the project (**Open**) to manage it:
+   - **Add employee**: pick from the directory + a comment, then **Add & notify** — the employee is assigned and emailed. You can add several employees.
+   - Edit each employee's **comment** and **Save comment** — if the comment changed, that employee is emailed again. Unchanged employees are not emailed.
+   - **Recall** a report (becomes unavailable to the employee; draft is kept) / **Release again** (re-notify).
+   - **Report** shows the submitted activities and totals.
+   - **Delete** removes one employee's report; **Delete project** removes the whole project with all reports.
+   - Edit **project name / customer** and **Save project**.
+5. When an employee submits, the status becomes "Submitted" and you receive an email. A per-report summary is in **Collected data**.
 
 **Employee** (`employee.html`):
-1. Open the link from the email → enter your email. You only see projects released to you.
-2. The list shows: project, customer, rate, comment, status (new / draft / submitted).
-3. Open a report, list the **activities** (one description each) and enter the **total hours** spent on all activities. The header shows live: rate, total hours, and the amount (hours × rate).
-4. **Save draft** — you can return to a report many times across sessions. **Submit report** — the report goes to the administrator (who receives an email).
+1. Open the link from the email → enter **email + password**. You only see reports assigned to you (not recalled).
+2. Open a report, list the **activities** (one description each) and enter the **total hours** for all activities. The header shows rate, total hours, and amount (hours × rate).
+3. **Save draft** — return to it across sessions. **Submit report** — it goes to the admin (who is emailed).
 
 ---
 
-## Workflow (task statuses)
+## Notifications (when employees are emailed)
 
-`Created` (admin only) → **Release** → `Released` (visible to employee, email sent) → employee saves `Draft` → **Submit** → `Submitted` (email to admin).
-At any time before submission the admin can **Recall** → back to `Created`, unavailable to the employee.
+An employee is emailed only when they are **added** to a project, or when their **comment is changed**. Other employees on the project are not disturbed.
 
 ---
 
 ## Security notes
 
-- The **employee** "authenticates" only by email — intentionally simple, as specified. Anyone who knows someone's email can see their tasks. If you need it stricter, I can add a one-time token in the email link (magic-link).
-- The **admin** is protected by a PIN, checked by the server on every action. Use a long PIN and don't publish `Code.gs` with a real PIN in a public repository.
-- The "Anyone" deployment is required so static pages can reach the API. Actions are still protected: admin ones by the PIN, employee ones by email + task-status checks on the server.
+- Employees sign in with **email + password** set by the admin. Passwords are stored as plain text in the private **Employees** sheet — fine for a simple internal tool, but don't reuse important passwords. (Can be upgraded to hashed passwords on request.)
+- The **admin** is protected by a PIN, checked on every action. Use a long PIN; don't publish `Code.gs` with a real PIN in a public repo.
+- The "Anyone" deployment is required so static pages can reach the API. Admin actions are gated by the PIN; employee actions by email + password + status checks.
 
 ## Troubleshooting
 
-- **Emails not arriving** → check Spam; make sure you granted the Gmail permission during deployment. Gmail limit is ~100 emails/day on a regular account.
-- **"The string did not match the expected pattern" / non-JSON / CORS** → the endpoint must be open to "Anyone" and the URL must end with `/exec` (not `/dev`). Open the `/exec` URL directly: it should return JSON, not a Google sign-in page.
+- **Emails not arriving** → check Spam; grant the Gmail permission during deployment. Gmail limit ≈100 emails/day.
+- **"did not match the expected pattern" / non-JSON / CORS** → the `/exec` URL must be open to "Anyone". Open it directly: it should return JSON, not a Google sign-in page.
+- **Submit error about `Session.getEffectiveUser`** → set `ADMIN_EMAIL` in `CONFIG` and publish a new version.
 - **Code changes not visible** → publish a new deployment version.
-- **"APPS_SCRIPT_URL is not configured"** → you didn't replace `PASTE_...` in the HTML.
 
 ## Data model (sheet tabs)
 
-- **Employees**: directory — full name, email, rate, currency.
-- **Projects**: one report task per employee — name, customer, employee, currency, rate, comment, status, and (once submitted) reported hours and amount. This is the per-report summary table.
-- **Entries**: activity detail — one row per activity (description) of a report.
+- **Employees**: full name, email, rate, currency, password.
+- **Projects**: name, customer (one row per project).
+- **Assignments**: one row per (project × employee) — employee, rate/currency, comment, status, and (once submitted) reported hours and amount.
+- **Entries**: activity detail — one row per activity of a report.
 
-> If you deployed an earlier version, delete the **Projects**, **Employees**, **Entries** (and **Assignments**, if present) tabs in the sheet. They will be recreated with the new columns on first request.
+> Upgrading from an earlier version: the backend will auto-archive mismatched tabs to `<Tab>_old_<timestamp>` and create fresh ones. Your **Employees** directory is preserved if its columns match; otherwise it is archived too — re-add employees if needed.

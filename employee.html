@@ -43,7 +43,6 @@
   .dash .cell{background:#fff;padding:12px 14px}
   .dash .k{font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
   .dash .v{font-family:var(--mono);font-size:18px;font-weight:600;margin-top:3px}
-  @media(max-width:560px){.dash{grid-template-columns:repeat(3,1fr)}}
   .item{border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 10px;background:#fff}
   .item .hd{display:flex;justify-content:space-between;align-items:center;margin:0 0 8px}
   .item .hd .n{font-size:12px;color:var(--muted);font-family:var(--mono)}
@@ -70,10 +69,13 @@
 
   <section id="screen-login">
     <h1>Employee sign-in</h1>
-    <p class="sub">Enter the work email the notification was sent to — you'll see the projects assigned to you.</p>
+    <p class="sub">Enter your work email and the password your administrator gave you.</p>
     <div id="loginErr"></div>
     <label for="email">Email</label>
     <input id="email" type="email" inputmode="email" autocomplete="email" placeholder="name@company.com">
+    <div style="height:12px"></div>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" placeholder="••••••••" onkeydown="if(event.key==='Enter')login()">
     <div style="height:14px"></div>
     <button class="btn" id="loginBtn" onclick="login()">Show my reports</button>
   </section>
@@ -115,8 +117,10 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
+let STATE = { email:'', password:'', current:null };
+
 async function api(action, payload){
   let res;
   try{
@@ -134,6 +138,9 @@ async function api(action, payload){
   if(!data.ok) throw new Error(data.error || 'Server error');
   return data;
 }
+// every employee call carries email + password
+function auth(extra){ return Object.assign({email:STATE.email, password:STATE.password}, extra||{}); }
+
 const $ = id => document.getElementById(id);
 const cur = c => SYM[c] || '$';
 const fmtMoney = n => (Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -142,19 +149,19 @@ function show(id){['screen-login','screen-list','screen-report'].forEach(s=>$(s)
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
-let STATE = { email:'', current:null };
-
 async function login(){
-  const email = $('email').value.trim().toLowerCase();
+  const email = $('email').value.trim().toLowerCase(), password = $('password').value;
   notice('loginErr','','');
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('loginErr','err','Enter a valid email.'); return; }
+  if(!password){ notice('loginErr','err','Enter your password.'); return; }
+  STATE.email = email; STATE.password = password;
   const btn = $('loginBtn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
   try{
-    const r = await api('list_my_projects', {email});
-    STATE.email = r.email; $('who').textContent = r.email;
-    renderList(r.projects); show('screen-list');
-    const pid = new URLSearchParams(location.search).get('pid');
-    if(pid) openReport(pid);
+    const r = await api('list_my_assignments', auth());
+    $('who').textContent = r.email;
+    renderList(r.assignments); show('screen-list');
+    const aid = new URLSearchParams(location.search).get('aid');
+    if(aid) openReport(aid);
   }catch(e){ notice('loginErr','err', esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent='Show my reports'; }
 }
@@ -162,32 +169,32 @@ async function login(){
 const BADGE = { released:['todo','New'], draft:['draft','Draft'], submitted:['done','Submitted'] };
 function renderList(items){
   $('listSub').textContent = items.length ? `${items.length} ${items.length===1?'report':'reports'}` : '';
-  if(!items.length){ $('cards').innerHTML = '<div class="empty">No projects assigned to you yet.</div>'; return; }
-  $('cards').innerHTML = items.map(p=>{
-    const s = cur(p.Currency), b = BADGE[p.Status] || ['todo','—'];
-    const btnLabel = p.Status==='submitted' ? 'Open report' : (p.Status==='draft' ? 'Continue' : 'Fill in report');
-    const reported = (p.Status==='submitted'||p.Status==='draft') && p.ReportedHours!=='' ? `<span>Reported: <b>${fmtH(p.ReportedHours)} h</b></span>` : '';
+  if(!items.length){ $('cards').innerHTML = '<div class="empty">No reports assigned to you yet.</div>'; return; }
+  $('cards').innerHTML = items.map(a=>{
+    const s = cur(a.Currency), b = BADGE[a.Status] || ['todo','—'];
+    const btnLabel = a.Status==='submitted' ? 'Open report' : (a.Status==='draft' ? 'Continue' : 'Fill in report');
+    const reported = (a.Status==='submitted'||a.Status==='draft') && a.ReportedHours!=='' ? `<span>Reported: <b>${fmtH(a.ReportedHours)} h</b></span>` : '';
     return `<div class="card">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:start">
-        <div><p class="pname">${esc(p.Name)}</p>${p.Customer?`<p class="pcust">Customer: ${esc(p.Customer)}</p>`:''}</div>
+        <div><p class="pname">${esc(a.ProjectName)}</p>${a.Customer?`<p class="pcust">Customer: ${esc(a.Customer)}</p>`:''}</div>
         <span class="tag ${b[0]}">${b[1]}</span>
       </div>
-      <div class="meta"><span>Rate: <b>${s}${fmtMoney(p.Rate)}/h</b></span>${reported}</div>
-      ${p.Comment?`<div class="comment">💬 ${esc(p.Comment)}</div>`:''}
-      <div class="cardfoot"><span></span><button class="btn sm" onclick="openReport('${p.ProjectID}')">${btnLabel}</button></div>
+      <div class="meta"><span>Rate: <b>${s}${fmtMoney(a.Rate)}/h</b></span>${reported}</div>
+      ${a.Comment?`<div class="comment">💬 ${esc(a.Comment)}</div>`:''}
+      <div class="cardfoot"><span></span><button class="btn sm" onclick="openReport('${a.AssignmentID}')">${btnLabel}</button></div>
     </div>`;
   }).join('');
 }
 
-async function openReport(pid){
+async function openReport(aid){
   try{
-    const r = await api('get_project', {email:STATE.email, projectId:pid});
-    STATE.current = r.project; const p = r.project, s = cur(p.Currency);
-    $('rName').textContent = p.Name;
-    $('rMeta').textContent = p.Customer ? 'Customer: '+p.Customer : '';
-    $('rComment').innerHTML = p.Comment ? `<div class="comment">💬 ${esc(p.Comment)}</div>` : '';
-    $('dRate').textContent = s+fmtMoney(p.Rate)+'/h';
-    $('totalHours').value = (p.ReportedHours!==''&&p.ReportedHours!=null) ? p.ReportedHours : '';
+    const r = await api('get_assignment', auth({assignmentId:aid}));
+    STATE.current = r.assignment; const a = r.assignment, s = cur(a.Currency);
+    $('rName').textContent = a.ProjectName;
+    $('rMeta').textContent = a.Customer ? 'Customer: '+a.Customer : '';
+    $('rComment').innerHTML = a.Comment ? `<div class="comment">💬 ${esc(a.Comment)}</div>` : '';
+    $('dRate').textContent = s+fmtMoney(a.Rate)+'/h';
+    $('totalHours').value = (a.ReportedHours!==''&&a.ReportedHours!=null) ? a.ReportedHours : '';
     notice('submitMsg','','');
     $('items').innerHTML='';
     const existing = (r.items||[]);
@@ -208,8 +215,8 @@ function addItem(desc=''){
 function renumber(){[...document.querySelectorAll('#items .item')].forEach((el,i)=>{el.querySelector('.n').textContent='Activity '+(i+1);});}
 
 function recalc(){
-  const p = STATE.current; if(!p) return;
-  const rate = +p.Rate||0, s = cur(p.Currency);
+  const a = STATE.current; if(!a) return;
+  const rate = +a.Rate||0, s = cur(a.Currency);
   const hours = parseFloat(($('totalHours').value||'').replace(',','.'))||0;
   $('dHours').textContent = fmtH(hours);
   $('dAmount').textContent = s+fmtMoney(hours*rate);
@@ -226,7 +233,7 @@ async function saveReport(finalize){
   const oldText = btn.textContent; btn.disabled=true; other.disabled=true;
   btn.innerHTML = `<span class="spin ${finalize?'':'dark'}"></span>`;
   try{
-    const r = await api(action, {email:STATE.email, projectId:STATE.current.ProjectID, activities, hours});
+    const r = await api(action, auth({assignmentId:STATE.current.AssignmentID, activities, hours}));
     const s = cur(STATE.current.Currency);
     if(finalize){
       STATE.current.Status='submitted';
