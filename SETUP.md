@@ -52,16 +52,15 @@ Check: open that URL in a browser — it should return `{"ok":true,"service":"fr
 **Administrator** (`admin.html`):
 1. Sign in with the PIN.
 2. **Employees** → add people: full name, email, rate, currency. (Re-adding the same email updates the record.)
-3. **Projects** → create a project: name, customer, currency (USD/EUR), total amount, rate, dates. Hours are calculated instantly (amount ÷ rate).
-4. **Reports** → create a report: pick an employee (rate/currency pre-fill) and a project (amount pre-fills), optionally override rate/amount, add a comment.
-5. Next to each report — the **Release** button: the task becomes available to the employee and they get an email. Until released, the employee can't see it.
-6. **Recall** takes the task back — it becomes unavailable to the employee (any draft is preserved; on the next release they continue from it).
-7. When the employee taps "Submit report", the status becomes "Submitted", you get an email, and the **Report** button shows the contents. Everything also accumulates in **Collected data** and in the Google Sheet.
+3. **Projects** → create a project: name, customer, employee, comment. That's it — rate and currency come from the employee's record.
+4. Next to each project — the **Release** button: the task becomes available to the employee and they get an email. Until released, the employee can't see it.
+5. **Recall** takes the task back — it becomes unavailable to the employee (any draft is preserved; on the next release they continue from it).
+6. When the employee submits, the status becomes "Submitted", you get an email, and the **Report** button shows the activities and totals. A per-report summary also appears in **Collected data**.
 
 **Employee** (`employee.html`):
-1. Open the link from the email → enter your email. You only see tasks released to you.
-2. The list shows: how many hours to report, rate, amount, dates, customer, comment, status (new / draft / submitted).
-3. Open a report, add work items (description + hours). The header shows live: target hours, rate, how much is already reported (hours and money), and remaining.
+1. Open the link from the email → enter your email. You only see projects released to you.
+2. The list shows: project, customer, rate, comment, status (new / draft / submitted).
+3. Open a report, list the **activities** (one description each) and enter the **total hours** spent on all activities. The header shows live: rate, total hours, and the amount (hours × rate).
 4. **Save draft** — you can return to a report many times across sessions. **Submit report** — the report goes to the administrator (who receives an email).
 
 ---
@@ -88,9 +87,8 @@ At any time before submission the admin can **Recall** → back to `Created`, un
 
 ## Data model (sheet tabs)
 
-- **Projects**: project — name, customer, currency, amount, rate, hours (calculated), dates.
 - **Employees**: directory — full name, email, rate, currency.
-- **Assignments**: a task for an employee — project + employee + currency + rate + amount + hours + comment + status.
-- **Entries**: report rows (including drafts) — one per work item. This is the final "Excel table".
+- **Projects**: one report task per employee — name, customer, employee, currency, rate, comment, status, and (once submitted) reported hours and amount. This is the per-report summary table.
+- **Entries**: activity detail — one row per activity (description) of a report.
 
-> If you deployed an earlier version, delete the **Projects**, **Assignments**, **Entries** (and **Employees**, if present) tabs in the sheet. They will be recreated with the new columns on first request.
+> If you deployed an earlier version, delete the **Projects**, **Employees**, **Entries** (and **Assignments**, if present) tabs in the sheet. They will be recreated with the new columns on first request.

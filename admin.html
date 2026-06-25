@@ -78,7 +78,6 @@
     <div class="tabs">
       <button id="tab-projects" class="active" onclick="switchTab('projects')">Projects</button>
       <button id="tab-employees" onclick="switchTab('employees')">Employees</button>
-      <button id="tab-assignments" onclick="switchTab('assignments')">Reports</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
     </div>
 
@@ -86,25 +85,18 @@
     <section id="view-projects">
       <div class="panel">
         <h2>New project</h2>
+        <p class="muted">A project is a report task for one employee. Rate and currency come from the employee's record.</p>
         <div id="projErr"></div>
         <div class="row">
           <div style="flex:2"><label>Project name *</label><input id="p_name" placeholder="VHF upgrade, Almaty"></div>
           <div style="flex:2"><label>Customer</label><input id="p_customer" placeholder="SkyGrid"></div>
         </div>
         <div style="height:10px"></div>
-        <div class="row">
-          <div style="max-width:120px"><label>Currency</label>
-            <select id="p_currency" onchange="projHint()"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option></select></div>
-          <div><label>Total amount *</label><input id="p_total" type="number" min="0" step="0.01" placeholder="0" oninput="projHint()"></div>
-          <div><label>Rate per hour *</label><input id="p_rate" type="number" min="0" step="0.01" placeholder="0" oninput="projHint()"></div>
-        </div>
+        <div><label>Employee *</label><select id="p_emp" onchange="projHint()"></select></div>
         <div style="height:10px"></div>
-        <div class="row">
-          <div><label>Start date</label><input id="p_start" type="date"></div>
-          <div><label>End date</label><input id="p_end" type="date"></div>
-        </div>
+        <div><label>Comment to the employee</label><textarea id="p_comment" placeholder="What exactly to cover in the report"></textarea></div>
         <div style="height:14px"></div>
-        <span class="hint" id="p_hint">Hours are calculated automatically</span><br>
+        <span class="hint" id="p_hint">Select an employee</span><br>
         <button class="btn" id="p_btn" onclick="createProject()">Create project</button>
       </div>
       <div class="panel">
@@ -117,7 +109,7 @@
     <section id="view-employees" class="hidden">
       <div class="panel">
         <h2>Add employee</h2>
-        <p class="muted">Rate and currency from here are pre-filled when assigning a report. Re-adding the same email updates the record.</p>
+        <p class="muted">Rate and currency from here are used for the employee's projects. Re-adding the same email updates the record.</p>
         <div id="empErr"></div>
         <div class="row">
           <div style="flex:2"><label>Full name</label><input id="e_name" placeholder="John A. Smith"></div>
@@ -138,38 +130,11 @@
       </div>
     </section>
 
-    <!-- ASSIGNMENTS -->
-    <section id="view-assignments" class="hidden">
-      <div class="panel">
-        <h2>Assign a report</h2>
-        <p class="muted">Pick an employee (rate/currency pre-fill) and a project (amount pre-fills). After creating, click "Release" — the employee gets an email and access.</p>
-        <div id="asgErr"></div>
-        <div class="row">
-          <div style="flex:2"><label>Employee *</label><select id="a_emp" onchange="asgFill()"></select></div>
-          <div style="flex:2"><label>Project *</label><select id="a_project" onchange="asgFill()"></select></div>
-        </div>
-        <div style="height:10px"></div>
-        <div class="row">
-          <div><label>Rate per hour <span id="a_curlbl"></span></label><input id="a_rate" type="number" min="0" step="0.01" oninput="asgHint()"></div>
-          <div><label>Amount <span id="a_curlbl2"></span></label><input id="a_alloc" type="number" min="0" step="0.01" oninput="asgHint()"></div>
-        </div>
-        <div style="height:10px"></div>
-        <div><label>Comment to the employee</label><textarea id="a_comment" placeholder="What exactly to cover in the report"></textarea></div>
-        <div style="height:14px"></div>
-        <span class="hint" id="a_hint">Select an employee and a project</span><br>
-        <button class="btn" id="a_btn" onclick="createAssignment()">Create report</button>
-      </div>
-      <div class="panel">
-        <h2>Reports</h2>
-        <div class="scroll"><table id="asgTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
-      </div>
-    </section>
-
     <!-- DATA -->
     <section id="view-data" class="hidden">
       <div class="panel">
         <h2>Collected data</h2>
-        <p class="muted">All rows are also in the Google Sheet (<b>Entries</b> tab). File → Download → Microsoft Excel (.xlsx).</p>
+        <p class="muted">Summary per report. Activity detail is in the Google Sheet (<b>Entries</b> tab) and in each report. File → Download → Microsoft Excel (.xlsx).</p>
         <div id="dataErr"></div>
         <div class="scroll"><table id="dataTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
@@ -182,18 +147,17 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
 const esc = s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const money = n=>(Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-const hrs = n=>(Math.round((+n||0)*100)/100).toLocaleString('en-US');
-const calcH = (t,r)=> (+r>0 ? Math.round((+t/+r)*100)/100 : 0);
+const hrs = n=>(n===''||n==null)?'—':(Math.round((+n||0)*100)/100).toLocaleString('en-US');
 function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
 
 let PIN = sessionStorage.getItem('fx_pin') || '';
-let PROJECTS = [], EMPLOYEES = [], ASSIGNMENTS = [];
+let EMPLOYEES = [], PROJECTS = [];
 
 async function api(action, payload={}){
   let res;
@@ -225,49 +189,11 @@ function logout(){ sessionStorage.removeItem('fx_pin'); location.reload(); }
 function enterApp(){
   $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
   $('who').innerHTML = 'Administrator <button onclick="logout()">Sign out</button>';
-  loadProjects(); loadEmployees(); loadAssignments();
+  loadEmployees().then(loadProjects);
 }
 function switchTab(t){
-  ['projects','employees','assignments','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='assignments') loadAssignments(); if(t==='employees') loadEmployees();
-}
-
-// ── Projects ──
-function projHint(){
-  const t=$('p_total').value, r=$('p_rate').value, s=cur($('p_currency').value);
-  $('p_hint').textContent = (+r>0) ? `≈ ${hrs(calcH(t,r))} h  (amount ${s}${money(t)} ÷ rate ${s}${money(r)}/h)` : 'Enter amount and rate — hours will be calculated';
-}
-async function loadProjects(){
-  try{
-    const r = await api('list_projects'); PROJECTS = r.projects;
-    const tb = $('projTable').querySelector('tbody');
-    if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">No projects yet.</td></tr>'; }
-    else{
-      tb.innerHTML = '<tr><th>Project</th><th>Customer</th><th class="num">Amount</th><th class="num">Rate</th><th class="num">Hours</th><th>Dates</th></tr>'+
-      PROJECTS.map(p=>{const s=cur(p.Currency);return `<tr>
-        <td>${esc(p.Name)}</td><td>${esc(p.Customer)}</td>
-        <td class="num">${s}${money(p.TotalAmount)}</td><td class="num">${s}${money(p.Rate)}/h</td>
-        <td class="num">${hrs(p.Hours)}</td>
-        <td class="muted">${esc(p.StartDate||'')}${p.EndDate?' → '+esc(p.EndDate):''}</td></tr>`;}).join('');
-    }
-    $('a_project').innerHTML = PROJECTS.length
-      ? PROJECTS.map(p=>`<option value="${p.ProjectID}">${esc(p.Name)}${p.Customer?' — '+esc(p.Customer):''}</option>`).join('')
-      : '<option value="">Create a project first</option>';
-    asgFill();
-  }catch(e){ notice('projErr','err', esc(e.message)); }
-}
-async function createProject(){
-  notice('projErr','',''); const name=$('p_name').value.trim();
-  if(!name){ notice('projErr','err','Enter a project name.'); return; }
-  if(!(+$('p_rate').value>0)){ notice('projErr','err','Enter a rate greater than zero.'); return; }
-  const b=$('p_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  try{
-    await api('create_project', { name, customer:$('p_customer').value.trim(), currency:$('p_currency').value,
-      totalAmount:$('p_total').value, rate:$('p_rate').value, startDate:$('p_start').value, endDate:$('p_end').value });
-    ['p_name','p_customer','p_total','p_rate','p_start','p_end'].forEach(id=>$(id).value=''); projHint();
-    await loadProjects(); notice('projErr','ok','Project created.');
-  }catch(e){ notice('projErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Create project'; }
+  ['projects','employees','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='employees') loadEmployees();
 }
 
 // ── Employees ──
@@ -283,9 +209,10 @@ async function loadEmployees(){
         <td class="num">${s}${money(e.Rate)}/h</td>
         <td><button class="btn warn sm" onclick="delEmployee('${esc(e.Email)}', this)">Delete</button></td></tr>`;}).join('');
     }
-    $('a_emp').innerHTML = EMPLOYEES.length
+    $('p_emp').innerHTML = EMPLOYEES.length
       ? '<option value="">— select —</option>'+EMPLOYEES.map(e=>`<option value="${esc(e.Email)}">${esc(e.FullName||e.Email)} — ${esc(e.Email)}</option>`).join('')
       : '<option value="">Add an employee first</option>';
+    projHint();
   }catch(e){ notice('empErr','err', esc(e.message)); }
 }
 async function createEmployee(){
@@ -300,90 +227,76 @@ async function createEmployee(){
   finally{ b.disabled=false; b.textContent='Save employee'; }
 }
 async function delEmployee(email, btn){
-  if(!confirm('Delete this employee from the directory? Existing reports remain.')) return;
+  if(!confirm('Delete this employee from the directory? Existing projects remain.')) return;
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
   try{ await api('delete_employee',{email}); await loadEmployees(); }
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
 }
 
-// ── Assignments ──
-function asgProject(){ return PROJECTS.find(p=>p.ProjectID===$('a_project').value); }
-function asgEmployee(){ return EMPLOYEES.find(e=>e.Email===$('a_emp').value); }
-function asgFill(){
-  const e = asgEmployee(), p = asgProject();
-  const currency = (e&&e.Currency) || (p&&p.Currency) || 'USD', s = cur(currency);
-  if(e) $('a_rate').value = e.Rate;
-  if(p) $('a_alloc').value = p.TotalAmount;
-  $('a_curlbl').textContent=`(${s})`; $('a_curlbl2').textContent=`(${s})`;
-  asgHint();
+// ── Projects ──
+function projEmployee(){ return EMPLOYEES.find(e=>e.Email===$('p_emp').value); }
+function projHint(){
+  const e = projEmployee();
+  $('p_hint').textContent = e ? `Rate ${cur(e.Currency)}${money(e.Rate)}/h (from the employee's record)` : 'Select an employee';
 }
-function asgHint(){
-  const e=asgEmployee(), p=asgProject();
-  if(!e||!p){ $('a_hint').textContent='Select an employee and a project'; return; }
-  const s=cur((e&&e.Currency)||p.Currency), r=$('a_rate').value, t=$('a_alloc').value;
-  $('a_hint').textContent = (+r>0) ? `≈ ${hrs(calcH(t,r))} h  (${s}${money(t)} ÷ ${s}${money(r)}/h)` : 'Enter a rate';
-}
-async function loadAssignments(){
+async function loadProjects(){
   try{
-    const r = await api('list_assignments'); ASSIGNMENTS = r.assignments;
-    const tb = $('asgTable').querySelector('tbody');
-    if(!ASSIGNMENTS.length){ tb.innerHTML='<tr><td class="empty">No reports yet.</td></tr>'; return; }
+    const r = await api('list_projects'); PROJECTS = r.projects;
+    const tb = $('projTable').querySelector('tbody');
+    if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">No projects yet.</td></tr>'; return; }
     tb.innerHTML = '<tr><th>Project</th><th>Employee</th><th class="num">Rate</th><th class="num">Hours</th><th>Status</th><th>Actions</th></tr>'+
-    ASSIGNMENTS.map(a=>{const s=cur(a.Currency);return `<tr>
-      <td>${esc(a.ProjectName)}<div class="muted">${esc(a.Customer||'')}</div></td>
-      <td>${esc(a.EmployeeName||a.EmployeeEmail)}<div class="muted">${esc(a.EmployeeName?a.EmployeeEmail:'')}</div></td>
-      <td class="num">${s}${money(a.Rate)}/h</td>
-      <td class="num">${hrs(a.AllocatedHours)}</td>
-      <td><span class="tag ${esc(a.Status)}">${statusEn(a.Status)}</span></td>
-      <td><div class="acts">${actionsFor(a)}</div></td></tr>`;}).join('');
-  }catch(e){ notice('asgErr','err', esc(e.message)); }
+    PROJECTS.map(p=>{const s=cur(p.Currency);return `<tr>
+      <td>${esc(p.Name)}<div class="muted">${esc(p.Customer||'')}</div></td>
+      <td>${esc(p.EmployeeName||p.EmployeeEmail)}<div class="muted">${esc(p.EmployeeName?p.EmployeeEmail:'')}</div></td>
+      <td class="num">${s}${money(p.Rate)}/h</td>
+      <td class="num">${hrs(p.ReportedHours)}</td>
+      <td><span class="tag ${esc(p.Status)}">${statusEn(p.Status)}</span></td>
+      <td><div class="acts">${actionsFor(p)}</div></td></tr>`;}).join('');
+  }catch(e){ notice('projErr','err', esc(e.message)); }
 }
 function statusEn(s){return {created:'Created',released:'Released',draft:'In progress (draft)',submitted:'Submitted'}[s]||s;}
-function actionsFor(a){
-  const id=a.AssignmentID; let html='';
-  if(a.Status==='created') html += `<button class="btn sm" onclick="release('${id}',this)">Release</button>`;
-  if(a.Status==='released'||a.Status==='draft') html += `<button class="btn warn sm" onclick="recall('${id}',this)">Recall</button>`;
-  if(a.Status==='draft'||a.Status==='submitted') html += `<button class="btn ghost sm" onclick="viewReport('${id}')">Report</button>`;
+function actionsFor(p){
+  const id=p.ProjectID; let html='';
+  if(p.Status==='created') html += `<button class="btn sm" onclick="release('${id}',this)">Release</button>`;
+  if(p.Status==='released'||p.Status==='draft') html += `<button class="btn warn sm" onclick="recall('${id}',this)">Recall</button>`;
+  if(p.Status==='draft'||p.Status==='submitted') html += `<button class="btn ghost sm" onclick="viewReport('${id}')">Report</button>`;
   return html;
 }
-async function createAssignment(){
-  notice('asgErr','',''); const projectId=$('a_project').value, email=$('a_emp').value;
-  if(!email){ notice('asgErr','err','Select an employee.'); return; }
-  if(!projectId){ notice('asgErr','err','Select a project.'); return; }
-  if(!(+$('a_rate').value>0)){ notice('asgErr','err','Rate must be greater than zero.'); return; }
-  const b=$('a_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+async function createProject(){
+  notice('projErr','',''); const name=$('p_name').value.trim(), email=$('p_emp').value;
+  if(!name){ notice('projErr','err','Enter a project name.'); return; }
+  if(!email){ notice('projErr','err','Select an employee.'); return; }
+  const b=$('p_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    await api('create_assignment', { projectId, email, rate:$('a_rate').value, allocatedAmount:$('a_alloc').value, comment:$('a_comment').value.trim() });
-    $('a_comment').value='';
-    await loadAssignments(); notice('asgErr','ok','Report created. Click "Release" to send it to the employee.');
-  }catch(e){ notice('asgErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Create report'; }
+    await api('create_project', { name, customer:$('p_customer').value.trim(), email, comment:$('p_comment').value.trim() });
+    ['p_name','p_customer','p_comment'].forEach(id=>$(id).value=''); $('p_emp').value=''; projHint();
+    await loadProjects(); notice('projErr','ok','Project created. Click "Release" to send it to the employee.');
+  }catch(e){ notice('projErr','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Create project'; }
 }
-async function release(aid, btn){
+async function release(pid, btn){
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
-  try{ await api('release',{assignmentId:aid}); await loadAssignments(); }
+  try{ await api('release',{projectId:pid}); await loadProjects(); }
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Release'; }
 }
-async function recall(aid, btn){
+async function recall(pid, btn){
   if(!confirm('Recall this task? It will become unavailable to the employee (the draft is kept).')) return;
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('recall',{assignmentId:aid}); await loadAssignments(); }
+  try{ await api('recall',{projectId:pid}); await loadProjects(); }
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Recall'; }
 }
 
-async function viewReport(aid){
+async function viewReport(pid){
   try{
-    const r = await api('admin_get_report',{assignmentId:aid});
-    const a=r.assignment, items=r.items||[], s=cur(a.Currency);
-    let H=0,M=0; items.forEach(it=>{H+=+it.Hours||0;M+=+it.Amount||0;});
-    $('m_title').textContent = a.ProjectName;
+    const r = await api('admin_get_report',{projectId:pid});
+    const p=r.project, items=r.items||[], s=cur(p.Currency);
+    $('m_title').textContent = p.Name;
     $('m_body').innerHTML = `
-      <p class="muted">${esc(a.EmployeeName||a.EmployeeEmail)} · rate ${s}${money(a.Rate)}/h · report ${hrs(a.AllocatedHours)} h (${s}${money(a.AllocatedAmount)}) · status: ${statusEn(a.Status)}</p>
-      ${items.length?`<div class="scroll"><table>
-        <tr><th>#</th><th>Description</th><th class="num">Hours</th><th class="num">${s}</th></tr>
-        ${items.map((it,i)=>`<tr><td>${i+1}</td><td>${esc(it.ItemDescription)}</td><td class="num">${hrs(it.Hours)}</td><td class="num">${money(it.Amount)}</td></tr>`).join('')}
-        <tr><td></td><td><b>Total</b></td><td class="num"><b>${hrs(H)}</b></td><td class="num"><b>${money(M)}</b></td></tr>
-      </table></div>`:'<p class="empty">No data yet.</p>'}`;
+      <p class="muted">${esc(p.EmployeeName||p.EmployeeEmail)} · rate ${s}${money(p.Rate)}/h · status: ${statusEn(p.Status)}</p>
+      <p style="font-family:var(--mono);font-size:16px;font-weight:600;margin:6px 0 14px">
+        Total: ${hrs(p.ReportedHours)} h · ${s}${money(p.ReportedAmount||0)}</p>
+      <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Activities</p>
+      ${items.length?`<ol style="margin:6px 0;padding-left:20px">${items.map(it=>`<li style="margin:4px 0">${esc(it.ActivityDescription)}</li>`).join('')}</ol>`:'<p class="empty">No activities yet.</p>'}`;
     $('modal').classList.remove('hidden');
   }catch(e){ alert(e.message); }
 }
@@ -391,14 +304,15 @@ function closeModal(){ $('modal').classList.add('hidden'); }
 
 async function loadData(){
   try{
-    const r = await api('list_entries'); const rows=r.entries||[];
+    const r = await api('list_projects'); const rows=(r.projects||[]).filter(p=>p.Status==='submitted'||p.Status==='draft');
     const tb=$('dataTable').querySelector('tbody');
     if(!rows.length){ tb.innerHTML='<tr><td class="empty">No data yet.</td></tr>'; return; }
-    let H=0; rows.forEach(x=>{H+=+x.Hours||0;});
-    tb.innerHTML='<tr><th>Project</th><th>Employee</th><th>Description</th><th class="num">Hours</th><th class="num">Amount</th></tr>'+
-      rows.map(x=>{const s=cur(x.Currency);return `<tr><td>${esc(x.ProjectName)}</td><td>${esc(x.EmployeeEmail)}</td>
-        <td>${esc(x.ItemDescription)}</td><td class="num">${hrs(x.Hours)}</td><td class="num">${s}${money(x.Amount)}</td></tr>`;}).join('')+
-      `<tr><td colspan="3"><b>Total hours</b></td><td class="num"><b>${hrs(H)}</b></td><td></td></tr>`;
+    let H=0; rows.forEach(p=>{H+=+p.ReportedHours||0;});
+    tb.innerHTML='<tr><th>Project</th><th>Customer</th><th>Employee</th><th>Status</th><th class="num">Hours</th><th class="num">Amount</th></tr>'+
+      rows.map(p=>{const s=cur(p.Currency);return `<tr><td>${esc(p.Name)}</td><td>${esc(p.Customer||'')}</td>
+        <td>${esc(p.EmployeeName||p.EmployeeEmail)}</td><td>${statusEn(p.Status)}</td>
+        <td class="num">${hrs(p.ReportedHours)}</td><td class="num">${s}${money(p.ReportedAmount||0)}</td></tr>`;}).join('')+
+      `<tr><td colspan="4"><b>Total hours</b></td><td class="num"><b>${hrs(H)}</b></td><td></td></tr>`;
   }catch(e){ notice('dataErr','err', esc(e.message)); }
 }
 

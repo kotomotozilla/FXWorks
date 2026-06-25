@@ -15,14 +15,13 @@
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-text-size-adjust:100%}
   .wrap{max-width:760px;margin:0 auto;padding:20px 16px 80px}
   header.top{display:flex;align-items:baseline;justify-content:space-between;padding:14px 0 18px;border-bottom:1px solid var(--line);margin-bottom:24px}
-  .brand{font-weight:700;letter-spacing:.2px}
-  .brand small{display:block;font-weight:500;color:var(--muted);font-size:12px;letter-spacing:.3px}
+  .brand{font-weight:700;letter-spacing:.2px} .brand small{display:block;font-weight:500;color:var(--muted);font-size:12px;letter-spacing:.3px}
   .who{font-size:13px;color:var(--muted);font-family:var(--mono)}
   h1{font-size:20px;margin:0 0 4px}
   .sub{color:var(--muted);margin:0 0 20px;font-size:14px}
   label{display:block;font-size:13px;color:var(--muted);margin:0 0 6px}
   input,textarea,select{width:100%;font-family:inherit;font-size:15px;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 12px}
-  input[type=number]{font-family:var(--mono)} textarea{resize:vertical;min-height:64px}
+  input[type=number]{font-family:var(--mono)} textarea{resize:vertical;min-height:60px}
   input:focus,textarea:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
   .btn{display:inline-flex;align-items:center;gap:8px;border:0;cursor:pointer;background:var(--accent);color:#fff;font-size:15px;font-weight:600;font-family:inherit;padding:11px 18px;border-radius:10px}
   .btn:hover{background:var(--accent-ink)} .btn[disabled]{opacity:.5;cursor:default}
@@ -34,26 +33,23 @@
   .card .meta b{color:var(--ink);font-family:var(--mono);font-weight:600}
   .pname{font-size:17px;font-weight:700;margin:0}
   .pcust{color:var(--muted);font-size:13px;margin:2px 0 0}
-  .hoursline{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--accent-ink);margin:10px 0 0}
   .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
   .tag.done{color:var(--pos);border-color:#bfe3cf;background:#f0faf4}
   .tag.todo{color:var(--accent-ink);border-color:#c7dcef;background:#eef5fb}
   .tag.draft{color:var(--amber);border-color:#e8d6a8;background:#fbf5e6}
   .cardfoot{display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:10px}
   .comment{background:var(--panel);border-radius:10px;padding:10px 12px;font-size:13px;margin-top:10px;color:#2b3742}
-  .dash{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:14px 0 18px}
-  .dash .cell{background:#fff;padding:12px 14px} .dash .cell.lead{background:#eef5fb}
+  .dash{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:14px 0 18px}
+  .dash .cell{background:#fff;padding:12px 14px}
   .dash .k{font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
   .dash .v{font-family:var(--mono);font-size:18px;font-weight:600;margin-top:3px}
-  .dash .v.pos{color:var(--pos)} .dash .v.warn{color:var(--warn)}
-  @media(max-width:560px){.dash{grid-template-columns:repeat(2,1fr)}}
-  .meter{height:8px;border-radius:999px;background:var(--line);overflow:hidden;margin:0 0 18px}
-  .meter>i{display:block;height:100%;background:var(--accent);width:0;transition:width .25s} .meter>i.over{background:var(--warn)}
+  @media(max-width:560px){.dash{grid-template-columns:repeat(3,1fr)}}
   .item{border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 10px;background:#fff}
   .item .hd{display:flex;justify-content:space-between;align-items:center;margin:0 0 8px}
-  .item .hd .n{font-size:12px;color:var(--muted);font-family:var(--mono)} .item .amt{font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .item .hd .n{font-size:12px;color:var(--muted);font-family:var(--mono)}
   .iconbtn{border:0;background:none;color:var(--warn);cursor:pointer;font-size:13px;padding:4px}
-  .hrs{max-width:140px}
+  .section-h{font-size:13px;color:var(--muted);margin:0 0 8px;text-transform:uppercase;letter-spacing:.4px}
+  .hoursbox{max-width:220px}
   .notice{padding:11px 13px;border-radius:10px;font-size:14px;margin:0 0 14px}
   .notice.err{background:#fcefec;color:var(--warn)} .notice.ok{background:#f0faf4;color:var(--pos)} .notice.info{background:#fbf5e6;color:var(--amber)}
   .empty{color:var(--muted);text-align:center;padding:40px 0}
@@ -74,7 +70,7 @@
 
   <section id="screen-login">
     <h1>Employee sign-in</h1>
-    <p class="sub">Enter the work email the notification was sent to — you'll see the tasks assigned to you.</p>
+    <p class="sub">Enter the work email the notification was sent to — you'll see the projects assigned to you.</p>
     <div id="loginErr"></div>
     <label for="email">Email</label>
     <input id="email" type="email" inputmode="email" autocomplete="email" placeholder="name@company.com">
@@ -96,15 +92,18 @@
     <div id="rComment"></div>
 
     <div class="dash">
-      <div class="cell lead"><div class="k">To report</div><div class="v" id="dHours">—</div></div>
       <div class="cell"><div class="k">Rate</div><div class="v" id="dRate">—</div></div>
-      <div class="cell"><div class="k">Reported</div><div class="v" id="dDone">—</div></div>
-      <div class="cell"><div class="k">Remaining</div><div class="v pos" id="dLeft">—</div></div>
+      <div class="cell"><div class="k">Total hours</div><div class="v" id="dHours">0</div></div>
+      <div class="cell"><div class="k">Amount</div><div class="v" id="dAmount">—</div></div>
     </div>
-    <div class="meter"><i id="meterBar"></i></div>
 
+    <p class="section-h">Activities</p>
     <div id="items"></div>
-    <button class="btn ghost sm" onclick="addItem()">+ Add item</button>
+    <button class="btn ghost sm" onclick="addItem()">+ Add activity</button>
+
+    <div style="height:18px"></div>
+    <div class="hoursbox"><label>Total hours spent (all activities) *</label>
+      <input id="totalHours" type="number" min="0" step="0.25" placeholder="0" oninput="recalc()"></div>
 
     <div style="height:18px"></div>
     <div id="submitMsg"></div>
@@ -116,7 +115,7 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 async function api(action, payload){
   let res;
@@ -151,95 +150,75 @@ async function login(){
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('loginErr','err','Enter a valid email.'); return; }
   const btn = $('loginBtn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
   try{
-    const r = await api('list_my_assignments', {email});
+    const r = await api('list_my_projects', {email});
     STATE.email = r.email; $('who').textContent = r.email;
-    renderList(r.assignments); show('screen-list');
-    const aid = new URLSearchParams(location.search).get('aid');
-    if(aid) openReport(aid);
+    renderList(r.projects); show('screen-list');
+    const pid = new URLSearchParams(location.search).get('pid');
+    if(pid) openReport(pid);
   }catch(e){ notice('loginErr','err', esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent='Show my reports'; }
 }
 
-const BADGE = { released:['todo','New task'], draft:['draft','Draft'], submitted:['done','Submitted'] };
+const BADGE = { released:['todo','New'], draft:['draft','Draft'], submitted:['done','Submitted'] };
 function renderList(items){
   $('listSub').textContent = items.length ? `${items.length} ${items.length===1?'report':'reports'}` : '';
-  if(!items.length){ $('cards').innerHTML = '<div class="empty">No tasks assigned to you yet.</div>'; return; }
-  $('cards').innerHTML = items.map(a=>{
-    const s = cur(a.Currency), b = BADGE[a.Status] || ['todo','—'];
-    const btnLabel = a.Status==='submitted' ? 'Open report' : (a.Status==='draft' ? 'Continue' : 'Fill in report');
+  if(!items.length){ $('cards').innerHTML = '<div class="empty">No projects assigned to you yet.</div>'; return; }
+  $('cards').innerHTML = items.map(p=>{
+    const s = cur(p.Currency), b = BADGE[p.Status] || ['todo','—'];
+    const btnLabel = p.Status==='submitted' ? 'Open report' : (p.Status==='draft' ? 'Continue' : 'Fill in report');
+    const reported = (p.Status==='submitted'||p.Status==='draft') && p.ReportedHours!=='' ? `<span>Reported: <b>${fmtH(p.ReportedHours)} h</b></span>` : '';
     return `<div class="card">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:start">
-        <div><p class="pname">${esc(a.ProjectName)}</p>${a.Customer?`<p class="pcust">Customer: ${esc(a.Customer)}</p>`:''}</div>
+        <div><p class="pname">${esc(p.Name)}</p>${p.Customer?`<p class="pcust">Customer: ${esc(p.Customer)}</p>`:''}</div>
         <span class="tag ${b[0]}">${b[1]}</span>
       </div>
-      <div class="hoursline">Report ${fmtH(a.AllocatedHours)} h</div>
-      <div class="meta">
-        <span>Rate: <b>${s}${fmtMoney(a.Rate)}/h</b></span>
-        <span>Amount: <b>${s}${fmtMoney(a.AllocatedAmount)}</b></span>
-        ${a.StartDate?`<span>Start: <b>${esc(a.StartDate)}</b></span>`:''}
-        ${a.EndDate?`<span>End: <b>${esc(a.EndDate)}</b></span>`:''}
-      </div>
-      ${a.Comment?`<div class="comment">💬 ${esc(a.Comment)}</div>`:''}
-      <div class="cardfoot"><span></span><button class="btn sm" onclick="openReport('${a.AssignmentID}')">${btnLabel}</button></div>
+      <div class="meta"><span>Rate: <b>${s}${fmtMoney(p.Rate)}/h</b></span>${reported}</div>
+      ${p.Comment?`<div class="comment">💬 ${esc(p.Comment)}</div>`:''}
+      <div class="cardfoot"><span></span><button class="btn sm" onclick="openReport('${p.ProjectID}')">${btnLabel}</button></div>
     </div>`;
   }).join('');
 }
 
-async function openReport(aid){
+async function openReport(pid){
   try{
-    const r = await api('get_assignment', {email:STATE.email, assignmentId:aid});
-    STATE.current = r.assignment; const a = r.assignment, s = cur(a.Currency);
-    $('rName').textContent = a.ProjectName;
-    $('rMeta').textContent = [a.Customer?'Customer: '+a.Customer:'', a.StartDate&&a.EndDate?`${a.StartDate} → ${a.EndDate}`:''].filter(Boolean).join('   •   ');
-    $('rComment').innerHTML = a.Comment ? `<div class="comment">💬 ${esc(a.Comment)}</div>` : '';
-    $('dHours').textContent = fmtH(a.AllocatedHours)+' h';
-    $('dRate').textContent = s+fmtMoney(a.Rate)+'/h';
+    const r = await api('get_project', {email:STATE.email, projectId:pid});
+    STATE.current = r.project; const p = r.project, s = cur(p.Currency);
+    $('rName').textContent = p.Name;
+    $('rMeta').textContent = p.Customer ? 'Customer: '+p.Customer : '';
+    $('rComment').innerHTML = p.Comment ? `<div class="comment">💬 ${esc(p.Comment)}</div>` : '';
+    $('dRate').textContent = s+fmtMoney(p.Rate)+'/h';
+    $('totalHours').value = (p.ReportedHours!==''&&p.ReportedHours!=null) ? p.ReportedHours : '';
     notice('submitMsg','','');
     $('items').innerHTML='';
     const existing = (r.items||[]);
-    if(existing.length){ existing.forEach(it=>addItem(it.ItemDescription, it.Hours)); } else { addItem(); }
+    if(existing.length){ existing.forEach(it=>addItem(it.ActivityDescription)); } else { addItem(); }
     recalc(); show('screen-report'); window.scrollTo(0,0);
   }catch(e){ notice('listErr','err', esc(e.message)); show('screen-list'); }
 }
 function backToList(){ login(); }
 
-function addItem(desc='', hours=''){
+function addItem(desc=''){
   const div = document.createElement('div'); div.className='item';
   div.innerHTML = `
-    <div class="hd"><span class="n"></span><span class="amt">${cur(STATE.current&&STATE.current.Currency)}0.00</span></div>
-    <textarea placeholder="Short description of the work done" oninput="recalc()">${esc(desc)}</textarea>
-    <div style="height:8px"></div>
-    <div class="row" style="align-items:end">
-      <div class="hrs"><label>Hours</label>
-        <input type="number" min="0" step="0.25" placeholder="0" value="${hours!==''&&hours!=null?hours:''}" oninput="recalc()"></div>
-      <div style="flex:0 0 auto"><button class="iconbtn" onclick="this.closest('.item').remove();recalc()">Remove</button></div>
-    </div>`;
+    <div class="hd"><span class="n"></span>
+      <button class="iconbtn" onclick="this.closest('.item').remove();renumber()">Remove</button></div>
+    <textarea placeholder="Activity description">${esc(desc)}</textarea>`;
   $('items').appendChild(div); renumber();
 }
-function renumber(){[...document.querySelectorAll('#items .item')].forEach((el,i)=>{el.querySelector('.n').textContent='Item '+(i+1);});}
+function renumber(){[...document.querySelectorAll('#items .item')].forEach((el,i)=>{el.querySelector('.n').textContent='Activity '+(i+1);});}
 
 function recalc(){
-  renumber(); const a = STATE.current; if(!a) return;
-  const rate = +a.Rate||0, s = cur(a.Currency), maxHours = +a.AllocatedHours||0, budget = maxHours*rate;
-  let hours=0;
-  document.querySelectorAll('#items .item').forEach(el=>{
-    const h = parseFloat((el.querySelector('input').value||'').replace(',','.'))||0;
-    hours += h; el.querySelector('.amt').textContent = s+fmtMoney(h*rate);
-  });
-  const money = hours*rate, leftHours = maxHours-hours, leftMoney = budget-money, over = leftHours < -0.005;
-  $('dDone').textContent = `${fmtH(hours)} h · ${s}${fmtMoney(money)}`;
-  const left = $('dLeft'); left.textContent = `${fmtH(leftHours)} h · ${s}${fmtMoney(leftMoney)}`; left.className = 'v ' + (over?'warn':'pos');
-  const bar = $('meterBar'), pct = maxHours>0 ? Math.min(100, hours/maxHours*100) : 0;
-  bar.style.width = pct+'%'; bar.classList.toggle('over', over);
-  notice('submitMsg', over?'err':'', over ? `Over by ${fmtH(-leftHours)} h. You can still save, but check the hours.` : '');
+  const p = STATE.current; if(!p) return;
+  const rate = +p.Rate||0, s = cur(p.Currency);
+  const hours = parseFloat(($('totalHours').value||'').replace(',','.'))||0;
+  $('dHours').textContent = fmtH(hours);
+  $('dAmount').textContent = s+fmtMoney(hours*rate);
 }
 
 async function saveReport(finalize){
-  const items = [...document.querySelectorAll('#items .item')].map(el=>({
-    description: el.querySelector('textarea').value.trim(),
-    hours: parseFloat((el.querySelector('input').value||'').replace(',','.'))||0
-  })).filter(it=>it.description||it.hours>0);
-  if(finalize && !items.length){ notice('submitMsg','err','Add at least one item before submitting.'); return; }
+  const activities = [...document.querySelectorAll('#items .item textarea')].map(t=>t.value.trim()).filter(Boolean);
+  const hours = parseFloat(($('totalHours').value||'').replace(',','.'))||0;
+  if(finalize && (!activities.length || hours<=0)){ notice('submitMsg','err','Add at least one activity and the total hours before submitting.'); return; }
 
   const action = finalize ? 'submit_report' : 'save_draft';
   const btn = finalize ? $('submitBtn') : $('draftBtn');
@@ -247,14 +226,14 @@ async function saveReport(finalize){
   const oldText = btn.textContent; btn.disabled=true; other.disabled=true;
   btn.innerHTML = `<span class="spin ${finalize?'':'dark'}"></span>`;
   try{
-    const r = await api(action, {email:STATE.email, assignmentId:STATE.current.AssignmentID, items});
+    const r = await api(action, {email:STATE.email, projectId:STATE.current.ProjectID, activities, hours});
     const s = cur(STATE.current.Currency);
     if(finalize){
       STATE.current.Status='submitted';
-      notice('submitMsg','ok', `Report submitted: ${fmtH(r.totals.hours)} h for ${s}${fmtMoney(r.totals.amount)}. The admin has been notified.`);
+      notice('submitMsg','ok', `Report submitted: ${r.totals.activities} activities, ${fmtH(r.totals.hours)} h for ${s}${fmtMoney(r.totals.amount)}. The admin has been notified.`);
     }else{
       STATE.current.Status='draft';
-      notice('submitMsg','info', `Draft saved: ${fmtH(r.totals.hours)} h. You can continue later.`);
+      notice('submitMsg','info', `Draft saved. You can continue later.`);
     }
   }catch(e){ notice('submitMsg','err', esc(e.message)); }
   finally{ btn.disabled=false; other.disabled=false; btn.textContent=oldText; }
