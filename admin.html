@@ -7,13 +7,13 @@
 <style>
   :root{
     --bg:#ffffff; --panel:#f7f8fa; --ink:#15202b; --muted:#5b6671;
-    --line:#e3e7ec; --accent:#2563a8; --accent-ink:#1d4e85; --pos:#1f8a5b; --warn:#c0492e;
+    --line:#e3e7ec; --accent:#2563a8; --accent-ink:#1d4e85; --pos:#1f8a5b; --warn:#c0492e; --amber:#9a6a00;
     --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5}
-  .wrap{max-width:980px;margin:0 auto;padding:20px 16px 80px}
+  .wrap{max-width:1040px;margin:0 auto;padding:20px 16px 80px}
   header.top{display:flex;align-items:baseline;justify-content:space-between;padding:14px 0 18px;border-bottom:1px solid var(--line);margin-bottom:22px}
   .brand{font-weight:700}.brand small{display:block;font-weight:500;color:var(--muted);font-size:12px}
   .who{font-size:13px;color:var(--muted)} .who button{background:none;border:0;color:var(--accent);cursor:pointer;font-size:13px;margin-left:10px}
@@ -25,10 +25,11 @@
   .btn{display:inline-flex;align-items:center;gap:7px;border:0;cursor:pointer;background:var(--accent);color:#fff;font-size:15px;font-weight:600;font-family:inherit;padding:10px 18px;border-radius:10px}
   .btn:hover{background:var(--accent-ink)} .btn[disabled]{opacity:.5;cursor:default}
   .btn.ghost{background:#fff;color:var(--accent);border:1px solid var(--line)} .btn.ghost:hover{border-color:var(--accent)}
+  .btn.warn{background:#fff;color:var(--warn);border:1px solid #e6c3ba} .btn.warn:hover{border-color:var(--warn)}
   .btn.sm{padding:6px 11px;font-size:13px;border-radius:8px}
   .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:140px}
   .panel{border:1px solid var(--line);border-radius:14px;padding:18px;background:#fff;margin:0 0 18px}
-  .tabs{display:flex;gap:6px;margin:0 0 20px;border-bottom:1px solid var(--line)}
+  .tabs{display:flex;gap:4px;margin:0 0 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
   .tabs button{background:none;border:0;cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;color:var(--muted);padding:10px 14px;border-bottom:2px solid transparent;margin-bottom:-1px}
   .tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
   table{width:100%;border-collapse:collapse;font-size:14px}
@@ -36,14 +37,17 @@
   th{font-size:12px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);font-weight:600}
   td.num,th.num{font-family:var(--mono);text-align:right;white-space:nowrap}
   .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
-  .tag.created{color:var(--muted)} .tag.notified{color:var(--accent-ink);background:#eef5fb;border-color:#c7dcef}
+  .tag.created{color:var(--muted)} .tag.released{color:var(--accent-ink);background:#eef5fb;border-color:#c7dcef}
+  .tag.draft{color:var(--amber);background:#fbf5e6;border-color:#e8d6a8}
   .tag.submitted{color:var(--pos);background:#f0faf4;border-color:#bfe3cf}
   .notice{padding:11px 13px;border-radius:10px;font-size:14px;margin:0 0 14px}
   .notice.err{background:#fcefec;color:var(--warn)} .notice.ok{background:#f0faf4;color:var(--pos)}
   .hint{font-family:var(--mono);font-size:13px;color:var(--accent-ink);background:#eef5fb;border-radius:8px;padding:8px 12px;margin:0 0 14px;display:inline-block}
   .empty{color:var(--muted);padding:24px 0;text-align:center}
   .hidden{display:none} .scroll{overflow-x:auto} .muted{color:var(--muted);font-size:13px}
+  .acts{display:flex;gap:6px;flex-wrap:wrap}
   .spin{display:inline-block;width:15px;height:15px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite}
+  .spin.dark{border-color:var(--accent);border-top-color:transparent}
   @keyframes sp{to{transform:rotate(360deg)}}
   .modal{position:fixed;inset:0;background:rgba(20,30,40,.4);display:flex;align-items:center;justify-content:center;padding:16px;z-index:10}
   .modal .box{background:#fff;border-radius:16px;max-width:640px;width:100%;max-height:86vh;overflow:auto;padding:22px}
@@ -72,6 +76,7 @@
   <main id="app" class="hidden">
     <div class="tabs">
       <button id="tab-projects" class="active" onclick="switchTab('projects')">Проекты</button>
+      <button id="tab-employees" onclick="switchTab('employees')">Сотрудники</button>
       <button id="tab-assignments" onclick="switchTab('assignments')">Отчёты сотрудников</button>
       <button id="tab-data" onclick="switchTab('data')">Собранные данные</button>
     </div>
@@ -107,15 +112,40 @@
       </div>
     </section>
 
+    <!-- СОТРУДНИКИ -->
+    <section id="view-employees" class="hidden">
+      <div class="panel">
+        <h2>Добавить сотрудника</h2>
+        <p class="muted">Рейт и валюта отсюда подставляются при назначении отчёта. Повторное добавление того же email обновит данные.</p>
+        <div id="empErr"></div>
+        <div class="row">
+          <div style="flex:2"><label>ФИО</label><input id="e_name" placeholder="Иванов Иван Иванович"></div>
+          <div style="flex:2"><label>Email *</label><input id="e_email" type="email" placeholder="name@company.com"></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div><label>Рейт в час</label><input id="e_rate" type="number" min="0" step="0.01" placeholder="0"></div>
+          <div style="max-width:140px"><label>Валюта</label>
+            <select id="e_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option></select></div>
+        </div>
+        <div style="height:14px"></div>
+        <button class="btn" id="e_btn" onclick="createEmployee()">Сохранить сотрудника</button>
+      </div>
+      <div class="panel">
+        <h2>Сотрудники</h2>
+        <div class="scroll"><table id="empTable"><tbody><tr><td class="empty">Загрузка…</td></tr></tbody></table></div>
+      </div>
+    </section>
+
     <!-- НАЗНАЧЕНИЯ -->
     <section id="view-assignments" class="hidden">
       <div class="panel">
         <h2>Назначить отчёт сотруднику</h2>
-        <p class="muted">Валюта, сумма и рейт берутся из проекта. Рейт/сумму можно переопределить под конкретного сотрудника — часы пересчитаются.</p>
+        <p class="muted">Выберите сотрудника (рейт/валюта подставятся) и проект (сумма подставится). После создания нажмите «Передать на выполнение» — сотрудник получит письмо и доступ.</p>
         <div id="asgErr"></div>
         <div class="row">
+          <div style="flex:2"><label>Сотрудник *</label><select id="a_emp" onchange="asgFill()"></select></div>
           <div style="flex:2"><label>Проект *</label><select id="a_project" onchange="asgFill()"></select></div>
-          <div style="flex:2"><label>Email сотрудника *</label><input id="a_email" type="email" placeholder="name@company.com"></div>
         </div>
         <div style="height:10px"></div>
         <div class="row">
@@ -125,7 +155,7 @@
         <div style="height:10px"></div>
         <div><label>Комментарий сотруднику</label><textarea id="a_comment" placeholder="Что именно нужно отразить в отчёте"></textarea></div>
         <div style="height:14px"></div>
-        <span class="hint" id="a_hint">Выберите проект</span><br>
+        <span class="hint" id="a_hint">Выберите сотрудника и проект</span><br>
         <button class="btn" id="a_btn" onclick="createAssignment()">Создать отчёт</button>
       </div>
       <div class="panel">
@@ -162,12 +192,11 @@ const calcH = (t,r)=> (+r>0 ? Math.round((+t/+r)*100)/100 : 0);
 function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
 
 let PIN = sessionStorage.getItem('fx_pin') || '';
-let PROJECTS = [], ASSIGNMENTS = [];
+let PROJECTS = [], EMPLOYEES = [], ASSIGNMENTS = [];
 
 async function api(action, payload={}){
   const res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
-    headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
+    headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
   const data = await res.json();
   if(!data.ok) throw new Error(data.error||'Ошибка сервера');
   return data;
@@ -185,11 +214,11 @@ function logout(){ sessionStorage.removeItem('fx_pin'); location.reload(); }
 function enterApp(){
   $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
   $('who').innerHTML = 'Администратор <button onclick="logout()">Выйти</button>';
-  loadProjects(); loadAssignments();
+  loadProjects(); loadEmployees(); loadAssignments();
 }
 function switchTab(t){
-  ['projects','assignments','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='assignments') loadAssignments();
+  ['projects','employees','assignments','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='assignments') loadAssignments(); if(t==='employees') loadEmployees();
 }
 
 // ── Проекты ──
@@ -206,8 +235,7 @@ async function loadProjects(){
       tb.innerHTML = '<tr><th>Проект</th><th>Заказчик</th><th class="num">Сумма</th><th class="num">Рейт</th><th class="num">Часы</th><th>Сроки</th></tr>'+
       PROJECTS.map(p=>{const s=cur(p.Currency);return `<tr>
         <td>${esc(p.Name)}</td><td>${esc(p.Customer)}</td>
-        <td class="num">${s}${money(p.TotalAmount)}</td>
-        <td class="num">${s}${money(p.Rate)}/ч</td>
+        <td class="num">${s}${money(p.TotalAmount)}</td><td class="num">${s}${money(p.Rate)}/ч</td>
         <td class="num">${hrs(p.Hours)}</td>
         <td class="muted">${esc(p.StartDate||'')}${p.EndDate?' → '+esc(p.EndDate):''}</td></tr>`;}).join('');
     }
@@ -223,26 +251,65 @@ async function createProject(){
   if(!(+$('p_rate').value>0)){ notice('projErr','err','Укажите рейт больше нуля.'); return; }
   const b=$('p_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    await api('create_project', { name, customer:$('p_customer').value.trim(),
-      currency:$('p_currency').value, totalAmount:$('p_total').value, rate:$('p_rate').value,
-      startDate:$('p_start').value, endDate:$('p_end').value });
+    await api('create_project', { name, customer:$('p_customer').value.trim(), currency:$('p_currency').value,
+      totalAmount:$('p_total').value, rate:$('p_rate').value, startDate:$('p_start').value, endDate:$('p_end').value });
     ['p_name','p_customer','p_total','p_rate','p_start','p_end'].forEach(id=>$(id).value=''); projHint();
     await loadProjects(); notice('projErr','ok','Проект создан.');
   }catch(e){ notice('projErr','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent='Создать проект'; }
 }
 
+// ── Сотрудники ──
+async function loadEmployees(){
+  try{
+    const r = await api('list_employees'); EMPLOYEES = r.employees;
+    const tb = $('empTable').querySelector('tbody');
+    if(!EMPLOYEES.length){ tb.innerHTML='<tr><td class="empty">Сотрудников пока нет.</td></tr>'; }
+    else{
+      tb.innerHTML='<tr><th>ФИО</th><th>Email</th><th class="num">Рейт</th><th></th></tr>'+
+      EMPLOYEES.map(e=>{const s=cur(e.Currency);return `<tr>
+        <td>${esc(e.FullName||'—')}</td><td>${esc(e.Email)}</td>
+        <td class="num">${s}${money(e.Rate)}/ч</td>
+        <td><button class="btn warn sm" onclick="delEmployee('${esc(e.Email)}', this)">Удалить</button></td></tr>`;}).join('');
+    }
+    $('a_emp').innerHTML = EMPLOYEES.length
+      ? '<option value="">— выберите —</option>'+EMPLOYEES.map(e=>`<option value="${esc(e.Email)}">${esc(e.FullName||e.Email)} — ${esc(e.Email)}</option>`).join('')
+      : '<option value="">Сначала добавьте сотрудника</option>';
+  }catch(e){ notice('empErr','err', esc(e.message)); }
+}
+async function createEmployee(){
+  notice('empErr','',''); const email=$('e_email').value.trim();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('empErr','err','Введите корректный email.'); return; }
+  const b=$('e_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  try{
+    await api('create_employee', { email, fullName:$('e_name').value.trim(), rate:$('e_rate').value, currency:$('e_currency').value });
+    ['e_name','e_email','e_rate'].forEach(id=>$(id).value='');
+    await loadEmployees(); notice('empErr','ok','Сотрудник сохранён.');
+  }catch(e){ notice('empErr','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Сохранить сотрудника'; }
+}
+async function delEmployee(email, btn){
+  if(!confirm('Удалить сотрудника из справочника? Уже созданные отчёты останутся.')) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('delete_employee',{email}); await loadEmployees(); }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Удалить'; }
+}
+
 // ── Назначения ──
 function asgProject(){ return PROJECTS.find(p=>p.ProjectID===$('a_project').value); }
+function asgEmployee(){ return EMPLOYEES.find(e=>e.Email===$('a_emp').value); }
 function asgFill(){
-  const p = asgProject();
-  if(p){ $('a_rate').value=p.Rate; $('a_alloc').value=p.TotalAmount;
-    const s=cur(p.Currency); $('a_curlbl').textContent=`(${s})`; $('a_curlbl2').textContent=`(${s})`; }
+  const e = asgEmployee(), p = asgProject();
+  const currency = (e&&e.Currency) || (p&&p.Currency) || 'USD', s = cur(currency);
+  if(e) $('a_rate').value = e.Rate;
+  if(p) $('a_alloc').value = p.TotalAmount;
+  $('a_curlbl').textContent=`(${s})`; $('a_curlbl2').textContent=`(${s})`;
   asgHint();
 }
 function asgHint(){
-  const p=asgProject(); if(!p){ $('a_hint').textContent='Выберите проект'; return; }
-  const s=cur(p.Currency), r=$('a_rate').value, t=$('a_alloc').value;
+  const e=asgEmployee(), p=asgProject();
+  if(!e||!p){ $('a_hint').textContent='Выберите сотрудника и проект'; return; }
+  const s=cur((e&&e.Currency)||p.Currency), r=$('a_rate').value, t=$('a_alloc').value;
   $('a_hint').textContent = (+r>0) ? `≈ ${hrs(calcH(t,r))} ч  (${s}${money(t)} ÷ ${s}${money(r)}/ч)` : 'Укажите рейт';
 }
 async function loadAssignments(){
@@ -250,37 +317,48 @@ async function loadAssignments(){
     const r = await api('list_assignments'); ASSIGNMENTS = r.assignments;
     const tb = $('asgTable').querySelector('tbody');
     if(!ASSIGNMENTS.length){ tb.innerHTML='<tr><td class="empty">Отчётов пока нет.</td></tr>'; return; }
-    tb.innerHTML = '<tr><th>Проект</th><th>Сотрудник</th><th class="num">Рейт</th><th class="num">Часы</th><th>Статус</th><th></th></tr>'+
+    tb.innerHTML = '<tr><th>Проект</th><th>Сотрудник</th><th class="num">Рейт</th><th class="num">Часы</th><th>Статус</th><th>Действия</th></tr>'+
     ASSIGNMENTS.map(a=>{const s=cur(a.Currency);return `<tr>
       <td>${esc(a.ProjectName)}<div class="muted">${esc(a.Customer||'')}</div></td>
-      <td>${esc(a.EmployeeEmail)}</td>
+      <td>${esc(a.EmployeeName||a.EmployeeEmail)}<div class="muted">${esc(a.EmployeeName?a.EmployeeEmail:'')}</div></td>
       <td class="num">${s}${money(a.Rate)}/ч</td>
       <td class="num">${hrs(a.AllocatedHours)}</td>
       <td><span class="tag ${esc(a.Status)}">${statusRu(a.Status)}</span></td>
-      <td style="white-space:nowrap">
-        <button class="btn ghost sm" onclick="notify('${a.AssignmentID}', this)">Письмо</button>
-        ${a.Status==='submitted'?`<button class="btn sm" onclick="viewReport('${a.AssignmentID}')">Отчёт</button>`:''}
-      </td></tr>`;}).join('');
+      <td><div class="acts">${actionsFor(a)}</div></td></tr>`;}).join('');
   }catch(e){ notice('asgErr','err', esc(e.message)); }
 }
-function statusRu(s){return {created:'Создан',notified:'Отправлено письмо',submitted:'Отчёт получен'}[s]||s;}
+function statusRu(s){return {created:'Создан',released:'Передан на выполнение',draft:'В работе (черновик)',submitted:'Отчёт получен'}[s]||s;}
+function actionsFor(a){
+  const id=a.AssignmentID;
+  let html='';
+  if(a.Status==='created') html += `<button class="btn sm" onclick="release('${id}',this)">Передать на выполнение</button>`;
+  if(a.Status==='released'||a.Status==='draft') html += `<button class="btn warn sm" onclick="recall('${id}',this)">Забрать</button>`;
+  if(a.Status==='draft'||a.Status==='submitted') html += `<button class="btn ghost sm" onclick="viewReport('${id}')">Отчёт</button>`;
+  return html;
+}
 async function createAssignment(){
-  notice('asgErr','',''); const projectId=$('a_project').value, email=$('a_email').value.trim();
+  notice('asgErr',''); const projectId=$('a_project').value, email=$('a_emp').value;
+  if(!email){ notice('asgErr','err','Выберите сотрудника.'); return; }
   if(!projectId){ notice('asgErr','err','Выберите проект.'); return; }
-  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('asgErr','err','Введите корректный email.'); return; }
   if(!(+$('a_rate').value>0)){ notice('asgErr','err','Рейт должен быть больше нуля.'); return; }
   const b=$('a_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
     await api('create_assignment', { projectId, email, rate:$('a_rate').value, allocatedAmount:$('a_alloc').value, comment:$('a_comment').value.trim() });
-    $('a_email').value=''; $('a_comment').value=''; asgFill();
-    await loadAssignments(); notice('asgErr','ok','Отчёт назначен. Отправьте письмо кнопкой «Письмо».');
+    $('a_comment').value=''; 
+    await loadAssignments(); notice('asgErr','ok','Отчёт создан. Нажмите «Передать на выполнение», чтобы отправить сотруднику.');
   }catch(e){ notice('asgErr','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent='Создать отчёт'; }
 }
-async function notify(aid, btn){
-  const old=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
-  try{ await api('notify',{assignmentId:aid}); btn.textContent='Отправлено ✓'; await loadAssignments(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent=old; }
+async function release(aid, btn){
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{ await api('release',{assignmentId:aid}); await loadAssignments(); }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Передать на выполнение'; }
+}
+async function recall(aid, btn){
+  if(!confirm('Забрать задание обратно? Оно станет недоступно сотруднику (черновик сохранится).')) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('recall',{assignmentId:aid}); await loadAssignments(); }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Забрать'; }
 }
 
 async function viewReport(aid){
@@ -290,12 +368,12 @@ async function viewReport(aid){
     let H=0,M=0; items.forEach(it=>{H+=+it.Hours||0;M+=+it.Amount||0;});
     $('m_title').textContent = a.ProjectName;
     $('m_body').innerHTML = `
-      <p class="muted">${esc(a.EmployeeEmail)} · рейт ${s}${money(a.Rate)}/ч · отчитаться за ${hrs(a.AllocatedHours)} ч (${s}${money(a.AllocatedAmount)})</p>
+      <p class="muted">${esc(a.EmployeeName||a.EmployeeEmail)} · рейт ${s}${money(a.Rate)}/ч · отчитаться за ${hrs(a.AllocatedHours)} ч (${s}${money(a.AllocatedAmount)}) · статус: ${statusRu(a.Status)}</p>
       ${items.length?`<div class="scroll"><table>
         <tr><th>#</th><th>Описание</th><th class="num">Часы</th><th class="num">${s}</th></tr>
         ${items.map((it,i)=>`<tr><td>${i+1}</td><td>${esc(it.ItemDescription)}</td><td class="num">${hrs(it.Hours)}</td><td class="num">${money(it.Amount)}</td></tr>`).join('')}
         <tr><td></td><td><b>Итого</b></td><td class="num"><b>${hrs(H)}</b></td><td class="num"><b>${money(M)}</b></td></tr>
-      </table></div>`:'<p class="empty">Сотрудник ещё не внёс данные.</p>'}`;
+      </table></div>`:'<p class="empty">Данных пока нет.</p>'}`;
     $('modal').classList.remove('hidden');
   }catch(e){ alert(e.message); }
 }
