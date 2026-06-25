@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Отчёты — Fraktalex</title>
+<title>Reports — Fraktalex</title>
 <style>
   :root{
     --bg:#ffffff; --panel:#f7f8fa; --ink:#15202b; --muted:#5b6671;
@@ -68,67 +68,77 @@
 <body>
 <div class="wrap">
   <header class="top">
-    <div class="brand">Fraktalex<small>Сбор отчётности</small></div>
+    <div class="brand">Fraktalex<small>Report submission</small></div>
     <div class="who" id="who"></div>
   </header>
 
   <section id="screen-login">
-    <h1>Вход для сотрудника</h1>
-    <p class="sub">Введите рабочий email, на который пришло уведомление — увидите переданные вам задания.</p>
+    <h1>Employee sign-in</h1>
+    <p class="sub">Enter the work email the notification was sent to — you'll see the tasks assigned to you.</p>
     <div id="loginErr"></div>
     <label for="email">Email</label>
     <input id="email" type="email" inputmode="email" autocomplete="email" placeholder="name@company.com">
     <div style="height:14px"></div>
-    <button class="btn" id="loginBtn" onclick="login()">Показать мои отчёты</button>
+    <button class="btn" id="loginBtn" onclick="login()">Show my reports</button>
   </section>
 
   <section id="screen-list" class="hidden">
-    <h1>Мои отчёты</h1>
+    <h1>My reports</h1>
     <p class="sub" id="listSub"></p>
     <div id="listErr"></div>
     <div id="cards"></div>
   </section>
 
   <section id="screen-report" class="hidden">
-    <button class="back" onclick="backToList()">← К списку отчётов</button>
+    <button class="back" onclick="backToList()">← Back to reports</button>
     <h1 id="rName"></h1>
     <p class="sub" id="rMeta"></p>
     <div id="rComment"></div>
 
     <div class="dash">
-      <div class="cell lead"><div class="k">Отчитаться за</div><div class="v" id="dHours">—</div></div>
-      <div class="cell"><div class="k">Рейт</div><div class="v" id="dRate">—</div></div>
-      <div class="cell"><div class="k">Отчитано</div><div class="v" id="dDone">—</div></div>
-      <div class="cell"><div class="k">Остаток</div><div class="v pos" id="dLeft">—</div></div>
+      <div class="cell lead"><div class="k">To report</div><div class="v" id="dHours">—</div></div>
+      <div class="cell"><div class="k">Rate</div><div class="v" id="dRate">—</div></div>
+      <div class="cell"><div class="k">Reported</div><div class="v" id="dDone">—</div></div>
+      <div class="cell"><div class="k">Remaining</div><div class="v pos" id="dLeft">—</div></div>
     </div>
     <div class="meter"><i id="meterBar"></i></div>
 
     <div id="items"></div>
-    <button class="btn ghost sm" onclick="addItem()">+ Добавить пункт</button>
+    <button class="btn ghost sm" onclick="addItem()">+ Add item</button>
 
     <div style="height:18px"></div>
     <div id="submitMsg"></div>
     <div class="actions">
-      <button class="btn ghost" id="draftBtn" onclick="saveReport(false)">Сохранить черновик</button>
-      <button class="btn" id="submitBtn" onclick="saveReport(true)">Отчёт готов, отправить</button>
+      <button class="btn ghost" id="draftBtn" onclick="saveReport(false)">Save draft</button>
+      <button class="btn" id="submitBtn" onclick="saveReport(true)">Submit report</button>
     </div>
   </section>
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 async function api(action, payload){
-  const res = await fetch(APPS_SCRIPT_URL, { method:'POST', redirect:'follow',
-    headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action}, payload)) });
-  const data = await res.json();
-  if(!data.ok) throw new Error(data.error || 'Ошибка сервера');
+  let res;
+  try{
+    res = await fetch(APPS_SCRIPT_URL, { method:'POST', redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action}, payload)) });
+  }catch(_){ throw new Error('No connection to the server. Check the URL and your internet connection.'); }
+  const text = await res.text();
+  let data;
+  try{ data = JSON.parse(text); }
+  catch(_){
+    if(/accounts\.google\.com|Sign in|<html/i.test(text))
+      throw new Error('The server returned a Google sign-in page. In the deployment, access must be "Anyone" and the URL must end with /exec.');
+    throw new Error('The server returned non-JSON (HTTP '+res.status+'). Check the web app URL.');
+  }
+  if(!data.ok) throw new Error(data.error || 'Server error');
   return data;
 }
 const $ = id => document.getElementById(id);
 const cur = c => SYM[c] || '$';
 const fmtMoney = n => (Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-const fmtH = n => (Math.round((+n||0)*100)/100).toLocaleString('ru-RU');
+const fmtH = n => (Math.round((+n||0)*100)/100).toLocaleString('en-US');
 function show(id){['screen-login','screen-list','screen-report'].forEach(s=>$(s).classList.add('hidden'));$(id).classList.remove('hidden');}
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -138,7 +148,7 @@ let STATE = { email:'', current:null };
 async function login(){
   const email = $('email').value.trim().toLowerCase();
   notice('loginErr','','');
-  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('loginErr','err','Введите корректный email.'); return; }
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('loginErr','err','Enter a valid email.'); return; }
   const btn = $('loginBtn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
   try{
     const r = await api('list_my_assignments', {email});
@@ -147,44 +157,43 @@ async function login(){
     const aid = new URLSearchParams(location.search).get('aid');
     if(aid) openReport(aid);
   }catch(e){ notice('loginErr','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Показать мои отчёты'; }
+  finally{ btn.disabled=false; btn.textContent='Show my reports'; }
 }
 
-const BADGE = { released:['todo','Новое задание'], draft:['draft','Черновик'], submitted:['done','Отправлен'] };
+const BADGE = { released:['todo','New task'], draft:['draft','Draft'], submitted:['done','Submitted'] };
 function renderList(items){
-  $('listSub').textContent = items.length ? `${items.length} ${plural(items.length,'отчёт','отчёта','отчётов')}` : '';
-  if(!items.length){ $('cards').innerHTML = '<div class="empty">Переданных вам заданий пока нет.</div>'; return; }
+  $('listSub').textContent = items.length ? `${items.length} ${items.length===1?'report':'reports'}` : '';
+  if(!items.length){ $('cards').innerHTML = '<div class="empty">No tasks assigned to you yet.</div>'; return; }
   $('cards').innerHTML = items.map(a=>{
     const s = cur(a.Currency), b = BADGE[a.Status] || ['todo','—'];
-    const btnLabel = a.Status==='submitted' ? 'Открыть отчёт' : (a.Status==='draft' ? 'Продолжить' : 'Заполнить отчёт');
+    const btnLabel = a.Status==='submitted' ? 'Open report' : (a.Status==='draft' ? 'Continue' : 'Fill in report');
     return `<div class="card">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:start">
-        <div><p class="pname">${esc(a.ProjectName)}</p>${a.Customer?`<p class="pcust">Заказчик: ${esc(a.Customer)}</p>`:''}</div>
+        <div><p class="pname">${esc(a.ProjectName)}</p>${a.Customer?`<p class="pcust">Customer: ${esc(a.Customer)}</p>`:''}</div>
         <span class="tag ${b[0]}">${b[1]}</span>
       </div>
-      <div class="hoursline">Отчитаться за ${fmtH(a.AllocatedHours)} ч</div>
+      <div class="hoursline">Report ${fmtH(a.AllocatedHours)} h</div>
       <div class="meta">
-        <span>Рейт: <b>${s}${fmtMoney(a.Rate)}/ч</b></span>
-        <span>Сумма: <b>${s}${fmtMoney(a.AllocatedAmount)}</b></span>
-        ${a.StartDate?`<span>Начало: <b>${esc(a.StartDate)}</b></span>`:''}
-        ${a.EndDate?`<span>Окончание: <b>${esc(a.EndDate)}</b></span>`:''}
+        <span>Rate: <b>${s}${fmtMoney(a.Rate)}/h</b></span>
+        <span>Amount: <b>${s}${fmtMoney(a.AllocatedAmount)}</b></span>
+        ${a.StartDate?`<span>Start: <b>${esc(a.StartDate)}</b></span>`:''}
+        ${a.EndDate?`<span>End: <b>${esc(a.EndDate)}</b></span>`:''}
       </div>
       ${a.Comment?`<div class="comment">💬 ${esc(a.Comment)}</div>`:''}
       <div class="cardfoot"><span></span><button class="btn sm" onclick="openReport('${a.AssignmentID}')">${btnLabel}</button></div>
     </div>`;
   }).join('');
 }
-function plural(n,a,b,c){const m=n%100,d=n%10;if(m>=11&&m<=14)return c;if(d===1)return a;if(d>=2&&d<=4)return b;return c;}
 
 async function openReport(aid){
   try{
     const r = await api('get_assignment', {email:STATE.email, assignmentId:aid});
     STATE.current = r.assignment; const a = r.assignment, s = cur(a.Currency);
     $('rName').textContent = a.ProjectName;
-    $('rMeta').textContent = [a.Customer?'Заказчик: '+a.Customer:'', a.StartDate&&a.EndDate?`${a.StartDate} → ${a.EndDate}`:''].filter(Boolean).join('   •   ');
+    $('rMeta').textContent = [a.Customer?'Customer: '+a.Customer:'', a.StartDate&&a.EndDate?`${a.StartDate} → ${a.EndDate}`:''].filter(Boolean).join('   •   ');
     $('rComment').innerHTML = a.Comment ? `<div class="comment">💬 ${esc(a.Comment)}</div>` : '';
-    $('dHours').textContent = fmtH(a.AllocatedHours)+' ч';
-    $('dRate').textContent = s+fmtMoney(a.Rate)+'/ч';
+    $('dHours').textContent = fmtH(a.AllocatedHours)+' h';
+    $('dRate').textContent = s+fmtMoney(a.Rate)+'/h';
     notice('submitMsg','','');
     $('items').innerHTML='';
     const existing = (r.items||[]);
@@ -198,16 +207,16 @@ function addItem(desc='', hours=''){
   const div = document.createElement('div'); div.className='item';
   div.innerHTML = `
     <div class="hd"><span class="n"></span><span class="amt">${cur(STATE.current&&STATE.current.Currency)}0.00</span></div>
-    <textarea placeholder="Краткое описание выполненных работ" oninput="recalc()">${esc(desc)}</textarea>
+    <textarea placeholder="Short description of the work done" oninput="recalc()">${esc(desc)}</textarea>
     <div style="height:8px"></div>
     <div class="row" style="align-items:end">
-      <div class="hrs"><label>Часы</label>
+      <div class="hrs"><label>Hours</label>
         <input type="number" min="0" step="0.25" placeholder="0" value="${hours!==''&&hours!=null?hours:''}" oninput="recalc()"></div>
-      <div style="flex:0 0 auto"><button class="iconbtn" onclick="this.closest('.item').remove();recalc()">Удалить</button></div>
+      <div style="flex:0 0 auto"><button class="iconbtn" onclick="this.closest('.item').remove();recalc()">Remove</button></div>
     </div>`;
   $('items').appendChild(div); renumber();
 }
-function renumber(){[...document.querySelectorAll('#items .item')].forEach((el,i)=>{el.querySelector('.n').textContent='Пункт '+(i+1);});}
+function renumber(){[...document.querySelectorAll('#items .item')].forEach((el,i)=>{el.querySelector('.n').textContent='Item '+(i+1);});}
 
 function recalc(){
   renumber(); const a = STATE.current; if(!a) return;
@@ -218,11 +227,11 @@ function recalc(){
     hours += h; el.querySelector('.amt').textContent = s+fmtMoney(h*rate);
   });
   const money = hours*rate, leftHours = maxHours-hours, leftMoney = budget-money, over = leftHours < -0.005;
-  $('dDone').textContent = `${fmtH(hours)} ч · ${s}${fmtMoney(money)}`;
-  const left = $('dLeft'); left.textContent = `${fmtH(leftHours)} ч · ${s}${fmtMoney(leftMoney)}`; left.className = 'v ' + (over?'warn':'pos');
+  $('dDone').textContent = `${fmtH(hours)} h · ${s}${fmtMoney(money)}`;
+  const left = $('dLeft'); left.textContent = `${fmtH(leftHours)} h · ${s}${fmtMoney(leftMoney)}`; left.className = 'v ' + (over?'warn':'pos');
   const bar = $('meterBar'), pct = maxHours>0 ? Math.min(100, hours/maxHours*100) : 0;
   bar.style.width = pct+'%'; bar.classList.toggle('over', over);
-  notice('submitMsg', over?'err':'', over ? `Превышение на ${fmtH(-leftHours)} ч. Сохранить можно, но проверьте часы.` : '');
+  notice('submitMsg', over?'err':'', over ? `Over by ${fmtH(-leftHours)} h. You can still save, but check the hours.` : '');
 }
 
 async function saveReport(finalize){
@@ -230,7 +239,7 @@ async function saveReport(finalize){
     description: el.querySelector('textarea').value.trim(),
     hours: parseFloat((el.querySelector('input').value||'').replace(',','.'))||0
   })).filter(it=>it.description||it.hours>0);
-  if(finalize && !items.length){ notice('submitMsg','err','Добавьте хотя бы один пункт перед отправкой.'); return; }
+  if(finalize && !items.length){ notice('submitMsg','err','Add at least one item before submitting.'); return; }
 
   const action = finalize ? 'submit_report' : 'save_draft';
   const btn = finalize ? $('submitBtn') : $('draftBtn');
@@ -242,10 +251,10 @@ async function saveReport(finalize){
     const s = cur(STATE.current.Currency);
     if(finalize){
       STATE.current.Status='submitted';
-      notice('submitMsg','ok', `Отчёт отправлен: ${fmtH(r.totals.hours)} ч на ${s}${fmtMoney(r.totals.amount)}. Администратор уведомлён.`);
+      notice('submitMsg','ok', `Report submitted: ${fmtH(r.totals.hours)} h for ${s}${fmtMoney(r.totals.amount)}. The admin has been notified.`);
     }else{
       STATE.current.Status='draft';
-      notice('submitMsg','info', `Черновик сохранён: ${fmtH(r.totals.hours)} ч. Можно продолжить позже.`);
+      notice('submitMsg','info', `Draft saved: ${fmtH(r.totals.hours)} h. You can continue later.`);
     }
   }catch(e){ notice('submitMsg','err', esc(e.message)); }
   finally{ btn.disabled=false; other.disabled=false; btn.textContent=oldText; }
@@ -254,7 +263,7 @@ async function saveReport(finalize){
 (function init(){
   const p = new URLSearchParams(location.search), em = p.get('email');
   if(em){ $('email').value = em; }
-  if(APPS_SCRIPT_URL.startsWith('PASTE')){ notice('loginErr','err','Не настроен APPS_SCRIPT_URL в employee.html.'); }
+  if(APPS_SCRIPT_URL.startsWith('PASTE')){ notice('loginErr','err','APPS_SCRIPT_URL is not configured in employee.html.'); }
 })();
 </script>
 </body>

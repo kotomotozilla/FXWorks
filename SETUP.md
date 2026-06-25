@@ -1,97 +1,96 @@
-# Fraktalex — система сбора отчётности · установка
+# Fraktalex — Reporting collection system · setup
 
-Три файла:
+Three files:
 
-| Файл | Где живёт | Назначение |
+| File | Where it lives | Purpose |
 |---|---|---|
-| `Code.gs` | Google Apps Script | бэкенд: хранит данные в Google Sheets, шлёт письма |
-| `admin.html` | GitHub Pages | панель администратора |
-| `employee.html` | GitHub Pages | страница сотрудника |
+| `Code.gs` | Google Apps Script | backend: stores data in Google Sheets, sends emails |
+| `admin.html` | GitHub Pages | admin panel |
+| `employee.html` | GitHub Pages | employee page |
 
-«Эксель-таблица на Google Drive» — это и есть Google-таблица (лист **Entries**). Выгрузка в `.xlsx`: в таблице **Файл → Скачать → Microsoft Excel**.
-
----
-
-## Шаг 1. Бэкенд (Google)
-
-1. Создайте Google-таблицу (Google Sheets) — она станет хранилищем.
-2. В таблице: **Расширения → Apps Script**. Удалите содержимое `Code.gs` и вставьте весь код из файла `Code.gs`.
-3. В блоке `CONFIG` вверху задайте:
-   - `ADMIN_PASSCODE` — длинный случайный PIN администратора (не делитесь им).
-   - `EMPLOYEE_BASE_URL` — ссылку на страницу сотрудника (после шага 2, формат: `https://USERNAME.github.io/REPO/employee.html`).
-   - `ADMIN_BASE_URL` — ссылку на панель админа (для кнопки в письме о готовом отчёте).
-   - `ADMIN_EMAIL` — почта, на которую приходят уведомления о готовых отчётах. Если пусто — берётся адрес владельца скрипта.
-   - `SHEET_ID` — можно оставить пустым, если скрипт открыт из самой таблицы.
-4. (Необязательно) запустите функцию `setup` один раз — создаст листы. При первом обращении они создаются и так.
-5. **Развернуть → Создать развёртывание**:
-   - Тип: **Веб-приложение**
-   - «Запуск от имени»: **Я**
-   - «У кого есть доступ»: **Все** (*Anyone*)
-6. Подтвердите доступ к Gmail/Sheets (Google спросит разрешения — это нужно для писем и записи в таблицу).
-7. Скопируйте **URL веб-приложения** (`https://script.google.com/macros/s/.../exec`).
-
-Проверка: откройте этот URL в браузере — должно вернуться `{"ok":true,"service":"fraktalex-reports",...}`.
-
-> При изменении кода нужно **Развернуть → Управление развёртываниями → ✏️ → Новая версия**, иначе правки не применятся.
+The "Excel table on Google Drive" is the Google Sheet itself (the **Entries** tab). Export to `.xlsx`: in the sheet, **File → Download → Microsoft Excel**.
 
 ---
 
-## Шаг 2. Фронтенд (GitHub Pages)
+## Step 1. Backend (Google)
 
-1. В `admin.html` и `employee.html` замените `PASTE_YOUR_WEB_APP_URL_HERE` на URL веб-приложения из шага 1.
-2. Залейте оба файла в репозиторий GitHub.
-3. **Settings → Pages → Source: Deploy from branch**, ветка `main`, папка `/root`. Сохраните.
-4. Через минуту страницы доступны:
-   - админ: `https://USERNAME.github.io/REPO/admin.html`
-   - сотрудник: `https://USERNAME.github.io/REPO/employee.html`
-5. Вернитесь в Apps Script, впишите адреса в `EMPLOYEE_BASE_URL` и `ADMIN_BASE_URL` и перевыпустите развёртывание (новая версия).
+1. Create a Google Sheet — it becomes the storage.
+2. In the sheet: **Extensions → Apps Script**. Delete the boilerplate and paste all of `Code.gs`.
+3. In the `CONFIG` block at the top, set:
+   - `ADMIN_PASSCODE` — a long random admin PIN (don't share it).
+   - `EMPLOYEE_BASE_URL` — link to the employee page (after Step 2, format: `https://USERNAME.github.io/REPO/employee.html`).
+   - `ADMIN_BASE_URL` — link to the admin panel (used in the "report ready" email button).
+   - `ADMIN_EMAIL` — address that receives "report ready" notifications. If empty, the script owner's address is used.
+   - `SHEET_ID` — can stay empty if the script is opened from the sheet itself.
+4. (Optional) run the `setup` function once to create the tabs. They are also created on first request.
+5. **Deploy → New deployment → type "Web app"**:
+   - Execute as: **Me**
+   - Who has access: **Anyone**
+6. Approve the Gmail/Sheets permissions (needed to send mail and write to the sheet).
+7. Copy the **Web app URL** (`https://script.google.com/macros/s/.../exec`).
 
----
+Check: open that URL in a browser — it should return `{"ok":true,"service":"fraktalex-reports",...}`.
 
-## Шаг 3. Как пользоваться
-
-**Администратор** (`admin.html`):
-1. Вход по PIN.
-2. **Сотрудники** → добавьте сотрудников: ФИО, email, рейт, валюта. (Повторное добавление того же email обновляет данные.)
-3. **Проекты** → создайте проект: название, заказчик, валюта (USD/EUR), общая сумма, рейт, даты. Система сразу считает часы (сумма ÷ рейт).
-4. **Отчёты сотрудников** → создайте отчёт: выберите сотрудника (рейт/валюта подставятся) и проект (сумма подставится), при необходимости переопределите рейт/сумму, добавьте комментарий.
-5. Напротив каждого отчёта — кнопка **«Передать на выполнение»**: задание становится доступно сотруднику и ему уходит письмо. Пока не передано — сотрудник его не видит.
-6. **«Забрать»** возвращает задание себе — оно становится недоступно сотруднику (черновик, если был, сохраняется; при повторной передаче сотрудник продолжит с него).
-7. Когда сотрудник нажмёт «Отчёт готов» — статус станет «Отчёт получен», вам придёт письмо, а кнопка **«Отчёт»** покажет содержимое. Всё копится во вкладке **Собранные данные** и в Google-таблице.
-
-**Сотрудник** (`employee.html`):
-1. Переходит по ссылке из письма → вводит свой email. Видит только переданные ему задания.
-2. В списке: на сколько часов нужно отчитаться, рейт, сумма, даты, заказчик, комментарий, статус (новое / черновик / отправлен).
-3. Открывает отчёт, добавляет пункты работ (описание + часы). В шапке live: целевые часы, рейт, сколько уже отчитано (часы и деньги) и остаток.
-4. **«Сохранить черновик»** — можно возвращаться к отчёту много раз между сессиями. **«Отчёт готов, отправить»** — отчёт уходит администратору (он получает письмо).
+> After any code change you must **Deploy → Manage deployments → ✏️ → New version**, otherwise the changes won't apply.
 
 ---
 
-## Процесс (статусы задания)
+## Step 2. Frontend (GitHub Pages)
 
-`Создан` (виден только админу) → **Передать** → `Передан на выполнение` (виден сотруднику, ушло письмо) → сотрудник сохраняет `Черновик` → **Отправить** → `Отчёт получен` (письмо админу).
-В любой момент до отправки админ может **Забрать** задание → снова `Создан`, сотруднику недоступно.
+1. In `admin.html` and `employee.html`, replace `PASTE_YOUR_WEB_APP_URL_HERE` with the Web app URL from Step 1.
+2. Upload both files to a GitHub repository.
+3. **Settings → Pages → Source: Deploy from branch**, branch `main`, folder `/root`. Save.
+4. After a minute the pages are live:
+   - admin: `https://USERNAME.github.io/REPO/admin.html`
+   - employee: `https://USERNAME.github.io/REPO/employee.html`
+5. Go back to Apps Script, fill in `EMPLOYEE_BASE_URL` and `ADMIN_BASE_URL`, and publish a new deployment version.
 
 ---
 
-## Что важно знать про безопасность
+## Step 3. How to use
 
-- **Сотрудник** «аутентифицируется» только по email — намеренно просто, как в задании. Кто знает чужой email — увидит его задания. Если нужно строже — добавлю одноразовый токен в ссылку из письма (magic-link).
-- **Админ** защищён PIN-кодом, который сервер проверяет при каждом действии. Меняйте его на длинный и не публикуйте `Code.gs` с реальным PIN в открытом репозитории.
-- Развёртывание «Все» (*Anyone*) нужно, чтобы статические страницы могли обращаться к API. Действия защищены: админские — PIN-ом, сотрудника — проверкой email и статуса задания на сервере.
+**Administrator** (`admin.html`):
+1. Sign in with the PIN.
+2. **Employees** → add people: full name, email, rate, currency. (Re-adding the same email updates the record.)
+3. **Projects** → create a project: name, customer, currency (USD/EUR), total amount, rate, dates. Hours are calculated instantly (amount ÷ rate).
+4. **Reports** → create a report: pick an employee (rate/currency pre-fill) and a project (amount pre-fills), optionally override rate/amount, add a comment.
+5. Next to each report — the **Release** button: the task becomes available to the employee and they get an email. Until released, the employee can't see it.
+6. **Recall** takes the task back — it becomes unavailable to the employee (any draft is preserved; on the next release they continue from it).
+7. When the employee taps "Submit report", the status becomes "Submitted", you get an email, and the **Report** button shows the contents. Everything also accumulates in **Collected data** and in the Google Sheet.
 
-## Если что-то не работает
+**Employee** (`employee.html`):
+1. Open the link from the email → enter your email. You only see tasks released to you.
+2. The list shows: how many hours to report, rate, amount, dates, customer, comment, status (new / draft / submitted).
+3. Open a report, add work items (description + hours). The header shows live: target hours, rate, how much is already reported (hours and money), and remaining.
+4. **Save draft** — you can return to a report many times across sessions. **Submit report** — the report goes to the administrator (who receives an email).
 
-- **Письма не приходят** → проверьте «Спам»; убедитесь, что при развёртывании выдали разрешение на Gmail. Лимит Gmail — около 100 писем/сутки на обычном аккаунте.
-- **Ошибка запроса (CORS)** → endpoint открыт «Все», URL заканчивается на `/exec` (не `/dev`).
-- **Правки в коде не видны** → создайте новую версию развёртывания.
-- **«Не настроен APPS_SCRIPT_URL»** → не заменили `PASTE_...` в html.
+---
 
-## Модель данных (листы таблицы)
+## Workflow (task statuses)
 
-- **Projects**: проект — название, заказчик, валюта, сумма, рейт, часы (рассчитываются), даты.
-- **Employees**: справочник — ФИО, email, рейт, валюта.
-- **Assignments**: задание сотруднику — проект + сотрудник + валюта + рейт + сумма + часы + комментарий + статус.
-- **Entries**: строки отчётов (в т.ч. черновики) — по одной на каждый пункт работ. Это финальная «эксель-таблица».
+`Created` (admin only) → **Release** → `Released` (visible to employee, email sent) → employee saves `Draft` → **Submit** → `Submitted` (email to admin).
+At any time before submission the admin can **Recall** → back to `Created`, unavailable to the employee.
 
-> Если вы уже разворачивали раннюю версию — удалите листы **Projects**, **Assignments**, **Entries** (и при наличии **Employees**) в таблице. Они пересоздадутся с новыми колонками при первом обращении.
+---
+
+## Security notes
+
+- The **employee** "authenticates" only by email — intentionally simple, as specified. Anyone who knows someone's email can see their tasks. If you need it stricter, I can add a one-time token in the email link (magic-link).
+- The **admin** is protected by a PIN, checked by the server on every action. Use a long PIN and don't publish `Code.gs` with a real PIN in a public repository.
+- The "Anyone" deployment is required so static pages can reach the API. Actions are still protected: admin ones by the PIN, employee ones by email + task-status checks on the server.
+
+## Troubleshooting
+
+- **Emails not arriving** → check Spam; make sure you granted the Gmail permission during deployment. Gmail limit is ~100 emails/day on a regular account.
+- **"The string did not match the expected pattern" / non-JSON / CORS** → the endpoint must be open to "Anyone" and the URL must end with `/exec` (not `/dev`). Open the `/exec` URL directly: it should return JSON, not a Google sign-in page.
+- **Code changes not visible** → publish a new deployment version.
+- **"APPS_SCRIPT_URL is not configured"** → you didn't replace `PASTE_...` in the HTML.
+
+## Data model (sheet tabs)
+
+- **Projects**: project — name, customer, currency, amount, rate, hours (calculated), dates.
+- **Employees**: directory — full name, email, rate, currency.
+- **Assignments**: a task for an employee — project + employee + currency + rate + amount + hours + comment + status.
+- **Entries**: report rows (including drafts) — one per work item. This is the final "Excel table".
+
+> If you deployed an earlier version, delete the **Projects**, **Assignments**, **Entries** (and **Employees**, if present) tabs in the sheet. They will be recreated with the new columns on first request.

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Администрирование — Fraktalex</title>
+<title>Administration — Fraktalex</title>
 <style>
   :root{
     --bg:#ffffff; --panel:#f7f8fa; --ink:#15202b; --muted:#5b6671;
@@ -59,136 +59,136 @@
 <body>
 <div class="wrap">
   <header class="top">
-    <div class="brand">Fraktalex<small>Администрирование отчётности</small></div>
+    <div class="brand">Fraktalex<small>Reporting administration</small></div>
     <div class="who" id="who"></div>
   </header>
 
   <section id="gate">
     <div class="panel" style="max-width:420px;margin:40px auto">
-      <h1>Вход администратора</h1>
+      <h1>Admin sign-in</h1>
       <div id="gateErr"></div>
-      <label for="pin">PIN администратора</label>
+      <label for="pin">Admin PIN</label>
       <input id="pin" type="password" autocomplete="current-password" placeholder="••••••••" onkeydown="if(event.key==='Enter')gateLogin()">
       <div style="height:14px"></div>
-      <button class="btn" id="gateBtn" onclick="gateLogin()">Войти</button>
+      <button class="btn" id="gateBtn" onclick="gateLogin()">Sign in</button>
     </div>
   </section>
 
   <main id="app" class="hidden">
     <div class="tabs">
-      <button id="tab-projects" class="active" onclick="switchTab('projects')">Проекты</button>
-      <button id="tab-employees" onclick="switchTab('employees')">Сотрудники</button>
-      <button id="tab-assignments" onclick="switchTab('assignments')">Отчёты сотрудников</button>
-      <button id="tab-data" onclick="switchTab('data')">Собранные данные</button>
+      <button id="tab-projects" class="active" onclick="switchTab('projects')">Projects</button>
+      <button id="tab-employees" onclick="switchTab('employees')">Employees</button>
+      <button id="tab-assignments" onclick="switchTab('assignments')">Reports</button>
+      <button id="tab-data" onclick="switchTab('data')">Collected data</button>
     </div>
 
-    <!-- ПРОЕКТЫ -->
+    <!-- PROJECTS -->
     <section id="view-projects">
       <div class="panel">
-        <h2>Новый проект</h2>
+        <h2>New project</h2>
         <div id="projErr"></div>
         <div class="row">
-          <div style="flex:2"><label>Название проекта *</label><input id="p_name" placeholder="Модернизация VHF, Алматы"></div>
-          <div style="flex:2"><label>Заказчик</label><input id="p_customer" placeholder="SkyGrid"></div>
+          <div style="flex:2"><label>Project name *</label><input id="p_name" placeholder="VHF upgrade, Almaty"></div>
+          <div style="flex:2"><label>Customer</label><input id="p_customer" placeholder="SkyGrid"></div>
         </div>
         <div style="height:10px"></div>
         <div class="row">
-          <div style="max-width:120px"><label>Валюта</label>
+          <div style="max-width:120px"><label>Currency</label>
             <select id="p_currency" onchange="projHint()"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option></select></div>
-          <div><label>Общая сумма *</label><input id="p_total" type="number" min="0" step="0.01" placeholder="0" oninput="projHint()"></div>
-          <div><label>Рейт в час *</label><input id="p_rate" type="number" min="0" step="0.01" placeholder="0" oninput="projHint()"></div>
+          <div><label>Total amount *</label><input id="p_total" type="number" min="0" step="0.01" placeholder="0" oninput="projHint()"></div>
+          <div><label>Rate per hour *</label><input id="p_rate" type="number" min="0" step="0.01" placeholder="0" oninput="projHint()"></div>
         </div>
         <div style="height:10px"></div>
         <div class="row">
-          <div><label>Начало работ</label><input id="p_start" type="date"></div>
-          <div><label>Окончание работ</label><input id="p_end" type="date"></div>
+          <div><label>Start date</label><input id="p_start" type="date"></div>
+          <div><label>End date</label><input id="p_end" type="date"></div>
         </div>
         <div style="height:14px"></div>
-        <span class="hint" id="p_hint">Часы рассчитаются автоматически</span><br>
-        <button class="btn" id="p_btn" onclick="createProject()">Создать проект</button>
+        <span class="hint" id="p_hint">Hours are calculated automatically</span><br>
+        <button class="btn" id="p_btn" onclick="createProject()">Create project</button>
       </div>
       <div class="panel">
-        <h2>Проекты</h2>
-        <div class="scroll"><table id="projTable"><tbody><tr><td class="empty">Загрузка…</td></tr></tbody></table></div>
+        <h2>Projects</h2>
+        <div class="scroll"><table id="projTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
 
-    <!-- СОТРУДНИКИ -->
+    <!-- EMPLOYEES -->
     <section id="view-employees" class="hidden">
       <div class="panel">
-        <h2>Добавить сотрудника</h2>
-        <p class="muted">Рейт и валюта отсюда подставляются при назначении отчёта. Повторное добавление того же email обновит данные.</p>
+        <h2>Add employee</h2>
+        <p class="muted">Rate and currency from here are pre-filled when assigning a report. Re-adding the same email updates the record.</p>
         <div id="empErr"></div>
         <div class="row">
-          <div style="flex:2"><label>ФИО</label><input id="e_name" placeholder="Иванов Иван Иванович"></div>
+          <div style="flex:2"><label>Full name</label><input id="e_name" placeholder="John A. Smith"></div>
           <div style="flex:2"><label>Email *</label><input id="e_email" type="email" placeholder="name@company.com"></div>
         </div>
         <div style="height:10px"></div>
         <div class="row">
-          <div><label>Рейт в час</label><input id="e_rate" type="number" min="0" step="0.01" placeholder="0"></div>
-          <div style="max-width:140px"><label>Валюта</label>
+          <div><label>Rate per hour</label><input id="e_rate" type="number" min="0" step="0.01" placeholder="0"></div>
+          <div style="max-width:140px"><label>Currency</label>
             <select id="e_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option></select></div>
         </div>
         <div style="height:14px"></div>
-        <button class="btn" id="e_btn" onclick="createEmployee()">Сохранить сотрудника</button>
+        <button class="btn" id="e_btn" onclick="createEmployee()">Save employee</button>
       </div>
       <div class="panel">
-        <h2>Сотрудники</h2>
-        <div class="scroll"><table id="empTable"><tbody><tr><td class="empty">Загрузка…</td></tr></tbody></table></div>
+        <h2>Employees</h2>
+        <div class="scroll"><table id="empTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
 
-    <!-- НАЗНАЧЕНИЯ -->
+    <!-- ASSIGNMENTS -->
     <section id="view-assignments" class="hidden">
       <div class="panel">
-        <h2>Назначить отчёт сотруднику</h2>
-        <p class="muted">Выберите сотрудника (рейт/валюта подставятся) и проект (сумма подставится). После создания нажмите «Передать на выполнение» — сотрудник получит письмо и доступ.</p>
+        <h2>Assign a report</h2>
+        <p class="muted">Pick an employee (rate/currency pre-fill) and a project (amount pre-fills). After creating, click "Release" — the employee gets an email and access.</p>
         <div id="asgErr"></div>
         <div class="row">
-          <div style="flex:2"><label>Сотрудник *</label><select id="a_emp" onchange="asgFill()"></select></div>
-          <div style="flex:2"><label>Проект *</label><select id="a_project" onchange="asgFill()"></select></div>
+          <div style="flex:2"><label>Employee *</label><select id="a_emp" onchange="asgFill()"></select></div>
+          <div style="flex:2"><label>Project *</label><select id="a_project" onchange="asgFill()"></select></div>
         </div>
         <div style="height:10px"></div>
         <div class="row">
-          <div><label>Рейт в час <span id="a_curlbl"></span></label><input id="a_rate" type="number" min="0" step="0.01" oninput="asgHint()"></div>
-          <div><label>Сумма <span id="a_curlbl2"></span></label><input id="a_alloc" type="number" min="0" step="0.01" oninput="asgHint()"></div>
+          <div><label>Rate per hour <span id="a_curlbl"></span></label><input id="a_rate" type="number" min="0" step="0.01" oninput="asgHint()"></div>
+          <div><label>Amount <span id="a_curlbl2"></span></label><input id="a_alloc" type="number" min="0" step="0.01" oninput="asgHint()"></div>
         </div>
         <div style="height:10px"></div>
-        <div><label>Комментарий сотруднику</label><textarea id="a_comment" placeholder="Что именно нужно отразить в отчёте"></textarea></div>
+        <div><label>Comment to the employee</label><textarea id="a_comment" placeholder="What exactly to cover in the report"></textarea></div>
         <div style="height:14px"></div>
-        <span class="hint" id="a_hint">Выберите сотрудника и проект</span><br>
-        <button class="btn" id="a_btn" onclick="createAssignment()">Создать отчёт</button>
+        <span class="hint" id="a_hint">Select an employee and a project</span><br>
+        <button class="btn" id="a_btn" onclick="createAssignment()">Create report</button>
       </div>
       <div class="panel">
-        <h2>Отчёты сотрудников</h2>
-        <div class="scroll"><table id="asgTable"><tbody><tr><td class="empty">Загрузка…</td></tr></tbody></table></div>
+        <h2>Reports</h2>
+        <div class="scroll"><table id="asgTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
 
-    <!-- ДАННЫЕ -->
+    <!-- DATA -->
     <section id="view-data" class="hidden">
       <div class="panel">
-        <h2>Собранные данные</h2>
-        <p class="muted">Все строки также в Google-таблице (лист <b>Entries</b>). Файл → Скачать → Microsoft Excel (.xlsx).</p>
+        <h2>Collected data</h2>
+        <p class="muted">All rows are also in the Google Sheet (<b>Entries</b> tab). File → Download → Microsoft Excel (.xlsx).</p>
         <div id="dataErr"></div>
-        <div class="scroll"><table id="dataTable"><tbody><tr><td class="empty">Загрузка…</td></tr></tbody></table></div>
+        <div class="scroll"><table id="dataTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
   </main>
 </div>
 
 <div id="modal" class="modal hidden">
-  <div class="box"><h2><span id="m_title">Отчёт</span><button class="x" onclick="closeModal()">×</button></h2><div id="m_body"></div></div>
+  <div class="box"><h2><span id="m_title">Report</span><button class="x" onclick="closeModal()">×</button></h2><div id="m_body"></div></div>
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
 const esc = s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const money = n=>(Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-const hrs = n=>(Math.round((+n||0)*100)/100).toLocaleString('ru-RU');
+const hrs = n=>(Math.round((+n||0)*100)/100).toLocaleString('en-US');
 const calcH = (t,r)=> (+r>0 ? Math.round((+t/+r)*100)/100 : 0);
 function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
 
@@ -200,31 +200,31 @@ async function api(action, payload={}){
   try{
     res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
       headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
-  }catch(_){ throw new Error('Нет связи с сервером. Проверьте URL веб-приложения и подключение.'); }
+  }catch(_){ throw new Error('No connection to the server. Check the web app URL and your connection.'); }
   const text = await res.text();
   let data;
   try{ data = JSON.parse(text); }
   catch(_){
-    if(/accounts\.google\.com|Sign in|Войти|<html/i.test(text))
-      throw new Error('Сервер вернул страницу входа Google, а не данные. В развёртывании Apps Script доступ должен быть «Все», а URL — оканчиваться на /exec.');
-    throw new Error('Сервер вернул не-JSON (HTTP '+res.status+'). Проверьте URL (/exec, не /dev) и выпустите новую версию развёртывания.');
+    if(/accounts\.google\.com|Sign in|<html/i.test(text))
+      throw new Error('The server returned a Google sign-in page, not data. In the Apps Script deployment, access must be "Anyone" and the URL must end with /exec.');
+    throw new Error('The server returned non-JSON (HTTP '+res.status+'). Check the URL (/exec, not /dev) and publish a new deployment version.');
   }
-  if(!data.ok) throw new Error(data.error||'Ошибка сервера');
+  if(!data.ok) throw new Error(data.error||'Server error');
   return data;
 }
 
 async function gateLogin(){
   const pin = $('pin').value; notice('gateErr','','');
-  if(!pin){ notice('gateErr','err','Введите PIN.'); return; }
+  if(!pin){ notice('gateErr','err','Enter the PIN.'); return; }
   const b=$('gateBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>'; PIN = pin;
   try{ await api('admin_login'); sessionStorage.setItem('fx_pin', PIN); enterApp(); }
   catch(e){ notice('gateErr','err', esc(e.message)); PIN=''; }
-  finally{ b.disabled=false; b.textContent='Войти'; }
+  finally{ b.disabled=false; b.textContent='Sign in'; }
 }
 function logout(){ sessionStorage.removeItem('fx_pin'); location.reload(); }
 function enterApp(){
   $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
-  $('who').innerHTML = 'Администратор <button onclick="logout()">Выйти</button>';
+  $('who').innerHTML = 'Administrator <button onclick="logout()">Sign out</button>';
   loadProjects(); loadEmployees(); loadAssignments();
 }
 function switchTab(t){
@@ -232,81 +232,81 @@ function switchTab(t){
   if(t==='data') loadData(); if(t==='assignments') loadAssignments(); if(t==='employees') loadEmployees();
 }
 
-// ── Проекты ──
+// ── Projects ──
 function projHint(){
   const t=$('p_total').value, r=$('p_rate').value, s=cur($('p_currency').value);
-  $('p_hint').textContent = (+r>0) ? `≈ ${hrs(calcH(t,r))} ч  (сумма ${s}${money(t)} ÷ рейт ${s}${money(r)}/ч)` : 'Укажите сумму и рейт — посчитаю часы';
+  $('p_hint').textContent = (+r>0) ? `≈ ${hrs(calcH(t,r))} h  (amount ${s}${money(t)} ÷ rate ${s}${money(r)}/h)` : 'Enter amount and rate — hours will be calculated';
 }
 async function loadProjects(){
   try{
     const r = await api('list_projects'); PROJECTS = r.projects;
     const tb = $('projTable').querySelector('tbody');
-    if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">Проектов пока нет.</td></tr>'; }
+    if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">No projects yet.</td></tr>'; }
     else{
-      tb.innerHTML = '<tr><th>Проект</th><th>Заказчик</th><th class="num">Сумма</th><th class="num">Рейт</th><th class="num">Часы</th><th>Сроки</th></tr>'+
+      tb.innerHTML = '<tr><th>Project</th><th>Customer</th><th class="num">Amount</th><th class="num">Rate</th><th class="num">Hours</th><th>Dates</th></tr>'+
       PROJECTS.map(p=>{const s=cur(p.Currency);return `<tr>
         <td>${esc(p.Name)}</td><td>${esc(p.Customer)}</td>
-        <td class="num">${s}${money(p.TotalAmount)}</td><td class="num">${s}${money(p.Rate)}/ч</td>
+        <td class="num">${s}${money(p.TotalAmount)}</td><td class="num">${s}${money(p.Rate)}/h</td>
         <td class="num">${hrs(p.Hours)}</td>
         <td class="muted">${esc(p.StartDate||'')}${p.EndDate?' → '+esc(p.EndDate):''}</td></tr>`;}).join('');
     }
     $('a_project').innerHTML = PROJECTS.length
       ? PROJECTS.map(p=>`<option value="${p.ProjectID}">${esc(p.Name)}${p.Customer?' — '+esc(p.Customer):''}</option>`).join('')
-      : '<option value="">Сначала создайте проект</option>';
+      : '<option value="">Create a project first</option>';
     asgFill();
   }catch(e){ notice('projErr','err', esc(e.message)); }
 }
 async function createProject(){
   notice('projErr','',''); const name=$('p_name').value.trim();
-  if(!name){ notice('projErr','err','Укажите название проекта.'); return; }
-  if(!(+$('p_rate').value>0)){ notice('projErr','err','Укажите рейт больше нуля.'); return; }
+  if(!name){ notice('projErr','err','Enter a project name.'); return; }
+  if(!(+$('p_rate').value>0)){ notice('projErr','err','Enter a rate greater than zero.'); return; }
   const b=$('p_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
     await api('create_project', { name, customer:$('p_customer').value.trim(), currency:$('p_currency').value,
       totalAmount:$('p_total').value, rate:$('p_rate').value, startDate:$('p_start').value, endDate:$('p_end').value });
     ['p_name','p_customer','p_total','p_rate','p_start','p_end'].forEach(id=>$(id).value=''); projHint();
-    await loadProjects(); notice('projErr','ok','Проект создан.');
+    await loadProjects(); notice('projErr','ok','Project created.');
   }catch(e){ notice('projErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Создать проект'; }
+  finally{ b.disabled=false; b.textContent='Create project'; }
 }
 
-// ── Сотрудники ──
+// ── Employees ──
 async function loadEmployees(){
   try{
     const r = await api('list_employees'); EMPLOYEES = r.employees;
     const tb = $('empTable').querySelector('tbody');
-    if(!EMPLOYEES.length){ tb.innerHTML='<tr><td class="empty">Сотрудников пока нет.</td></tr>'; }
+    if(!EMPLOYEES.length){ tb.innerHTML='<tr><td class="empty">No employees yet.</td></tr>'; }
     else{
-      tb.innerHTML='<tr><th>ФИО</th><th>Email</th><th class="num">Рейт</th><th></th></tr>'+
+      tb.innerHTML='<tr><th>Full name</th><th>Email</th><th class="num">Rate</th><th></th></tr>'+
       EMPLOYEES.map(e=>{const s=cur(e.Currency);return `<tr>
         <td>${esc(e.FullName||'—')}</td><td>${esc(e.Email)}</td>
-        <td class="num">${s}${money(e.Rate)}/ч</td>
-        <td><button class="btn warn sm" onclick="delEmployee('${esc(e.Email)}', this)">Удалить</button></td></tr>`;}).join('');
+        <td class="num">${s}${money(e.Rate)}/h</td>
+        <td><button class="btn warn sm" onclick="delEmployee('${esc(e.Email)}', this)">Delete</button></td></tr>`;}).join('');
     }
     $('a_emp').innerHTML = EMPLOYEES.length
-      ? '<option value="">— выберите —</option>'+EMPLOYEES.map(e=>`<option value="${esc(e.Email)}">${esc(e.FullName||e.Email)} — ${esc(e.Email)}</option>`).join('')
-      : '<option value="">Сначала добавьте сотрудника</option>';
+      ? '<option value="">— select —</option>'+EMPLOYEES.map(e=>`<option value="${esc(e.Email)}">${esc(e.FullName||e.Email)} — ${esc(e.Email)}</option>`).join('')
+      : '<option value="">Add an employee first</option>';
   }catch(e){ notice('empErr','err', esc(e.message)); }
 }
 async function createEmployee(){
   notice('empErr','',''); const email=$('e_email').value.trim();
-  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('empErr','err','Введите корректный email.'); return; }
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('empErr','err','Enter a valid email.'); return; }
   const b=$('e_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
     await api('create_employee', { email, fullName:$('e_name').value.trim(), rate:$('e_rate').value, currency:$('e_currency').value });
     ['e_name','e_email','e_rate'].forEach(id=>$(id).value='');
-    await loadEmployees(); notice('empErr','ok','Сотрудник сохранён.');
+    await loadEmployees(); notice('empErr','ok','Employee saved.');
   }catch(e){ notice('empErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Сохранить сотрудника'; }
+  finally{ b.disabled=false; b.textContent='Save employee'; }
 }
 async function delEmployee(email, btn){
-  if(!confirm('Удалить сотрудника из справочника? Уже созданные отчёты останутся.')) return;
+  if(!confirm('Delete this employee from the directory? Existing reports remain.')) return;
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
   try{ await api('delete_employee',{email}); await loadEmployees(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Удалить'; }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
 }
 
-// ── Назначения ──
+// ── Assignments ──
 function asgProject(){ return PROJECTS.find(p=>p.ProjectID===$('a_project').value); }
 function asgEmployee(){ return EMPLOYEES.find(e=>e.Email===$('a_emp').value); }
 function asgFill(){
@@ -319,57 +319,56 @@ function asgFill(){
 }
 function asgHint(){
   const e=asgEmployee(), p=asgProject();
-  if(!e||!p){ $('a_hint').textContent='Выберите сотрудника и проект'; return; }
+  if(!e||!p){ $('a_hint').textContent='Select an employee and a project'; return; }
   const s=cur((e&&e.Currency)||p.Currency), r=$('a_rate').value, t=$('a_alloc').value;
-  $('a_hint').textContent = (+r>0) ? `≈ ${hrs(calcH(t,r))} ч  (${s}${money(t)} ÷ ${s}${money(r)}/ч)` : 'Укажите рейт';
+  $('a_hint').textContent = (+r>0) ? `≈ ${hrs(calcH(t,r))} h  (${s}${money(t)} ÷ ${s}${money(r)}/h)` : 'Enter a rate';
 }
 async function loadAssignments(){
   try{
     const r = await api('list_assignments'); ASSIGNMENTS = r.assignments;
     const tb = $('asgTable').querySelector('tbody');
-    if(!ASSIGNMENTS.length){ tb.innerHTML='<tr><td class="empty">Отчётов пока нет.</td></tr>'; return; }
-    tb.innerHTML = '<tr><th>Проект</th><th>Сотрудник</th><th class="num">Рейт</th><th class="num">Часы</th><th>Статус</th><th>Действия</th></tr>'+
+    if(!ASSIGNMENTS.length){ tb.innerHTML='<tr><td class="empty">No reports yet.</td></tr>'; return; }
+    tb.innerHTML = '<tr><th>Project</th><th>Employee</th><th class="num">Rate</th><th class="num">Hours</th><th>Status</th><th>Actions</th></tr>'+
     ASSIGNMENTS.map(a=>{const s=cur(a.Currency);return `<tr>
       <td>${esc(a.ProjectName)}<div class="muted">${esc(a.Customer||'')}</div></td>
       <td>${esc(a.EmployeeName||a.EmployeeEmail)}<div class="muted">${esc(a.EmployeeName?a.EmployeeEmail:'')}</div></td>
-      <td class="num">${s}${money(a.Rate)}/ч</td>
+      <td class="num">${s}${money(a.Rate)}/h</td>
       <td class="num">${hrs(a.AllocatedHours)}</td>
-      <td><span class="tag ${esc(a.Status)}">${statusRu(a.Status)}</span></td>
+      <td><span class="tag ${esc(a.Status)}">${statusEn(a.Status)}</span></td>
       <td><div class="acts">${actionsFor(a)}</div></td></tr>`;}).join('');
   }catch(e){ notice('asgErr','err', esc(e.message)); }
 }
-function statusRu(s){return {created:'Создан',released:'Передан на выполнение',draft:'В работе (черновик)',submitted:'Отчёт получен'}[s]||s;}
+function statusEn(s){return {created:'Created',released:'Released',draft:'In progress (draft)',submitted:'Submitted'}[s]||s;}
 function actionsFor(a){
-  const id=a.AssignmentID;
-  let html='';
-  if(a.Status==='created') html += `<button class="btn sm" onclick="release('${id}',this)">Передать на выполнение</button>`;
-  if(a.Status==='released'||a.Status==='draft') html += `<button class="btn warn sm" onclick="recall('${id}',this)">Забрать</button>`;
-  if(a.Status==='draft'||a.Status==='submitted') html += `<button class="btn ghost sm" onclick="viewReport('${id}')">Отчёт</button>`;
+  const id=a.AssignmentID; let html='';
+  if(a.Status==='created') html += `<button class="btn sm" onclick="release('${id}',this)">Release</button>`;
+  if(a.Status==='released'||a.Status==='draft') html += `<button class="btn warn sm" onclick="recall('${id}',this)">Recall</button>`;
+  if(a.Status==='draft'||a.Status==='submitted') html += `<button class="btn ghost sm" onclick="viewReport('${id}')">Report</button>`;
   return html;
 }
 async function createAssignment(){
-  notice('asgErr',''); const projectId=$('a_project').value, email=$('a_emp').value;
-  if(!email){ notice('asgErr','err','Выберите сотрудника.'); return; }
-  if(!projectId){ notice('asgErr','err','Выберите проект.'); return; }
-  if(!(+$('a_rate').value>0)){ notice('asgErr','err','Рейт должен быть больше нуля.'); return; }
+  notice('asgErr','',''); const projectId=$('a_project').value, email=$('a_emp').value;
+  if(!email){ notice('asgErr','err','Select an employee.'); return; }
+  if(!projectId){ notice('asgErr','err','Select a project.'); return; }
+  if(!(+$('a_rate').value>0)){ notice('asgErr','err','Rate must be greater than zero.'); return; }
   const b=$('a_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
     await api('create_assignment', { projectId, email, rate:$('a_rate').value, allocatedAmount:$('a_alloc').value, comment:$('a_comment').value.trim() });
-    $('a_comment').value=''; 
-    await loadAssignments(); notice('asgErr','ok','Отчёт создан. Нажмите «Передать на выполнение», чтобы отправить сотруднику.');
+    $('a_comment').value='';
+    await loadAssignments(); notice('asgErr','ok','Report created. Click "Release" to send it to the employee.');
   }catch(e){ notice('asgErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Создать отчёт'; }
+  finally{ b.disabled=false; b.textContent='Create report'; }
 }
 async function release(aid, btn){
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
   try{ await api('release',{assignmentId:aid}); await loadAssignments(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Передать на выполнение'; }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Release'; }
 }
 async function recall(aid, btn){
-  if(!confirm('Забрать задание обратно? Оно станет недоступно сотруднику (черновик сохранится).')) return;
+  if(!confirm('Recall this task? It will become unavailable to the employee (the draft is kept).')) return;
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
   try{ await api('recall',{assignmentId:aid}); await loadAssignments(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Забрать'; }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Recall'; }
 }
 
 async function viewReport(aid){
@@ -379,12 +378,12 @@ async function viewReport(aid){
     let H=0,M=0; items.forEach(it=>{H+=+it.Hours||0;M+=+it.Amount||0;});
     $('m_title').textContent = a.ProjectName;
     $('m_body').innerHTML = `
-      <p class="muted">${esc(a.EmployeeName||a.EmployeeEmail)} · рейт ${s}${money(a.Rate)}/ч · отчитаться за ${hrs(a.AllocatedHours)} ч (${s}${money(a.AllocatedAmount)}) · статус: ${statusRu(a.Status)}</p>
+      <p class="muted">${esc(a.EmployeeName||a.EmployeeEmail)} · rate ${s}${money(a.Rate)}/h · report ${hrs(a.AllocatedHours)} h (${s}${money(a.AllocatedAmount)}) · status: ${statusEn(a.Status)}</p>
       ${items.length?`<div class="scroll"><table>
-        <tr><th>#</th><th>Описание</th><th class="num">Часы</th><th class="num">${s}</th></tr>
+        <tr><th>#</th><th>Description</th><th class="num">Hours</th><th class="num">${s}</th></tr>
         ${items.map((it,i)=>`<tr><td>${i+1}</td><td>${esc(it.ItemDescription)}</td><td class="num">${hrs(it.Hours)}</td><td class="num">${money(it.Amount)}</td></tr>`).join('')}
-        <tr><td></td><td><b>Итого</b></td><td class="num"><b>${hrs(H)}</b></td><td class="num"><b>${money(M)}</b></td></tr>
-      </table></div>`:'<p class="empty">Данных пока нет.</p>'}`;
+        <tr><td></td><td><b>Total</b></td><td class="num"><b>${hrs(H)}</b></td><td class="num"><b>${money(M)}</b></td></tr>
+      </table></div>`:'<p class="empty">No data yet.</p>'}`;
     $('modal').classList.remove('hidden');
   }catch(e){ alert(e.message); }
 }
@@ -394,17 +393,17 @@ async function loadData(){
   try{
     const r = await api('list_entries'); const rows=r.entries||[];
     const tb=$('dataTable').querySelector('tbody');
-    if(!rows.length){ tb.innerHTML='<tr><td class="empty">Данных пока нет.</td></tr>'; return; }
+    if(!rows.length){ tb.innerHTML='<tr><td class="empty">No data yet.</td></tr>'; return; }
     let H=0; rows.forEach(x=>{H+=+x.Hours||0;});
-    tb.innerHTML='<tr><th>Проект</th><th>Сотрудник</th><th>Описание</th><th class="num">Часы</th><th class="num">Сумма</th></tr>'+
+    tb.innerHTML='<tr><th>Project</th><th>Employee</th><th>Description</th><th class="num">Hours</th><th class="num">Amount</th></tr>'+
       rows.map(x=>{const s=cur(x.Currency);return `<tr><td>${esc(x.ProjectName)}</td><td>${esc(x.EmployeeEmail)}</td>
         <td>${esc(x.ItemDescription)}</td><td class="num">${hrs(x.Hours)}</td><td class="num">${s}${money(x.Amount)}</td></tr>`;}).join('')+
-      `<tr><td colspan="3"><b>Итого часов</b></td><td class="num"><b>${hrs(H)}</b></td><td></td></tr>`;
+      `<tr><td colspan="3"><b>Total hours</b></td><td class="num"><b>${hrs(H)}</b></td><td></td></tr>`;
   }catch(e){ notice('dataErr','err', esc(e.message)); }
 }
 
 (function init(){
-  if(APPS_SCRIPT_URL.startsWith('PASTE')){ notice('gateErr','err','Не настроен APPS_SCRIPT_URL в admin.html.'); }
+  if(APPS_SCRIPT_URL.startsWith('PASTE')){ notice('gateErr','err','APPS_SCRIPT_URL is not configured in admin.html.'); }
   if(PIN){ enterApp(); }
 })();
 </script>
