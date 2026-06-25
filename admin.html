@@ -182,7 +182,7 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://kotomotozilla.github.io/FXWorks/admin.html';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -196,9 +196,19 @@ let PIN = sessionStorage.getItem('fx_pin') || '';
 let PROJECTS = [], EMPLOYEES = [], ASSIGNMENTS = [];
 
 async function api(action, payload={}){
-  const res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
-    headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
-  const data = await res.json();
+  let res;
+  try{
+    res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
+  }catch(_){ throw new Error('Нет связи с сервером. Проверьте URL веб-приложения и подключение.'); }
+  const text = await res.text();
+  let data;
+  try{ data = JSON.parse(text); }
+  catch(_){
+    if(/accounts\.google\.com|Sign in|Войти|<html/i.test(text))
+      throw new Error('Сервер вернул страницу входа Google, а не данные. В развёртывании Apps Script доступ должен быть «Все», а URL — оканчиваться на /exec.');
+    throw new Error('Сервер вернул не-JSON (HTTP '+res.status+'). Проверьте URL (/exec, не /dev) и выпустите новую версию развёртывания.');
+  }
   if(!data.ok) throw new Error(data.error||'Ошибка сервера');
   return data;
 }
