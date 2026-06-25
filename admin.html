@@ -53,6 +53,7 @@
   .modal .box{background:#fff;border-radius:16px;max-width:640px;width:100%;max-height:86vh;overflow:auto;padding:22px}
   .modal h2{display:flex;justify-content:space-between;align-items:center}
   .x{background:none;border:0;font-size:22px;cursor:pointer;color:var(--muted);line-height:1}
+  .modal.hidden{display:none}
 </style>
 </head>
 <body>
@@ -181,7 +182,7 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
