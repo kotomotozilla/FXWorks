@@ -131,7 +131,7 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 let STATE = { email:'', password:'', current:null };
 
@@ -186,12 +186,15 @@ async function login(){
 
 const BADGE = { released:['todo','New'], draft:['draft','Draft'], submitted:['done','Submitted'] };
 function renderList(items){
+  notice('listErr','','');
   $('listSub').textContent = items.length ? `${items.length} ${items.length===1?'report':'reports'}` : '';
   if(!items.length){ $('cards').innerHTML = '<div class="empty">No reports assigned to you yet.</div>'; return; }
   $('cards').innerHTML = items.map(a=>{
     const s = cur(a.Currency), b = BADGE[a.Status] || ['todo','—'];
     const btnLabel = a.Status==='submitted' ? 'Open report' : (a.Status==='draft' ? 'Continue' : 'Fill in report');
-    const reported = (a.Status==='submitted'||a.Status==='draft') && a.ReportedHours!=='' ? `<span>Reported: <b>${fmtH(a.ReportedHours)} h</b></span>` : '';
+    const has = (a.ReportedHours!==''&&a.ReportedHours!=null) && (a.Status==='submitted'||a.Status==='draft');
+    const amt = (a.ReportedAmount!==''&&a.ReportedAmount!=null) ? +a.ReportedAmount : (+a.ReportedHours||0)*(+a.Rate||0);
+    const reported = has ? `<span>Reported: <b>${fmtH(a.ReportedHours)} h · ${s}${fmtMoney(amt)}</b></span>` : '';
     return `<div class="card">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:start">
         <div><p class="pname">${esc(a.ProjectName)}</p>${a.Customer?`<p class="pcust">Customer: ${esc(a.Customer)}</p>`:''}</div>
@@ -269,8 +272,10 @@ async function saveReport(finalize){
     const r = await api(action, auth({assignmentId:STATE.current.AssignmentID, activities, hours, submittedDate:$('submitDate').value}));
     const s = cur(STATE.current.Currency);
     if(finalize){
-      STATE.current.Status='submitted';
-      notice('submitMsg','ok', `Report submitted: ${r.totals.activities} activities, ${fmtH(r.totals.hours)} h for ${s}${fmtMoney(r.totals.amount)}. The admin has been notified.`);
+      const msg = `Report submitted: ${r.totals.activities} activities, ${fmtH(r.totals.hours)} h for ${s}${fmtMoney(r.totals.amount)}. The admin has been notified.`;
+      try{ const lr = await api('list_my_assignments', auth()); renderList(lr.assignments); }catch(_){}
+      notice('listErr','ok', msg);
+      show('screen-list'); window.scrollTo(0,0);
     }else{
       STATE.current.Status='draft';
       notice('submitMsg','info', `Draft saved. You can continue later.`);
