@@ -199,7 +199,7 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const COMPANY = 'Fraktalex Limited';
 const $ = id=>document.getElementById(id);
@@ -211,7 +211,7 @@ function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return is
 function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
 
 let PIN = sessionStorage.getItem('fx_pin') || '';
-let EMPLOYEES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null;
+let EMPLOYEES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_ORIG = '';
 
 async function api(action, payload={}){
   let res;
@@ -273,9 +273,9 @@ async function createEmployee(){
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('empErr','err','Enter a valid email.'); return; }
   const b=$('e_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    await api('create_employee', { email, fullName:$('e_name').value.trim(), rate:$('e_rate').value, currency:$('e_currency').value, password:$('e_pass').value });
-    ['e_name','e_email','e_rate','e_pass'].forEach(id=>$(id).value='');
-    await loadEmployees(); notice('empErr','ok','Employee saved.');
+    await api('create_employee', { email, originalEmail:EDIT_ORIG, fullName:$('e_name').value.trim(), rate:$('e_rate').value, currency:$('e_currency').value, password:$('e_pass').value });
+    ['e_name','e_email','e_rate','e_pass'].forEach(id=>$(id).value=''); $('e_pass').placeholder='set a password'; EDIT_ORIG='';
+    await loadEmployees(); notice('empErr','ok','Team member saved.');
   }catch(e){ notice('empErr','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent='Save team member'; }
 }
@@ -288,13 +288,14 @@ async function delEmployee(email, btn){
 function editEmployee(email){
   const e = EMPLOYEES.find(x=>String(x.Email).toLowerCase()===String(email).toLowerCase());
   if(!e) return;
+  EDIT_ORIG = e.Email;
   $('e_name').value = e.FullName||'';
   $('e_email').value = e.Email;
   $('e_rate').value = (e.Rate===''||e.Rate==null)?'':e.Rate;
   $('e_currency').value = (e.Currency==='EUR'?'EUR':'USD');
   $('e_pass').value = '';
   $('e_pass').placeholder = 'leave blank to keep current';
-  notice('empErr','ok','Editing '+esc(e.Email)+' — change fields and Save. Leave password blank to keep the current one.');
+  notice('empErr','ok','Editing '+esc(e.Email)+' — change any field (including email) and Save. Leave password blank to keep it.');
   window.scrollTo(0,0);
 }
 
