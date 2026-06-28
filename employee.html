@@ -49,6 +49,7 @@
   .iconbtn{border:0;background:none;color:var(--warn);cursor:pointer;font-size:13px;padding:4px}
   .section-h{font-size:13px;color:var(--muted);margin:0 0 8px;text-transform:uppercase;letter-spacing:.4px}
   .hoursbox{max-width:220px}
+  .ro-item{padding:9px 0;border-bottom:1px solid var(--line);font-size:15px}
   .notice{padding:11px 13px;border-radius:10px;font-size:14px;margin:0 0 14px}
   .notice.err{background:#fcefec;color:var(--warn)} .notice.ok{background:#f0faf4;color:var(--pos)} .notice.info{background:#fbf5e6;color:var(--amber)}
   .empty{color:var(--muted);text-align:center;padding:40px 0}
@@ -104,8 +105,12 @@
     <button class="btn ghost sm" id="addBtn" onclick="addItem()">+ Add activity</button>
 
     <div style="height:18px"></div>
-    <div class="hoursbox"><label>Total hours spent (all activities) *</label>
+    <div class="hoursbox" id="hoursWrap"><label>Total hours spent (all activities) *</label>
       <input id="totalHours" type="number" min="0" step="0.1" placeholder="0" oninput="recalc()"></div>
+
+    <div style="height:14px"></div>
+    <div class="hoursbox" id="dateWrap"><label>Submission date</label>
+      <input id="submitDate" type="date"></div>
 
     <div style="height:18px"></div>
     <div id="submitMsg"></div>
@@ -113,11 +118,20 @@
       <button class="btn ghost" id="draftBtn" onclick="saveReport(false)">Save draft</button>
       <button class="btn" id="submitBtn" onclick="saveReport(true)">Submit report</button>
     </div>
+
+    <div id="pdfBlock">
+      <div style="height:1px;background:var(--line);margin:18px 0"></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)">
+        <input type="checkbox" id="emp_sign" style="width:auto"> Add a signature field at the bottom
+      </label>
+      <div style="height:10px"></div>
+      <button class="btn ghost" id="empPdfBtn" onclick="empPdf()">Download PDF</button>
+    </div>
   </section>
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 let STATE = { email:'', password:'', current:null };
 
@@ -148,6 +162,10 @@ const fmtH = n => (Math.round((+n||0)*100)/100).toLocaleString('en-US');
 function show(id){['screen-login','screen-list','screen-report'].forEach(s=>$(s).classList.add('hidden'));$(id).classList.remove('hidden');}
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+const COMPANY='Fraktalex Limited';
+function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
 
 async function login(){
   const email = $('email').value.trim().toLowerCase(), password = $('password').value;
@@ -190,27 +208,33 @@ async function openReport(aid){
   try{
     const r = await api('get_assignment', auth({assignmentId:aid}));
     STATE.current = r.assignment; const a = r.assignment, s = cur(a.Currency);
+    const ro = a.Status==='submitted';
     $('rName').textContent = a.ProjectName;
-    $('rMeta').textContent = [a.Customer?'Customer: '+a.Customer:'', a.SubmittedAt?'Submitted: '+(function(x){try{return new Date(x).toISOString().slice(0,10);}catch(e){return x;}})(a.SubmittedAt):''].filter(Boolean).join('   •   ');
+    $('rMeta').textContent = [a.Customer?'Customer: '+a.Customer:'', a.SubmittedAt?'Submitted: '+fmtDate(a.SubmittedAt):''].filter(Boolean).join('   •   ');
     $('rComment').innerHTML = a.Comment ? `<div class="comment">💬 ${esc(a.Comment)}</div>` : '';
     $('dRate').textContent = s+fmtMoney(a.Rate)+'/h';
-    $('totalHours').value = (a.ReportedHours!==''&&a.ReportedHours!=null) ? a.ReportedHours : '';
     notice('submitMsg','','');
     $('items').innerHTML='';
     const existing = (r.items||[]);
-    if(existing.length){ existing.forEach(it=>addItem(it.ActivityDescription)); } else { addItem(); }
-    recalc(); applyReadOnly(a.Status==='submitted'); show('screen-report'); window.scrollTo(0,0);
+    if(ro){
+      if(existing.length){ existing.forEach((it,i)=>{ const d=document.createElement('div'); d.className='ro-item'; d.textContent=(i+1)+'. '+it.ActivityDescription; $('items').appendChild(d); }); }
+      else { $('items').innerHTML='<div class="muted" style="padding:8px 0">No activities.</div>'; }
+      const h=+a.ReportedHours||0; $('dHours').textContent=fmtH(h); $('dAmount').textContent=s+fmtMoney(h*(+a.Rate||0));
+    }else{
+      if(existing.length){ existing.forEach(it=>addItem(it.ActivityDescription)); } else { addItem(); }
+      $('totalHours').value = (a.ReportedHours!==''&&a.ReportedHours!=null) ? a.ReportedHours : '';
+      recalc();
+    }
+    $('submitDate').value = a.SubmittedAt ? toDate(a.SubmittedAt) : todayStr();
+    applyMode(ro);
+    show('screen-report'); window.scrollTo(0,0);
   }catch(e){ notice('listErr','err', esc(e.message)); show('screen-list'); }
 }
 function backToList(){ login(); }
 
-function applyReadOnly(ro){
-  $('totalHours').disabled = ro;
-  $('addBtn').style.display = ro ? 'none' : '';
-  $('reportActions').style.display = ro ? 'none' : '';
-  document.querySelectorAll('#items textarea').forEach(t=>{ t.disabled = ro; });
-  document.querySelectorAll('#items .iconbtn').forEach(b=>{ b.style.display = ro ? 'none' : ''; });
-  if(ro) notice('submitMsg','info','This report has been submitted — it is now read-only. The administrator can return it to you for corrections.');
+function applyMode(ro){
+  ['addBtn','reportActions','hoursWrap','dateWrap'].forEach(id=>{ const el=$(id); if(el) el.style.display = ro ? 'none' : ''; });
+  if(ro) notice('submitMsg','info','This report has been submitted — it is now read-only. You can still download a PDF below. The administrator can return it to you for corrections.');
 }
 
 function addItem(desc=''){
@@ -242,7 +266,7 @@ async function saveReport(finalize){
   const oldText = btn.textContent; btn.disabled=true; other.disabled=true;
   btn.innerHTML = `<span class="spin ${finalize?'':'dark'}"></span>`;
   try{
-    const r = await api(action, auth({assignmentId:STATE.current.AssignmentID, activities, hours}));
+    const r = await api(action, auth({assignmentId:STATE.current.AssignmentID, activities, hours, submittedDate:$('submitDate').value}));
     const s = cur(STATE.current.Currency);
     if(finalize){
       STATE.current.Status='submitted';
@@ -253,6 +277,73 @@ async function saveReport(finalize){
     }
   }catch(e){ notice('submitMsg','err', esc(e.message)); }
   finally{ btn.disabled=false; other.disabled=false; btn.textContent=oldText; }
+}
+
+function buildReportHtml(a, activities, hours, withSign, dateStr){
+  const submitted = dateStr ? fmtDate(dateStr) : (a.SubmittedAt ? fmtDate(a.SubmittedAt) : '');
+  const list = (activities && activities.length)
+    ? '<ol>'+activities.map(x=>`<li>${esc(x)}</li>`).join('')+'</ol>'
+    : '<span style="color:#777">—</span>';
+  const sign = withSign ? `
+    <div class="sign">
+      <div class="cap">Performed by:</div>
+      <div class="srow">
+        <div class="scell"><div class="sname">${esc(a.EmployeeName||a.EmployeeEmail)}</div><div class="sline">Name</div></div>
+        <div class="scell"><div class="sname">&nbsp;</div><div class="sline">Signature</div></div>
+        <div class="scell"><div class="sname">${submitted||'&nbsp;'}</div><div class="sline">Date</div></div>
+      </div>
+    </div>` : '';
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Project Work Completion Report</title>
+<style>
+  @page{ margin:20mm 18mm; }
+  *{box-sizing:border-box}
+  body{font-family:'Times New Roman',Georgia,serif;color:#111;font-size:12pt;margin:0;padding:24px}
+  .no-print{margin:0 0 18px}
+  .no-print button{font:600 14px system-ui;padding:9px 18px;border:0;background:#2563a8;color:#fff;border-radius:8px;cursor:pointer}
+  .lh{display:flex;justify-content:space-between;font-size:9pt;color:#444;border-bottom:1px solid #999;padding-bottom:6px;margin-bottom:22px;letter-spacing:.4px;text-transform:uppercase;font-family:Arial,Helvetica,sans-serif}
+  h1{text-align:center;font-size:15pt;margin:0 0 18px}
+  table{width:100%;border-collapse:collapse}
+  td{border:1px solid #333;padding:8px 10px;vertical-align:top}
+  td.label{width:44%;font-weight:bold;background:#f2f2f2}
+  ol{margin:2px 0 2px 18px;padding:0} li{margin:3px 0}
+  .foot{margin-top:26px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;font-family:Arial,Helvetica,sans-serif}
+  .sign{margin-top:44px} .sign .cap{font-size:10pt;margin-bottom:22px}
+  .srow{display:flex;gap:36px} .scell{flex:1}
+  .sname{min-height:22px;border-bottom:1px solid #333;padding-bottom:3px}
+  .sline{font-size:9pt;color:#555;margin-top:3px;font-family:Arial,Helvetica,sans-serif}
+  @media print{ .no-print{display:none} body{padding:0} }
+</style></head><body>
+  <div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>
+  <div class="lh"><span>${esc(COMPANY)}</span><span>Project Work Completion Report</span></div>
+  <h1>Project Work Completion Report</h1>
+  <table>
+    <tr><td class="label">Project:</td><td>${esc(a.ProjectName||'')}</td></tr>
+    <tr><td class="label">Customer:</td><td>${esc(a.Customer||'')}</td></tr>
+    <tr><td class="label" colspan="2">A brief description and a list of completed tasks for the project:</td></tr>
+    <tr><td colspan="2">${list}</td></tr>
+    <tr><td class="label">The total number of hours spent:</td><td>${fmtH(hours)}</td></tr>
+    <tr><td class="label">Report date:</td><td>${submitted||'&nbsp;'}</td></tr>
+  </table>
+  ${sign}
+  <div class="foot">CONFIDENTIAL</div>
+  <script>setTimeout(function(){try{window.print();}catch(e){}},500);<\/script>
+</body></html>`;
+}
+
+function empPdf(){
+  const a=STATE.current; if(!a) return;
+  let activities, hours, dateStr;
+  if(a.Status==='submitted'){
+    activities=[...document.querySelectorAll('#items .ro-item')].map(d=>d.textContent.replace(/^\d+\.\s*/,'')).filter(Boolean);
+    hours=+a.ReportedHours||0; dateStr=a.SubmittedAt||'';
+  }else{
+    activities=[...document.querySelectorAll('#items textarea')].map(t=>t.value.trim()).filter(Boolean);
+    hours=parseFloat(($('totalHours').value||'').replace(',','.'))||0; dateStr=$('submitDate').value||'';
+  }
+  const html=buildReportHtml(a, activities, hours, $('emp_sign').checked, dateStr);
+  const w=window.open('','_blank');
+  if(!w){ notice('submitMsg','err','Allow pop-ups to generate the PDF.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
 }
 
 (function init(){

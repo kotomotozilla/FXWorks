@@ -181,6 +181,9 @@
   <div style="height:14px"></div>
   <div style="max-width:220px"><label>Total hours</label>
     <input id="rm_hours" type="number" min="0" step="0.1" placeholder="0" oninput="rmRecalc()"></div>
+  <div style="height:10px"></div>
+  <div style="max-width:220px"><label>Submission date</label>
+    <input id="rm_date" type="date"></div>
   <div id="rm_amount" class="muted" style="margin-top:8px"></div>
   <div style="height:16px"></div>
   <div class="acts">
@@ -196,7 +199,7 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const COMPANY = 'Fraktalex Limited';
 const $ = id=>document.getElementById(id);
@@ -432,6 +435,7 @@ async function viewReport(aid){
     const items = r.items||[];
     if(items.length){ items.forEach(it=>rmAddItem(it.ActivityDescription)); } else { rmAddItem(); }
     $('rm_hours').value = (a.ReportedHours!==''&&a.ReportedHours!=null) ? a.ReportedHours : '';
+    $('rm_date').value = a.SubmittedAt ? fmtDate(a.SubmittedAt) : '';
     rmRecalc();
     $('repModal').classList.remove('hidden');
   }catch(e){ alert(e.message); }
@@ -454,14 +458,14 @@ async function saveAdminReport(markSubmitted){
   const b = markSubmitted ? $('rm_submit') : $('rm_save'); const other = markSubmitted ? $('rm_save') : $('rm_submit');
   b.disabled=true; other.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    await api('admin_save_report',{assignmentId:REP.AssignmentID, activities, hours, markSubmitted:!!markSubmitted});
+    await api('admin_save_report',{assignmentId:REP.AssignmentID, activities, hours, submittedDate:$('rm_date').value, markSubmitted:!!markSubmitted});
     closeModal('repModal'); await refreshModal();
   }catch(e){ notice('rm_err','err', esc(e.message)); }
   finally{ b.disabled=false; other.disabled=false; $('rm_save').textContent='Save'; $('rm_submit').innerHTML='Save &amp; submit'; }
 }
 
-function buildReportHtml(a, activities, hours, withSign){
-  const submitted = a.SubmittedAt ? fmtDate(a.SubmittedAt) : '';
+function buildReportHtml(a, activities, hours, withSign, dateStr){
+  const submitted = dateStr ? fmtDate(dateStr) : (a.SubmittedAt ? fmtDate(a.SubmittedAt) : '');
   const list = (activities && activities.length)
     ? '<ol>'+activities.map(x=>`<li>${esc(x)}</li>`).join('')+'</ol>'
     : '<span style="color:#777">—</span>';
@@ -471,7 +475,7 @@ function buildReportHtml(a, activities, hours, withSign){
       <div class="srow">
         <div class="scell"><div class="sname">${esc(a.EmployeeName||a.EmployeeEmail)}</div><div class="sline">Name</div></div>
         <div class="scell"><div class="sname">&nbsp;</div><div class="sline">Signature</div></div>
-        <div class="scell"><div class="sname">&nbsp;</div><div class="sline">Date</div></div>
+        <div class="scell"><div class="sname">${submitted||'&nbsp;'}</div><div class="sline">Date</div></div>
       </div>
     </div>` : '';
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Project Work Completion Report</title>
@@ -516,7 +520,7 @@ function generatePdf(){
   if(!REP) return;
   const activities=[...document.querySelectorAll('#rm_items textarea')].map(t=>t.value.trim()).filter(Boolean);
   const hours=parseFloat(($('rm_hours').value||'').replace(',','.'))||0;
-  const html = buildReportHtml(REP, activities, hours, $('rm_sign').checked);
+  const html = buildReportHtml(REP, activities, hours, $('rm_sign').checked, $('rm_date').value);
   const w = window.open('', '_blank');
   if(!w){ alert('Allow pop-ups to generate the PDF.'); return; }
   w.document.open(); w.document.write(html); w.document.close();
@@ -531,7 +535,7 @@ async function pdfFromList(aid){
   try{
     const r = await api('admin_get_report',{assignmentId:aid});
     const a=r.assignment, items=(r.items||[]).map(it=>it.ActivityDescription);
-    const html = buildReportHtml(a, items, a.ReportedHours, withSign);
+    const html = buildReportHtml(a, items, a.ReportedHours, withSign, a.SubmittedAt);
     w.document.open(); w.document.write(html); w.document.close();
   }catch(e){ try{w.close();}catch(_){} alert(e.message); }
 }
