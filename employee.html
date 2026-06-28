@@ -101,15 +101,15 @@
 
     <p class="section-h">Activities</p>
     <div id="items"></div>
-    <button class="btn ghost sm" onclick="addItem()">+ Add activity</button>
+    <button class="btn ghost sm" id="addBtn" onclick="addItem()">+ Add activity</button>
 
     <div style="height:18px"></div>
     <div class="hoursbox"><label>Total hours spent (all activities) *</label>
-      <input id="totalHours" type="number" min="0" step="0.25" placeholder="0" oninput="recalc()"></div>
+      <input id="totalHours" type="number" min="0" step="0.1" placeholder="0" oninput="recalc()"></div>
 
     <div style="height:18px"></div>
     <div id="submitMsg"></div>
-    <div class="actions">
+    <div class="actions" id="reportActions">
       <button class="btn ghost" id="draftBtn" onclick="saveReport(false)">Save draft</button>
       <button class="btn" id="submitBtn" onclick="saveReport(true)">Submit report</button>
     </div>
@@ -117,7 +117,7 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 let STATE = { email:'', password:'', current:null };
 
@@ -191,7 +191,7 @@ async function openReport(aid){
     const r = await api('get_assignment', auth({assignmentId:aid}));
     STATE.current = r.assignment; const a = r.assignment, s = cur(a.Currency);
     $('rName').textContent = a.ProjectName;
-    $('rMeta').textContent = a.Customer ? 'Customer: '+a.Customer : '';
+    $('rMeta').textContent = [a.Customer?'Customer: '+a.Customer:'', a.SubmittedAt?'Submitted: '+(function(x){try{return new Date(x).toISOString().slice(0,10);}catch(e){return x;}})(a.SubmittedAt):''].filter(Boolean).join('   •   ');
     $('rComment').innerHTML = a.Comment ? `<div class="comment">💬 ${esc(a.Comment)}</div>` : '';
     $('dRate').textContent = s+fmtMoney(a.Rate)+'/h';
     $('totalHours').value = (a.ReportedHours!==''&&a.ReportedHours!=null) ? a.ReportedHours : '';
@@ -199,10 +199,19 @@ async function openReport(aid){
     $('items').innerHTML='';
     const existing = (r.items||[]);
     if(existing.length){ existing.forEach(it=>addItem(it.ActivityDescription)); } else { addItem(); }
-    recalc(); show('screen-report'); window.scrollTo(0,0);
+    recalc(); applyReadOnly(a.Status==='submitted'); show('screen-report'); window.scrollTo(0,0);
   }catch(e){ notice('listErr','err', esc(e.message)); show('screen-list'); }
 }
 function backToList(){ login(); }
+
+function applyReadOnly(ro){
+  $('totalHours').disabled = ro;
+  $('addBtn').style.display = ro ? 'none' : '';
+  $('reportActions').style.display = ro ? 'none' : '';
+  document.querySelectorAll('#items textarea').forEach(t=>{ t.disabled = ro; });
+  document.querySelectorAll('#items .iconbtn').forEach(b=>{ b.style.display = ro ? 'none' : ''; });
+  if(ro) notice('submitMsg','info','This report has been submitted — it is now read-only. The administrator can return it to you for corrections.');
+}
 
 function addItem(desc=''){
   const div = document.createElement('div'); div.className='item';

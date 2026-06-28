@@ -180,20 +180,32 @@
   <button class="btn ghost sm" onclick="rmAddItem()">+ Add activity</button>
   <div style="height:14px"></div>
   <div style="max-width:220px"><label>Total hours</label>
-    <input id="rm_hours" type="number" min="0" step="0.25" placeholder="0" oninput="rmRecalc()"></div>
+    <input id="rm_hours" type="number" min="0" step="0.1" placeholder="0" oninput="rmRecalc()"></div>
   <div id="rm_amount" class="muted" style="margin-top:8px"></div>
   <div style="height:16px"></div>
-  <button class="btn" id="rm_save" onclick="saveAdminReport()">Save report</button>
+  <div class="acts">
+    <button class="btn" id="rm_save" onclick="saveAdminReport(false)">Save</button>
+    <button class="btn" id="rm_submit" onclick="saveAdminReport(true)">Save &amp; submit</button>
+  </div>
+  <div class="sep"></div>
+  <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)">
+    <input type="checkbox" id="rm_sign" style="width:auto"> Add a signature field at the bottom (name + signature line)
+  </label>
+  <div style="height:10px"></div>
+  <button class="btn ghost sm" onclick="generatePdf()">Download PDF</button>
 </div></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
+const COMPANY = 'Fraktalex Limited';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
 const esc = s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const money = n=>(Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const hrs = n=>(n===''||n==null)?'—':(Math.round((+n||0)*100)/100).toLocaleString('en-US');
+function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
 
 let PIN = sessionStorage.getItem('fx_pin') || '';
@@ -249,7 +261,8 @@ async function loadEmployees(){
         <td>${esc(e.FullName||'—')}</td><td>${esc(e.Email)}</td>
         <td class="num">${s}${money(e.Rate)}/h</td>
         <td class="muted">${esc(e.Password||'—')}</td>
-        <td><button class="btn warn sm" onclick="delEmployee('${esc(e.Email)}', this)">Delete</button></td></tr>`;}).join('');
+        <td><div class="acts"><button class="btn ghost sm" onclick="editEmployee('${esc(e.Email)}')">Edit</button>
+          <button class="btn warn sm" onclick="delEmployee('${esc(e.Email)}', this)">Delete</button></div></td></tr>`;}).join('');
     }
   }catch(e){ notice('empErr','err', esc(e.message)); }
 }
@@ -269,6 +282,18 @@ async function delEmployee(email, btn){
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
   try{ await api('delete_employee',{email}); await loadEmployees(); }
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
+}
+function editEmployee(email){
+  const e = EMPLOYEES.find(x=>String(x.Email).toLowerCase()===String(email).toLowerCase());
+  if(!e) return;
+  $('e_name').value = e.FullName||'';
+  $('e_email').value = e.Email;
+  $('e_rate').value = (e.Rate===''||e.Rate==null)?'':e.Rate;
+  $('e_currency').value = (e.Currency==='EUR'?'EUR':'USD');
+  $('e_pass').value = '';
+  $('e_pass').placeholder = 'leave blank to keep current';
+  notice('empErr','ok','Editing '+esc(e.Email)+' — change fields and Save. Leave password blank to keep the current one.');
+  window.scrollTo(0,0);
 }
 
 // ── Projects list ──
@@ -320,6 +345,8 @@ function renderProjectModal(){
     const reportBtn = `<button class="btn ghost sm" onclick="viewReport('${a.AssignmentID}')">Report / edit</button>`;
     const toggle = a.Status==='recalled'
       ? `<button class="btn sm" onclick="setStatus('${a.AssignmentID}','release',this)">Release again</button>`
+      : a.Status==='submitted'
+      ? `<button class="btn sm" onclick="setStatus('${a.AssignmentID}','reopen',this)">Send back for correction</button>`
       : `<button class="btn warn sm" onclick="setStatus('${a.AssignmentID}','recall',this)">Recall</button>`;
     return `<div class="asg">
       <div class="top2">
@@ -375,9 +402,13 @@ async function saveComment(aid, btn){
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Save comment'; }
 }
 async function setStatus(aid, op, btn){
-  if(op==='recall' && !confirm('Recall this report? It becomes unavailable to the employee (the draft is kept).')) return;
+  const msg = op==='recall' ? 'Recall this report? It becomes unavailable to the employee (the draft is kept).'
+            : op==='reopen' ? 'Return this report to the employee for correction? They will be able to edit it again and will receive an email.'
+            : null;
+  if(msg && !confirm(msg)) return;
+  const action = {recall:'recall_assignment', release:'release_assignment', reopen:'reopen_assignment'}[op];
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api(op==='recall'?'recall_assignment':'release_assignment',{assignmentId:aid}); await refreshModal(); }
+  try{ await api(action,{assignmentId:aid}); await refreshModal(); }
   catch(e){ alert(e.message); }
 }
 async function deleteAssignment(aid, btn){
@@ -393,7 +424,8 @@ async function viewReport(aid){
     const r = await api('admin_get_report',{assignmentId:aid});
     REP = r.assignment; const a=r.assignment, s=cur(a.Currency);
     $('rm_title').textContent = a.ProjectName;
-    $('rm_sub').textContent = `${a.EmployeeName||a.EmployeeEmail} · rate ${s}${money(a.Rate)}/h · status: ${statusEn(a.Status)}`;
+    $('rm_sub').textContent = `${a.EmployeeName||a.EmployeeEmail} · rate ${s}${money(a.Rate)}/h · status: ${statusEn(a.Status)}${a.SubmittedAt?' · submitted '+fmtDate(a.SubmittedAt):''}`;
+    $('rm_sign').checked = false;
     notice('rm_err','','');
     $('rm_items').innerHTML='';
     const items = r.items||[];
@@ -414,15 +446,56 @@ function rmRecalc(){
   const h=parseFloat(($('rm_hours').value||'').replace(',','.'))||0;
   $('rm_amount').textContent = `Amount: ${s}${money(h*rate)}  (${hrs(h)} h × ${s}${money(rate)}/h)`;
 }
-async function saveAdminReport(){
+async function saveAdminReport(markSubmitted){
   const activities=[...document.querySelectorAll('#rm_items textarea')].map(t=>t.value.trim()).filter(Boolean);
   const hours=parseFloat(($('rm_hours').value||'').replace(',','.'))||0;
-  const b=$('rm_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  if(markSubmitted && (!activities.length || hours<=0)){ notice('rm_err','err','Add at least one activity and total hours before submitting.'); return; }
+  const b = markSubmitted ? $('rm_submit') : $('rm_save'); const other = markSubmitted ? $('rm_save') : $('rm_submit');
+  b.disabled=true; other.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    await api('admin_save_report',{assignmentId:REP.AssignmentID, activities, hours});
+    await api('admin_save_report',{assignmentId:REP.AssignmentID, activities, hours, markSubmitted:!!markSubmitted});
     closeModal('repModal'); await refreshModal();
   }catch(e){ notice('rm_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Save report'; }
+  finally{ b.disabled=false; other.disabled=false; $('rm_save').textContent='Save'; $('rm_submit').innerHTML='Save &amp; submit'; }
+}
+
+function generatePdf(){
+  if(!REP || !window.jspdf){ alert('PDF library not loaded.'); return; }
+  const a=REP, s=cur(a.Currency);
+  const activities=[...document.querySelectorAll('#rm_items textarea')].map(t=>t.value.trim()).filter(Boolean);
+  const hours=parseFloat(($('rm_hours').value||'').replace(',','.'))||0;
+  const amount=hours*(+a.Rate||0);
+  const sign=$('rm_sign').checked;
+  const { jsPDF } = window.jspdf;
+  const doc=new jsPDF({unit:'pt',format:'a4'});
+  const M=56, W=doc.internal.pageSize.getWidth(), PH=doc.internal.pageSize.getHeight();
+  let y=M;
+  function need(h){ if(y+(h||0)>PH-M){ doc.addPage(); y=M; } }
+  function line(txt, o){ o=o||{}; doc.setFont('helvetica', o.bold?'bold':'normal'); doc.setFontSize(o.size||11); doc.setTextColor(o.gray?120:20);
+    doc.splitTextToSize(txt, W-2*M).forEach(w=>{ need((o.size||11)*1.4); doc.text(w, M, y); y+=(o.size||11)*1.45; }); doc.setTextColor(20); }
+  doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.text(COMPANY, M, y); y+=22;
+  doc.setFont('helvetica','normal'); doc.setFontSize(13); doc.text('Work report', M, y); y+=14;
+  doc.setDrawColor(210); doc.line(M, y, W-M, y); y+=18;
+  line('Project: '+a.ProjectName, {bold:true, size:12});
+  if(a.Customer) line('Customer: '+a.Customer);
+  line('Employee: '+(a.EmployeeName||a.EmployeeEmail)+'  ('+a.EmployeeEmail+')');
+  line('Rate: '+s+money(a.Rate)+'/h');
+  line('Submission date: '+(a.SubmittedAt?fmtDate(a.SubmittedAt):'—'));
+  y+=8; line('Activities:', {bold:true});
+  if(activities.length) activities.forEach((d,i)=>line((i+1)+'. '+d)); else line('—');
+  y+=6; line('Total: '+hrs(hours)+' h  ·  '+s+money(amount), {bold:true, size:12});
+  if(sign){
+    y+=48; need(60);
+    const name=a.EmployeeName||a.EmployeeEmail;
+    doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(20);
+    doc.text(name, M, y);
+    doc.text('Signature: ______________________', M+230, y);
+    doc.setFontSize(9); doc.setTextColor(120);
+    doc.text('(name)', M, y+13); doc.text('Date: ____________', M+230, y+15);
+    doc.setTextColor(20);
+  }
+  const safe=x=>String(x||'').replace(/[^\w\-]+/g,'_').slice(0,40);
+  doc.save('Report_'+safe(a.ProjectName)+'_'+safe(a.EmployeeName||a.EmployeeEmail)+'.pdf');
 }
 function closeModal(id){ $(id).classList.add('hidden'); }
 
@@ -433,11 +506,11 @@ async function loadData(){
     const tb=$('dataTable').querySelector('tbody');
     if(!rows.length){ tb.innerHTML='<tr><td class="empty">No data yet.</td></tr>'; return; }
     let H=0; rows.forEach(a=>{H+=+a.ReportedHours||0;});
-    tb.innerHTML='<tr><th>Project</th><th>Customer</th><th>Employee</th><th>Status</th><th class="num">Hours</th><th class="num">Amount</th></tr>'+
+    tb.innerHTML='<tr><th>Project</th><th>Customer</th><th>Employee</th><th>Status</th><th>Submitted</th><th class="num">Hours</th><th class="num">Amount</th></tr>'+
       rows.map(a=>{const s=cur(a.Currency);return `<tr><td>${esc(a.ProjectName)}</td><td>${esc(a.Customer||'')}</td>
-        <td>${esc(a.EmployeeName||a.EmployeeEmail)}</td><td>${statusEn(a.Status)}</td>
+        <td>${esc(a.EmployeeName||a.EmployeeEmail)}</td><td>${statusEn(a.Status)}</td><td class="muted">${fmtDate(a.SubmittedAt)||'—'}</td>
         <td class="num">${hrs(a.ReportedHours)}</td><td class="num">${s}${money(a.ReportedAmount||0)}</td></tr>`;}).join('')+
-      `<tr><td colspan="4"><b>Total hours</b></td><td class="num"><b>${hrs(H)}</b></td><td></td></tr>`;
+      `<tr><td colspan="5"><b>Total hours</b></td><td class="num"><b>${hrs(H)}</b></td><td></td></tr>`;
   }catch(e){ notice('dataErr','err', esc(e.message)); }
 }
 

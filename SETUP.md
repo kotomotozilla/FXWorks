@@ -51,8 +51,9 @@ Check: open that URL in a browser — it should return `{"ok":true,"service":"fr
 4. Open the project (**Open**) to manage it:
    - **Add employee**: pick from the directory + a comment, then **Add & notify** — the employee is assigned and emailed. You can add several employees.
    - Edit each employee's **comment** and **Save comment** — if the comment changed, that employee is emailed again. Unchanged employees are not emailed.
-   - **Recall** a report (becomes unavailable to the employee; draft is kept) / **Release again** (re-notify).
-   - **Report** shows the submitted activities and totals.
+   - **Report / edit** opens the report: edit activities and total hours, then **Save** (keeps the status) or **Save & submit** (marks it submitted — it becomes read-only for the employee). The admin can edit a report at any status, including submitted.
+   - **Download PDF** — generate a PDF of the report; tick the checkbox first to add a signature field at the bottom (employee name + signature line).
+   - Status button: **Recall** (not submitted → unavailable to the employee, draft kept) / **Send back for correction** (submitted → editable again + the employee is emailed) / **Release again** (recalled → re-notify).
    - **Delete** removes one employee's report; **Delete project** removes the whole project with all reports.
    - Edit **project name / customer** and **Save project**.
 5. When an employee submits, the status becomes "Submitted" and you receive an email. A per-report summary is in **Collected data**.
@@ -61,6 +62,7 @@ Check: open that URL in a browser — it should return `{"ok":true,"service":"fr
 1. Open the link from the email → enter **email + password**. You only see reports assigned to you (not recalled).
 2. Open a report, list the **activities** (one description each) and enter the **total hours** for all activities. The header shows rate, total hours, and amount (hours × rate).
 3. **Save draft** — return to it across sessions. **Submit report** — it goes to the admin (who is emailed).
+4. After submission the report is **read-only**. If the admin sends it back for correction, you can edit and submit it again.
 
 ---
 
@@ -90,4 +92,4 @@ An employee is emailed only when they are **added** to a project, or when their 
 - **Assignments**: one row per (project × employee) — employee, rate/currency, comment, status, and (once submitted) reported hours and amount.
 - **Entries**: activity detail — one row per activity of a report.
 
-> Upgrading from an earlier version: the backend will auto-archive mismatched tabs to `<Tab>_old_<timestamp>` and create fresh ones. Your **Employees** directory is preserved if its columns match; otherwise it is archived too — re-add employees if needed.
+> Upgrading from an earlier version: if a tab's columns differ from what the code expects, the backend **migrates the data in place** — it remaps existing rows by column name, adds new columns (blank), and keeps any extra old columns. No data is lost, so you don't need to delete or recreate tabs.
