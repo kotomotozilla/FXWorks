@@ -199,9 +199,11 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const COMPANY = 'Fraktalex Limited';
+const BUILD = '2026-06-28.1';
+let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
 const esc = s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -235,14 +237,20 @@ async function gateLogin(){
   const pin = $('pin').value; notice('gateErr','','');
   if(!pin){ notice('gateErr','err','Enter the PIN.'); return; }
   const b=$('gateBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>'; PIN = pin;
-  try{ await api('admin_login'); sessionStorage.setItem('fx_pin', PIN); enterApp(); }
+  try{ const r = await api('admin_login'); BE_BUILD = r.build||''; sessionStorage.setItem('fx_pin', PIN); enterApp(); }
   catch(e){ notice('gateErr','err', esc(e.message)); PIN=''; }
   finally{ b.disabled=false; b.textContent='Sign in'; }
 }
 function logout(){ sessionStorage.removeItem('fx_pin'); location.reload(); }
+function renderWho(){
+  const be = BE_BUILD ? `server v${esc(BE_BUILD)}` : 'server v…';
+  const warn = (BE_BUILD && BE_BUILD!==BUILD) ? ' style="color:var(--warn)"' : '';
+  $('who').innerHTML = `Administrator · <span title="page build">v${BUILD}</span> · <span${warn} title="backend build">${be}</span> <button onclick="logout()">Sign out</button>`;
+}
 function enterApp(){
   $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
-  $('who').innerHTML = 'Administrator <button onclick="logout()">Sign out</button>';
+  renderWho();
+  if(!BE_BUILD){ api('admin_login').then(r=>{ BE_BUILD=r.build||''; renderWho(); }).catch(()=>{}); }
   loadEmployees().then(loadProjects);
 }
 function switchTab(t){
@@ -264,6 +272,7 @@ async function loadEmployees(){
         <td class="num">${s}${money(e.Rate)}/h</td>
         <td class="muted">${esc(e.Password||'—')}</td>
         <td><div class="acts"><button class="btn ghost sm" onclick="editEmployee('${esc(e.Email)}')">Edit</button>
+          <button class="btn ghost sm" onclick="inviteEmployee('${esc(e.Email)}',this)">Invite</button>
           <button class="btn warn sm" onclick="delEmployee('${esc(e.Email)}', this)">Delete</button></div></td></tr>`;}).join('');
     }
   }catch(e){ notice('empErr','err', esc(e.message)); }
@@ -284,6 +293,12 @@ async function delEmployee(email, btn){
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
   try{ await api('delete_employee',{email}); await loadEmployees(); }
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
+}
+async function inviteEmployee(email, btn){
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('invite_employee',{email}); notice('empErr','ok','Invite sent to '+esc(email)+'.'); btn.textContent='Invite'; }
+  catch(e){ notice('empErr','err', esc(e.message)); btn.textContent='Invite'; }
+  finally{ btn.disabled=false; }
 }
 function editEmployee(email){
   const e = EMPLOYEES.find(x=>String(x.Email).toLowerCase()===String(email).toLowerCase());
@@ -346,6 +361,7 @@ function renderProjectModal(){
   $('pm_asgs').innerHTML = asgs.length ? asgs.map(a=>{
     const s=cur(a.Currency);
     const reportBtn = `<button class="btn ghost sm" onclick="viewReport('${a.AssignmentID}')">Report / edit</button>`;
+    const remindBtn = (a.Status==='released'||a.Status==='draft') ? `<button class="btn ghost sm" onclick="remindAssignment('${a.AssignmentID}',this)">Remind</button>` : '';
     const toggle = a.Status==='recalled'
       ? `<button class="btn sm" onclick="setStatus('${a.AssignmentID}','release',this)">Release again</button>`
       : a.Status==='submitted'
@@ -363,7 +379,7 @@ function renderProjectModal(){
       <div style="height:8px"></div>
       <div class="acts">
         <button class="btn ghost sm" onclick="saveComment('${a.AssignmentID}',this)">Save comment</button>
-        ${toggle}${reportBtn}
+        ${toggle}${remindBtn}${reportBtn}
         <button class="btn ghost sm" onclick="pdfFromList('${a.AssignmentID}')">PDF</button>
         <button class="btn warn sm" onclick="deleteAssignment('${a.AssignmentID}',this)">Delete</button>
       </div>
@@ -421,6 +437,12 @@ async function deleteAssignment(aid, btn){
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
   try{ await api('delete_assignment',{assignmentId:aid}); await refreshModal(); }
   catch(e){ alert(e.message); }
+}
+async function remindAssignment(aid, btn){
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('remind_assignment',{assignmentId:aid}); notice('pm_err','ok','Reminder sent.'); }
+  catch(e){ notice('pm_err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Remind'; }
 }
 
 let REP = null;

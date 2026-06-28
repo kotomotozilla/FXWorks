@@ -131,7 +131,7 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 let STATE = { email:'', password:'', current:null };
 
@@ -163,6 +163,7 @@ function show(id){['screen-login','screen-list','screen-report'].forEach(s=>$(s)
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
+const BUILD='2026-06-28.1';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -352,6 +353,7 @@ function empPdf(){
 }
 
 (function init(){
+  const sm=document.querySelector('.brand small'); if(sm) sm.textContent += ' · v'+BUILD;
   const p = new URLSearchParams(location.search), em = p.get('email');
   if(em){ $('email').value = em; }
   if(APPS_SCRIPT_URL.startsWith('PASTE')){ notice('loginErr','err','APPS_SCRIPT_URL is not configured in employee.html.'); }
