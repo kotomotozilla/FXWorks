@@ -82,7 +82,7 @@
   <main id="app" class="hidden">
     <div class="tabs">
       <button id="tab-projects" class="active" onclick="switchTab('projects')">Projects</button>
-      <button id="tab-employees" onclick="switchTab('employees')">Employees</button>
+      <button id="tab-employees" onclick="switchTab('employees')">Team members</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
     </div>
 
@@ -90,7 +90,7 @@
     <section id="view-projects">
       <div class="panel">
         <h2>New project</h2>
-        <p class="muted">Create a project, then open it to add the employees who must report.</p>
+        <p class="muted">Create a project, then open it to add the team members who must report.</p>
         <div id="projErr"></div>
         <div class="row">
           <div style="flex:2"><label>Project name *</label><input id="p_name" placeholder="VHF upgrade, Almaty"></div>
@@ -108,8 +108,8 @@
     <!-- EMPLOYEES -->
     <section id="view-employees" class="hidden">
       <div class="panel">
-        <h2>Add employee</h2>
-        <p class="muted">Set a password here — the employee uses email + password to sign in. Re-adding the same email updates the record (leave password blank to keep it).</p>
+        <h2>Add team member</h2>
+        <p class="muted">Set a password here — the team member uses email + password to sign in. Re-adding the same email updates the record (leave password blank to keep it).</p>
         <div id="empErr"></div>
         <div class="row">
           <div style="flex:2"><label>Full name</label><input id="e_name" placeholder="John A. Smith"></div>
@@ -123,10 +123,10 @@
           <div><label>Password *</label><input id="e_pass" type="text" placeholder="set a password"></div>
         </div>
         <div style="height:14px"></div>
-        <button class="btn" id="e_btn" onclick="createEmployee()">Save employee</button>
+        <button class="btn" id="e_btn" onclick="createEmployee()">Save team member</button>
       </div>
       <div class="panel">
-        <h2>Employees</h2>
+        <h2>Team members</h2>
         <div class="scroll"><table id="empTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
@@ -157,15 +157,15 @@
     <button class="btn warn sm" onclick="deleteProject()">Delete project</button>
   </div>
   <div class="sep"></div>
-  <h2 style="font-size:15px">Assigned employees</h2>
+  <h2 style="font-size:15px">Assigned team members</h2>
   <div id="pm_asgs"></div>
   <div class="sep"></div>
-  <h2 style="font-size:15px">Add employee</h2>
+  <h2 style="font-size:15px">Add team member</h2>
   <div class="row" style="align-items:end">
-    <div style="flex:2"><label>Employee</label><select id="pm_addEmp"></select></div>
+    <div style="flex:2"><label>Team member</label><select id="pm_addEmp"></select></div>
   </div>
   <div style="height:8px"></div>
-  <div><label>Comment</label><textarea id="pm_addComment" placeholder="What this employee must cover"></textarea></div>
+  <div><label>Comment</label><textarea id="pm_addComment" placeholder="What this team member must cover"></textarea></div>
   <div style="height:10px"></div>
   <button class="btn sm" id="pm_addBtn" onclick="addAssignment()">Add &amp; notify</button>
 </div></div>
@@ -196,7 +196,7 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const COMPANY = 'Fraktalex Limited';
 const $ = id=>document.getElementById(id);
@@ -253,7 +253,7 @@ async function loadEmployees(){
   try{
     const r = await api('list_employees'); EMPLOYEES = r.employees;
     const tb = $('empTable').querySelector('tbody');
-    if(!EMPLOYEES.length){ tb.innerHTML='<tr><td class="empty">No employees yet.</td></tr>'; }
+    if(!EMPLOYEES.length){ tb.innerHTML='<tr><td class="empty">No team members yet.</td></tr>'; }
     else{
       tb.innerHTML='<tr><th>Full name</th><th>Email</th><th class="num">Rate</th><th>Password</th><th></th></tr>'+
       EMPLOYEES.map(e=>{const s=cur(e.Currency);return `<tr>
@@ -274,10 +274,10 @@ async function createEmployee(){
     ['e_name','e_email','e_rate','e_pass'].forEach(id=>$(id).value='');
     await loadEmployees(); notice('empErr','ok','Employee saved.');
   }catch(e){ notice('empErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Save employee'; }
+  finally{ b.disabled=false; b.textContent='Save team member'; }
 }
 async function delEmployee(email, btn){
-  if(!confirm('Delete this employee from the directory? Existing reports remain.')) return;
+  if(!confirm('Delete this team member from the directory? Existing reports remain.')) return;
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
   try{ await api('delete_employee',{email}); await loadEmployees(); }
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
@@ -301,7 +301,7 @@ async function loadProjects(){
     const r = await api('list_projects'); PROJECTS = r.projects; ASSIGNMENTS = r.assignments||[];
     const tb = $('projTable').querySelector('tbody');
     if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">No projects yet.</td></tr>'; return; }
-    tb.innerHTML = '<tr><th>Project</th><th>Customer</th><th>Employees</th><th></th></tr>'+
+    tb.innerHTML = '<tr><th>Project</th><th>Customer</th><th>Team members</th><th></th></tr>'+
     PROJECTS.map(p=>{
       const list = ASSIGNMENTS.filter(a=>a.ProjectID===p.ProjectID);
       const sub = list.length ? list.map(a=>statusEn(a.Status)).reduce((m,s)=>{m[s]=(m[s]||0)+1;return m;},{}) : null;
@@ -370,7 +370,7 @@ function renderProjectModal(){
   const avail = EMPLOYEES.filter(e=>!taken.has(String(e.Email).toLowerCase()));
   $('pm_addEmp').innerHTML = avail.length
     ? '<option value="">— select —</option>'+avail.map(e=>`<option value="${esc(e.Email)}">${esc(e.FullName||e.Email)} — ${esc(e.Email)}</option>`).join('')
-    : '<option value="">All employees already added (or none in directory)</option>';
+    : '<option value="">All team members already added (or none in directory)</option>';
   $('pm_addComment').value='';
 }
 async function refreshModal(){ const r = await api('get_project',{projectId:CURRENT.project.ProjectID}); CURRENT=r; renderProjectModal(); loadProjects(); }
@@ -390,7 +390,7 @@ async function deleteProject(){
 }
 async function addAssignment(){
   notice('pm_err','',''); const email=$('pm_addEmp').value;
-  if(!email){ notice('pm_err','err','Select an employee.'); return; }
+  if(!email){ notice('pm_err','err','Select a team member.'); return; }
   const b=$('pm_addBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{ await api('add_assignment',{projectId:CURRENT.project.ProjectID, email, comment:$('pm_addComment').value.trim()}); await refreshModal(); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
@@ -403,8 +403,8 @@ async function saveComment(aid, btn){
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Save comment'; }
 }
 async function setStatus(aid, op, btn){
-  const msg = op==='recall' ? 'Recall this report? It becomes unavailable to the employee (the draft is kept).'
-            : op==='reopen' ? 'Return this report to the employee for correction? They will be able to edit it again and will receive an email.'
+  const msg = op==='recall' ? 'Recall this report? It becomes unavailable to the team member (the draft is kept).'
+            : op==='reopen' ? 'Return this report to the team member for correction? They will be able to edit it again and will receive an email.'
             : null;
   if(msg && !confirm(msg)) return;
   const action = {recall:'recall_assignment', release:'release_assignment', reopen:'reopen_assignment'}[op];
@@ -413,7 +413,7 @@ async function setStatus(aid, op, btn){
   catch(e){ alert(e.message); }
 }
 async function deleteAssignment(aid, btn){
-  if(!confirm('Delete this employee\'s report from the project?')) return;
+  if(!confirm('Delete this team member\'s report from the project?')) return;
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
   try{ await api('delete_assignment',{assignmentId:aid}); await refreshModal(); }
   catch(e){ alert(e.message); }
@@ -467,7 +467,7 @@ function buildReportHtml(a, activities, hours, withSign){
     : '<span style="color:#777">—</span>';
   const sign = withSign ? `
     <div class="sign">
-      <div class="cap">Signed by the employee:</div>
+      <div class="cap">Performed by:</div>
       <div class="srow">
         <div class="scell"><div class="sname">${esc(a.EmployeeName||a.EmployeeEmail)}</div><div class="sline">Name</div></div>
         <div class="scell"><div class="sname">&nbsp;</div><div class="sline">Signature</div></div>
@@ -544,7 +544,7 @@ async function loadData(){
     const tb=$('dataTable').querySelector('tbody');
     if(!rows.length){ tb.innerHTML='<tr><td class="empty">No data yet.</td></tr>'; return; }
     let H=0; rows.forEach(a=>{H+=+a.ReportedHours||0;});
-    tb.innerHTML='<tr><th>Project</th><th>Customer</th><th>Employee</th><th>Status</th><th>Submitted</th><th class="num">Hours</th><th class="num">Amount</th></tr>'+
+    tb.innerHTML='<tr><th>Project</th><th>Customer</th><th>Team member</th><th>Status</th><th>Submitted</th><th class="num">Hours</th><th class="num">Amount</th></tr>'+
       rows.map(a=>{const s=cur(a.Currency);return `<tr><td>${esc(a.ProjectName)}</td><td>${esc(a.Customer||'')}</td>
         <td>${esc(a.EmployeeName||a.EmployeeEmail)}</td><td>${statusEn(a.Status)}</td><td class="muted">${fmtDate(a.SubmittedAt)||'—'}</td>
         <td class="num">${hrs(a.ReportedHours)}</td><td class="num">${s}${money(a.ReportedAmount||0)}</td></tr>`;}).join('')+

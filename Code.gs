@@ -64,6 +64,7 @@ function route_(action, d) {
     case 'update_assignment':  return adminUpdateAssignment_(d);
     case 'recall_assignment':  return adminSetStatus_(d, 'recalled', false);
     case 'release_assignment': return adminSetStatus_(d, 'released', true);
+    case 'reopen_assignment':  return adminReopen_(d);
     case 'delete_assignment':  return adminDeleteAssignment_(d);
     case 'admin_get_report':   return adminGetReport_(d);
     case 'admin_save_report':  return adminSaveReport_(d);
@@ -158,14 +159,14 @@ function adminAddAssignment_(d) {
   var p = findRow_(SHEETS.projects, 'ProjectID', d.projectId);
   if (!p) return { ok: false, error: 'Project not found' };
   var email = normEmail_(d.email);
-  if (!isEmail_(email)) return { ok: false, error: 'Select an employee' };
+  if (!isEmail_(email)) return { ok: false, error: 'Select a team member' };
   var emp = findRow_(SHEETS.employees, 'Email', email);
-  if (!emp) return { ok: false, error: 'Employee not found in the directory' };
+  if (!emp) return { ok: false, error: 'Team member not found in the directory' };
 
   var dup = readAll_(SHEETS.assignments).some(function (a) {
     return a.ProjectID === p.ProjectID && normEmail_(a.EmployeeEmail) === email;
   });
-  if (dup) return { ok: false, error: 'This employee is already assigned to the project' };
+  if (dup) return { ok: false, error: 'This team member is already assigned to the project' };
 
   var currency = CURRENCIES.indexOf(trim_(emp.Currency)) >= 0 ? trim_(emp.Currency) : 'USD';
   var comment = trim_(d.comment), now = new Date().toISOString();
@@ -208,6 +209,16 @@ function adminSetStatus_(d, status, notify) {
   return { ok: true };
 }
 
+function adminReopen_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', d.assignmentId);
+  if (!a) return { ok: false, error: 'Report not found' };
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { Status: 'draft', UpdatedAt: new Date().toISOString() });
+  a.Status = 'draft';
+  notifyEmployee_(a, 'reopen');   // employee can edit again; notify them
+  return { ok: true };
+}
+
 function adminDeleteAssignment_(d) {
   requireAdmin_(d);
   var a = findRow_(SHEETS.assignments, 'AssignmentID', d.assignmentId);
@@ -239,22 +250,28 @@ function adminSaveReport_(d) {
       ProjectName: a.ProjectName, EmployeeEmail: a.EmployeeEmail, ActivityDescription: desc, CreatedAt: now
     });
   });
-  // Status is left unchanged; admin edits don't auto-submit/withdraw.
-  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { ReportedHours: hours, ReportedAmount: amount, UpdatedAt: now });
+  // Admin may optionally submit the report; otherwise status is left unchanged (admin can edit any status).
+  var upd = { ReportedHours: hours, ReportedAmount: amount, UpdatedAt: now };
+  if (d.markSubmitted) { upd.Status = 'submitted'; upd.SubmittedAt = now; }
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
   return { ok: true, totals: { hours: round2_(hours), amount: amount, activities: activities.length } };
 }
 
-function notifyEmployee_(a) {
+function notifyEmployee_(a, mode) {
   try {
+    var reopen = (mode === 'reopen');
     var sym = curSym_(a.Currency);
     var link = CONFIG.EMPLOYEE_BASE_URL + '?email=' + encodeURIComponent(a.EmployeeEmail) + '&aid=' + encodeURIComponent(a.AssignmentID);
     var hello = a.EmployeeName ? ('Hello, ' + esc_(a.EmployeeName) + '!') : 'Hello!';
-    var subject = 'New report: ' + a.ProjectName + ' (' + CONFIG.COMPANY_NAME + ')';
+    var subject = (reopen ? 'Report returned for correction: ' : 'New report: ') + a.ProjectName + ' (' + CONFIG.COMPANY_NAME + ')';
+    var line = reopen
+      ? 'Your report for <b>' + esc_(a.ProjectName) + '</b> has been returned for correction. Please review it and submit again.'
+      : 'You have been asked to prepare a report for the project <b>' + esc_(a.ProjectName) + '</b>' +
+        (a.Customer ? ' (customer: ' + esc_(a.Customer) + ')' : '') + '.';
     var html =
       '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#15202B;line-height:1.6">' +
       '<p>' + hello + '</p>' +
-      '<p>You have been asked to prepare a report for the project <b>' + esc_(a.ProjectName) + '</b>' +
-      (a.Customer ? ' (customer: ' + esc_(a.Customer) + ')' : '') + '.</p>' +
+      '<p>' + line + '</p>' +
       '<p>Your rate: <b>' + sym + a.Rate + '/h</b>.</p>' +
       (a.Comment ? '<p>Comment: ' + esc_(a.Comment) + '</p>' : '') +
       '<p><a href="' + link + '" style="display:inline-block;background:#2563A8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px">Open report</a></p>' +
@@ -297,6 +314,7 @@ function employeeWrite_(d, finalize) {
   var a = findRow_(SHEETS.assignments, 'AssignmentID', d.assignmentId);
   if (!a || normEmail_(a.EmployeeEmail) !== normEmail_(d.email)) return { ok: false, error: 'No access to this report' };
   if (a.Status === 'recalled') return { ok: false, error: 'This task was recalled by the admin — changes are not allowed' };
+  if (a.Status === 'submitted') return { ok: false, error: 'Report already submitted — it is read-only. Ask the admin to return it for correction.' };
 
   var activities = (Array.isArray(d.activities) ? d.activities : []).map(function (x) { return trim_(x); }).filter(function (x) { return x; });
   var hours = num_(d.hours);
@@ -352,12 +370,26 @@ function getSheet_(name) {
     if (sh.getLastRow() <= 1) {
       sh.clear(); sh.getRange(1, 1, 1, want.length).setValues([want]); sh.setFrozenRows(1);
     } else {
-      var stamp = Utilities.formatDate(new Date(), 'UTC', 'yyyyMMdd-HHmmss');
-      sh.setName(name + '_old_' + stamp);
-      sh = ss.insertSheet(name); sh.appendRow(want); sh.setFrozenRows(1);
+      migrateSheet_(sh, have, want);   // preserve data: remap by column name
     }
   }
   return sh;
+}
+function migrateSheet_(sh, oldHead, want) {
+  var data = sh.getDataRange().getValues(), rows = data.slice(1);
+  // Keep any old-only columns by appending them after the wanted ones (no data is lost).
+  var extra = [];
+  for (var i = 0; i < oldHead.length; i++) {
+    var h = String(oldHead[i]).trim();
+    if (h && want.indexOf(h) < 0 && extra.indexOf(h) < 0) extra.push(h);
+  }
+  var newHead = want.concat(extra), out = [newHead];
+  for (var r = 0; r < rows.length; r++) {
+    out.push(newHead.map(function (col) { var idx = oldHead.indexOf(col); return idx >= 0 ? rows[r][idx] : ''; }));
+  }
+  sh.clear();
+  sh.getRange(1, 1, out.length, newHead.length).setValues(out);
+  sh.setFrozenRows(1);
 }
 function headersMatch_(have, want) {
   if (!have || have.length < want.length) return false;
