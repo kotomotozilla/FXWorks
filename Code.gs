@@ -17,7 +17,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-06-29.1';
+const BUILD = '2026-06-29.2';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { employees: 'Employees', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -275,6 +275,7 @@ function adminSaveReport_(d) {
   // Admin can always set/clear the submission date.
   var sub = trim_(d.submittedDate);
   var upd = { ReportedHours: hours, ReportedAmount: amount, SubmittedAt: sub, UpdatedAt: now };
+  if (d.title !== undefined) upd.Title = trim_(d.title);
   if (d.markSubmitted) { upd.Status = 'submitted'; if (!sub) upd.SubmittedAt = now.slice(0, 10); }
   updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
   return { ok: true, totals: { hours: round2_(hours), amount: amount, activities: activities.length } };
@@ -480,7 +481,15 @@ function updateRow_(name, idField, idValue, updates) {
   for (var i = 1; i < values.length; i++) {
     var v = norm ? normEmail_(values[i][idCol]) : String(values[i][idCol]);
     if (v === target) {
-      for (var key in updates) { var c = head.indexOf(key); if (c >= 0) sh.getRange(i + 1, c + 1).setValue(updates[key]); }
+      for (var key in updates) {
+        var c = head.indexOf(key);
+        if (c >= 0) {
+          var cell = sh.getRange(i + 1, c + 1), val = updates[key];
+          // Keep plain YYYY-MM-DD dates as text so Sheets does not convert them to a timezone-shifted serial.
+          if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val)) cell.setNumberFormat('@');
+          cell.setValue(val);
+        }
+      }
       return true;
     }
   }

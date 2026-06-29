@@ -176,6 +176,8 @@
   <h2><span id="rm_title">Report</span><button class="x" onclick="closeModal('repModal')">×</button></h2>
   <div id="rm_sub" class="muted" style="margin-bottom:10px"></div>
   <div id="rm_err"></div>
+  <div style="margin-bottom:12px"><label>Report title</label>
+    <input id="rm_title_in" placeholder="e.g. May 2026 / Phase 1"></div>
   <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Activities</p>
   <div id="rm_items"></div>
   <button class="btn ghost sm" onclick="rmAddItem()">+ Add activity</button>
@@ -200,10 +202,10 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-06-29.1';
+const BUILD = '2026-06-29.2';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -458,6 +460,7 @@ async function viewReport(aid){
     if(items.length){ items.forEach(it=>rmAddItem(it.ActivityDescription)); } else { rmAddItem(); }
     $('rm_hours').value = (a.ReportedHours!==''&&a.ReportedHours!=null) ? a.ReportedHours : '';
     $('rm_date').value = a.SubmittedAt ? fmtDate(a.SubmittedAt) : '';
+    $('rm_title_in').value = a.Title || '';
     rmRecalc();
     $('repModal').classList.remove('hidden');
   }catch(e){ alert(e.message); }
@@ -480,7 +483,7 @@ async function saveAdminReport(markSubmitted){
   const b = markSubmitted ? $('rm_submit') : $('rm_save'); const other = markSubmitted ? $('rm_save') : $('rm_submit');
   b.disabled=true; other.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    await api('admin_save_report',{assignmentId:REP.AssignmentID, activities, hours, submittedDate:$('rm_date').value, markSubmitted:!!markSubmitted});
+    await api('admin_save_report',{assignmentId:REP.AssignmentID, activities, hours, title:$('rm_title_in').value, submittedDate:$('rm_date').value, markSubmitted:!!markSubmitted});
     closeModal('repModal'); await refreshModal();
   }catch(e){ notice('rm_err','err', esc(e.message)); }
   finally{ b.disabled=false; other.disabled=false; $('rm_save').textContent='Save'; $('rm_submit').innerHTML='Save &amp; submit'; }

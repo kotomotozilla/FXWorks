@@ -139,7 +139,7 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 let STATE = { email:'', password:'', assignments:[], currentProjectId:'', current:null };
 
@@ -171,7 +171,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-06-29.1';
+const BUILD='2026-06-29.2';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
