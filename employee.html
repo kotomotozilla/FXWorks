@@ -81,15 +81,23 @@
     <button class="btn" id="loginBtn" onclick="login()">Show my reports</button>
   </section>
 
-  <section id="screen-list" class="hidden">
-    <h1>My reports</h1>
-    <p class="sub" id="listSub"></p>
-    <div id="listErr"></div>
-    <div id="cards"></div>
+  <section id="screen-projects" class="hidden">
+    <h1>My projects</h1>
+    <p class="sub" id="projSub"></p>
+    <div id="projErr"></div>
+    <div id="projCards"></div>
+  </section>
+
+  <section id="screen-reports" class="hidden">
+    <button class="back" onclick="backToProjects()">← Back to projects</button>
+    <h1 id="rpTitle">Reports</h1>
+    <p class="sub" id="rpSub"></p>
+    <div id="reportsErr"></div>
+    <div id="reportCards"></div>
   </section>
 
   <section id="screen-report" class="hidden">
-    <button class="back" onclick="backToList()">← Back to reports</button>
+    <button class="back" onclick="backToReports()">← Back to reports</button>
     <h1 id="rName"></h1>
     <p class="sub" id="rMeta"></p>
     <div id="rComment"></div>
@@ -131,9 +139,9 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
-let STATE = { email:'', password:'', current:null };
+let STATE = { email:'', password:'', assignments:[], currentProjectId:'', current:null };
 
 async function api(action, payload){
   let res;
@@ -159,11 +167,11 @@ const $ = id => document.getElementById(id);
 const cur = c => SYM[c] || '$';
 const fmtMoney = n => (Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtH = n => (Math.round((+n||0)*100)/100).toLocaleString('en-US');
-function show(id){['screen-login','screen-list','screen-report'].forEach(s=>$(s).classList.add('hidden'));$(id).classList.remove('hidden');}
+function show(id){['screen-login','screen-projects','screen-reports','screen-report'].forEach(s=>$(s).classList.add('hidden'));$(id).classList.remove('hidden');}
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-06-28.1';
+const BUILD='2026-06-29.1';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -178,30 +186,65 @@ async function login(){
   try{
     const r = await api('list_my_assignments', auth());
     $('who').textContent = r.email;
-    renderList(r.assignments); show('screen-list');
+    STATE.assignments = r.assignments||[];
     const aid = new URLSearchParams(location.search).get('aid');
-    if(aid) openReport(aid);
+    if(aid){
+      const a = STATE.assignments.find(x=>x.AssignmentID===aid);
+      if(a) STATE.currentProjectId = a.ProjectID;
+      renderProjects(); show('screen-projects');
+      openReport(aid);
+    }else{
+      renderProjects(); show('screen-projects');
+    }
   }catch(e){ notice('loginErr','err', esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent='Show my reports'; }
 }
 
+async function refreshAssignments(){ try{ const r = await api('list_my_assignments', auth()); STATE.assignments = r.assignments||[]; }catch(_){} }
+
 const BADGE = { released:['todo','New'], draft:['draft','Draft'], submitted:['done','Submitted'] };
-function renderList(items){
-  notice('listErr','','');
-  $('listSub').textContent = items.length ? `${items.length} ${items.length===1?'report':'reports'}` : '';
-  if(!items.length){ $('cards').innerHTML = '<div class="empty">No reports assigned to you yet.</div>'; return; }
-  $('cards').innerHTML = items.map(a=>{
+
+function renderProjects(){
+  notice('projErr','','');
+  const groups = {};
+  (STATE.assignments||[]).forEach(a=>{ (groups[a.ProjectID] = groups[a.ProjectID] || {name:a.ProjectName, customer:a.Customer, items:[]}).items.push(a); });
+  const ids = Object.keys(groups);
+  $('projSub').textContent = ids.length ? `${ids.length} ${ids.length===1?'project':'projects'}` : '';
+  if(!ids.length){ $('projCards').innerHTML = '<div class="empty">No projects assigned to you yet.</div>'; return; }
+  $('projCards').innerHTML = ids.map(pid=>{
+    const g=groups[pid], n=g.items.length, subm=g.items.filter(x=>x.Status==='submitted').length, todo=g.items.filter(x=>x.Status==='released'||x.Status==='draft').length;
+    return `<div class="card">
+      <div><p class="pname">${esc(g.name)}</p>${g.customer?`<p class="pcust">Customer: ${esc(g.customer)}</p>`:''}</div>
+      <div class="meta"><span><b>${n}</b> ${n===1?'report':'reports'}</span>${todo?`<span>${todo} to do</span>`:''}${subm?`<span>${subm} submitted</span>`:''}</div>
+      <div class="cardfoot"><span></span><button class="btn sm" onclick="openProject('${pid}')">Open</button></div>
+    </div>`;
+  }).join('');
+}
+
+function openProject(pid){ STATE.currentProjectId = pid; renderReports(pid); show('screen-reports'); window.scrollTo(0,0); }
+async function backToProjects(){ await refreshAssignments(); renderProjects(); show('screen-projects'); window.scrollTo(0,0); }
+async function backToReports(){ await refreshAssignments(); renderReports(STATE.currentProjectId); show('screen-reports'); window.scrollTo(0,0); }
+
+function renderReports(pid, flash){
+  const items = (STATE.assignments||[]).filter(a=>a.ProjectID===pid);
+  const g = items[0];
+  $('rpTitle').textContent = g ? g.ProjectName : 'Reports';
+  $('rpSub').textContent = g && g.Customer ? 'Customer: '+g.Customer : '';
+  notice('reportsErr', flash?'ok':'', flash||'');
+  if(!items.length){ $('reportCards').innerHTML = '<div class="empty">No reports.</div>'; return; }
+  $('reportCards').innerHTML = items.map(a=>{
     const s = cur(a.Currency), b = BADGE[a.Status] || ['todo','—'];
+    const label = a.Title ? esc(a.Title) : ('Report · '+fmtDate(a.CreatedAt));
     const btnLabel = a.Status==='submitted' ? 'Open report' : (a.Status==='draft' ? 'Continue' : 'Fill in report');
     const has = (a.ReportedHours!==''&&a.ReportedHours!=null) && (a.Status==='submitted'||a.Status==='draft');
     const amt = (a.ReportedAmount!==''&&a.ReportedAmount!=null) ? +a.ReportedAmount : (+a.ReportedHours||0)*(+a.Rate||0);
     const reported = has ? `<span>Reported: <b>${fmtH(a.ReportedHours)} h · ${s}${fmtMoney(amt)}</b></span>` : '';
     return `<div class="card">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:start">
-        <div><p class="pname">${esc(a.ProjectName)}</p>${a.Customer?`<p class="pcust">Customer: ${esc(a.Customer)}</p>`:''}</div>
+        <div><p class="pname" style="font-size:16px">${label}</p></div>
         <span class="tag ${b[0]}">${b[1]}</span>
       </div>
-      <div class="meta"><span>Rate: <b>${s}${fmtMoney(a.Rate)}/h</b></span>${reported}</div>
+      <div class="meta"><span>Rate: <b>${s}${fmtMoney(a.Rate)}/h</b></span>${reported}${a.SubmittedAt?`<span>Submitted: <b>${fmtDate(a.SubmittedAt)}</b></span>`:''}</div>
       ${a.Comment?`<div class="comment">💬 ${esc(a.Comment)}</div>`:''}
       <div class="cardfoot"><span></span><button class="btn sm" onclick="openReport('${a.AssignmentID}')">${btnLabel}</button></div>
     </div>`;
@@ -214,7 +257,7 @@ async function openReport(aid){
     STATE.current = r.assignment; const a = r.assignment, s = cur(a.Currency);
     const ro = a.Status==='submitted';
     $('rName').textContent = a.ProjectName;
-    $('rMeta').textContent = [a.Customer?'Customer: '+a.Customer:'', a.SubmittedAt?'Submitted: '+fmtDate(a.SubmittedAt):''].filter(Boolean).join('   •   ');
+    $('rMeta').textContent = [a.Title?a.Title:('Report · '+fmtDate(a.CreatedAt)), a.Customer?'Customer: '+a.Customer:'', a.SubmittedAt?'Submitted: '+fmtDate(a.SubmittedAt):''].filter(Boolean).join('   •   ');
     $('rComment').innerHTML = a.Comment ? `<div class="comment">💬 ${esc(a.Comment)}</div>` : '';
     $('dRate').textContent = s+fmtMoney(a.Rate)+'/h';
     notice('submitMsg','','');
@@ -232,9 +275,8 @@ async function openReport(aid){
     $('submitDate').value = a.SubmittedAt ? toDate(a.SubmittedAt) : todayStr();
     applyMode(ro);
     show('screen-report'); window.scrollTo(0,0);
-  }catch(e){ notice('listErr','err', esc(e.message)); show('screen-list'); }
+  }catch(e){ notice('reportsErr','err', esc(e.message)); show('screen-reports'); }
 }
-function backToList(){ login(); }
 
 function applyMode(ro){
   ['addBtn','reportActions','hoursWrap','dateWrap'].forEach(id=>{ const el=$(id); if(el) el.style.display = ro ? 'none' : ''; });
@@ -274,9 +316,9 @@ async function saveReport(finalize){
     const s = cur(STATE.current.Currency);
     if(finalize){
       const msg = `Report submitted: ${r.totals.activities} activities, ${fmtH(r.totals.hours)} h for ${s}${fmtMoney(r.totals.amount)}. The admin has been notified.`;
-      try{ const lr = await api('list_my_assignments', auth()); renderList(lr.assignments); }catch(_){}
-      notice('listErr','ok', msg);
-      show('screen-list'); window.scrollTo(0,0);
+      await refreshAssignments();
+      renderReports(STATE.currentProjectId, msg);
+      show('screen-reports'); window.scrollTo(0,0);
     }else{
       STATE.current.Status='draft';
       notice('submitMsg','info', `Draft saved. You can continue later.`);

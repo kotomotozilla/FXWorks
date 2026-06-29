@@ -49,7 +49,7 @@ Check: open that URL in a browser — it should return `{"ok":true,"service":"fr
 2. **Employees** → add people: full name, email, rate, currency, and a **password** (the employee signs in with email + password). Re-adding the same email updates the record; leave password blank to keep the old one.
 3. **Projects** → create a project with just **name** and **customer**.
 4. Open the project (**Open**) to manage it:
-   - **Add employee**: pick from the directory + a comment, then **Add & notify** — the employee is assigned and emailed. You can add several employees.
+   - **Add team member**: pick from the directory, an optional **report title** (to tell apart several reports of the same person, e.g. "May 2026" / "Phase 1") and a comment, then **Add & notify**. The same person can be added several times — each one is a separate report.
    - Edit each employee's **comment** and **Save comment** — if the comment changed, that employee is emailed again. Unchanged employees are not emailed.
    - **Report / edit** opens the report: edit activities and total hours, then **Save** (keeps the status) or **Save & submit** (marks it submitted — it becomes read-only for the employee). The admin can edit a report at any status, including submitted.
    - **Download PDF** — generate a PDF of the report; tick the checkbox first to add a signature field at the bottom (employee name + signature line).

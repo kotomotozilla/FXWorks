@@ -163,6 +163,7 @@
   <h2 style="font-size:15px">Add team member</h2>
   <div class="row" style="align-items:end">
     <div style="flex:2"><label>Team member</label><select id="pm_addEmp"></select></div>
+    <div style="flex:2"><label>Report title (optional)</label><input id="pm_addTitle" placeholder="e.g. May 2026 / Phase 1"></div>
   </div>
   <div style="height:8px"></div>
   <div><label>Comment</label><textarea id="pm_addComment" placeholder="What this team member must cover"></textarea></div>
@@ -199,10 +200,10 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-06-28.1';
+const BUILD = '2026-06-29.1';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -369,7 +370,7 @@ function renderProjectModal(){
       : `<button class="btn warn sm" onclick="setStatus('${a.AssignmentID}','recall',this)">Recall</button>`;
     return `<div class="asg">
       <div class="top2">
-        <div><div class="nm">${esc(a.EmployeeName||a.EmployeeEmail)}</div><div class="em">${esc(a.EmployeeEmail)} · ${s}${money(a.Rate)}/h</div></div>
+        <div><div class="nm">${esc(a.EmployeeName||a.EmployeeEmail)} <span class="muted" style="font-weight:400">· ${a.Title?esc(a.Title):('report '+fmtDate(a.CreatedAt))}</span></div><div class="em">${esc(a.EmployeeEmail)} · ${s}${money(a.Rate)}/h</div></div>
         <span class="tag ${esc(a.Status)}">${statusEn(a.Status)}</span>
       </div>
       ${(a.ReportedHours!==''&&a.ReportedHours!=null)?`<div class="muted" style="margin-bottom:4px">Reported: ${hrs(a.ReportedHours)} h · ${s}${money(a.ReportedAmount||0)}</div>`:''}
@@ -385,13 +386,11 @@ function renderProjectModal(){
       </div>
     </div>`;
   }).join('') : '<p class="empty">No employees added yet.</p>';
-  // add-employee dropdown (exclude already assigned)
-  const taken = new Set(asgs.map(a=>String(a.EmployeeEmail).toLowerCase()));
-  const avail = EMPLOYEES.filter(e=>!taken.has(String(e.Email).toLowerCase()));
-  $('pm_addEmp').innerHTML = avail.length
-    ? '<option value="">— select —</option>'+avail.map(e=>`<option value="${esc(e.Email)}">${esc(e.FullName||e.Email)} — ${esc(e.Email)}</option>`).join('')
-    : '<option value="">All team members already added (or none in directory)</option>';
-  $('pm_addComment').value='';
+  // add-team-member dropdown (multiple reports per person are allowed, so list everyone)
+  $('pm_addEmp').innerHTML = EMPLOYEES.length
+    ? '<option value="">— select —</option>'+EMPLOYEES.map(e=>`<option value="${esc(e.Email)}">${esc(e.FullName||e.Email)} — ${esc(e.Email)}</option>`).join('')
+    : '<option value="">No team members in the directory</option>';
+  $('pm_addComment').value=''; if($('pm_addTitle')) $('pm_addTitle').value='';
 }
 async function refreshModal(){ const r = await api('get_project',{projectId:CURRENT.project.ProjectID}); CURRENT=r; renderProjectModal(); loadProjects(); }
 
@@ -412,7 +411,7 @@ async function addAssignment(){
   notice('pm_err','',''); const email=$('pm_addEmp').value;
   if(!email){ notice('pm_err','err','Select a team member.'); return; }
   const b=$('pm_addBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  try{ await api('add_assignment',{projectId:CURRENT.project.ProjectID, email, comment:$('pm_addComment').value.trim()}); await refreshModal(); }
+  try{ await api('add_assignment',{projectId:CURRENT.project.ProjectID, email, title:$('pm_addTitle').value.trim(), comment:$('pm_addComment').value.trim()}); await refreshModal(); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.innerHTML='Add &amp; notify'; }
 }

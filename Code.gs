@@ -16,6 +16,9 @@ const CONFIG = {
   COMPANY_NAME: 'Fraktalex Limited'
 };
 
+// Bump this on every backend change so the admin panel can confirm the new code is deployed.
+const BUILD = '2026-06-29.1';
+
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { employees: 'Employees', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
@@ -23,7 +26,7 @@ const HEADERS = {
   employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt'],
   projects:    ['ProjectID', 'Name', 'Customer', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'EmployeeEmail', 'EmployeeName',
-                'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
+                'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
                 'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
@@ -34,7 +37,7 @@ const CURRENCIES = ['USD', 'EUR'];
 // ─────────────────────────────────────────────────────────────────────────────
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || 'ping';
-  if (action === 'ping') return jsonOut_({ ok: true, service: 'fraktalex-reports', time: new Date().toISOString() }, e);
+  if (action === 'ping') return jsonOut_({ ok: true, service: 'fraktalex-reports', build: BUILD, time: new Date().toISOString() }, e);
   try { return jsonOut_(route_(action, e.parameter || {}), e); }
   catch (err) { return jsonOut_({ ok: false, error: String(err && err.message || err) }, e); }
 }
@@ -48,11 +51,12 @@ function doPost(e) {
 
 function route_(action, d) {
   switch (action) {
-    case 'admin_login':        requireAdmin_(d); return { ok: true };
+    case 'admin_login':        requireAdmin_(d); return { ok: true, build: BUILD };
     // Employees
     case 'create_employee':    return adminCreateEmployee_(d);
     case 'list_employees':     requireAdmin_(d); return { ok: true, employees: readAll_(SHEETS.employees) };
     case 'delete_employee':    return adminDeleteEmployee_(d);
+    case 'invite_employee':    return adminInvite_(d);
     // Projects
     case 'create_project':     return adminCreateProject_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
@@ -65,6 +69,7 @@ function route_(action, d) {
     case 'recall_assignment':  return adminSetStatus_(d, 'recalled', false);
     case 'release_assignment': return adminSetStatus_(d, 'released', true);
     case 'reopen_assignment':  return adminReopen_(d);
+    case 'remind_assignment':  return adminRemind_(d);
     case 'delete_assignment':  return adminDeleteAssignment_(d);
     case 'admin_get_report':   return adminGetReport_(d);
     case 'admin_save_report':  return adminSaveReport_(d);
@@ -85,16 +90,36 @@ function adminCreateEmployee_(d) {
   var email = normEmail_(d.email);
   if (!isEmail_(email)) return { ok: false, error: 'Invalid email' };
   var currency = CURRENCIES.indexOf(trim_(d.currency)) >= 0 ? trim_(d.currency) : 'USD';
-  var rate = num_(d.rate), pwd = trim_(d.password);
+  var rate = num_(d.rate), pwd = trim_(d.password), name = trim_(d.fullName);
+  var orig = normEmail_(d.originalEmail);
+
+  // Editing an existing record whose email is being changed.
+  if (orig && orig !== email) {
+    var rec = findRow_(SHEETS.employees, 'Email', orig);
+    if (!rec) return { ok: false, error: 'Original team-member record not found' };
+    if (findRow_(SHEETS.employees, 'Email', email)) return { ok: false, error: 'Another team member already uses this email' };
+    var upd = { Email: email, FullName: name, Rate: rate, Currency: currency };
+    if (pwd) upd.Password = pwd;
+    updateRow_(SHEETS.employees, 'Email', orig, upd);
+    // Cascade the email/name change onto assignments and entries.
+    readAll_(SHEETS.assignments).forEach(function (a) {
+      if (normEmail_(a.EmployeeEmail) === orig) updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { EmployeeEmail: email, EmployeeName: name });
+    });
+    readAll_(SHEETS.entries).forEach(function (en) {
+      if (normEmail_(en.EmployeeEmail) === orig) updateRow_(SHEETS.entries, 'EntryID', en.EntryID, { EmployeeEmail: email });
+    });
+    return { ok: true, updated: true, emailChanged: true };
+  }
+
   var existing = findRow_(SHEETS.employees, 'Email', email);
   if (existing) {
-    var upd = { FullName: trim_(d.fullName), Rate: rate, Currency: currency };
-    if (pwd) upd.Password = pwd;                 // blank keeps the old password
-    updateRow_(SHEETS.employees, 'Email', email, upd);
+    var upd2 = { FullName: name, Rate: rate, Currency: currency };
+    if (pwd) upd2.Password = pwd;                 // blank keeps the old password
+    updateRow_(SHEETS.employees, 'Email', email, upd2);
     return { ok: true, updated: true };
   }
   appendRow_(SHEETS.employees, {
-    Email: email, FullName: trim_(d.fullName), Rate: rate, Currency: currency,
+    Email: email, FullName: name, Rate: rate, Currency: currency,
     Password: pwd, CreatedAt: new Date().toISOString()
   });
   return { ok: true };
@@ -163,16 +188,12 @@ function adminAddAssignment_(d) {
   var emp = findRow_(SHEETS.employees, 'Email', email);
   if (!emp) return { ok: false, error: 'Team member not found in the directory' };
 
-  var dup = readAll_(SHEETS.assignments).some(function (a) {
-    return a.ProjectID === p.ProjectID && normEmail_(a.EmployeeEmail) === email;
-  });
-  if (dup) return { ok: false, error: 'This team member is already assigned to the project' };
-
+  // Multiple reports per (project × team member) are allowed; they are distinguished by Title.
   var currency = CURRENCIES.indexOf(trim_(emp.Currency)) >= 0 ? trim_(emp.Currency) : 'USD';
-  var comment = trim_(d.comment), now = new Date().toISOString();
+  var comment = trim_(d.comment), title = trim_(d.title), now = new Date().toISOString();
   var row = {
     AssignmentID: Utilities.getUuid(), ProjectID: p.ProjectID, ProjectName: p.Name, Customer: p.Customer,
-    EmployeeEmail: email, EmployeeName: emp.FullName || '', Currency: currency, Rate: num_(emp.Rate),
+    EmployeeEmail: email, EmployeeName: emp.FullName || '', Title: title, Currency: currency, Rate: num_(emp.Rate),
     Comment: comment, LastNotifiedComment: comment, Status: 'released', ReportedHours: '', ReportedAmount: '',
     ReleasedAt: now, SubmittedAt: '', UpdatedAt: now, CreatedAt: now
   };
@@ -251,34 +272,67 @@ function adminSaveReport_(d) {
     });
   });
   // Admin may optionally submit the report; otherwise status is left unchanged (admin can edit any status).
-  var upd = { ReportedHours: hours, ReportedAmount: amount, UpdatedAt: now };
-  if (d.markSubmitted) { upd.Status = 'submitted'; upd.SubmittedAt = now; }
+  // Admin can always set/clear the submission date.
+  var sub = trim_(d.submittedDate);
+  var upd = { ReportedHours: hours, ReportedAmount: amount, SubmittedAt: sub, UpdatedAt: now };
+  if (d.markSubmitted) { upd.Status = 'submitted'; if (!sub) upd.SubmittedAt = now.slice(0, 10); }
   updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
   return { ok: true, totals: { hours: round2_(hours), amount: amount, activities: activities.length } };
 }
 
-function notifyEmployee_(a, mode) {
-  try {
-    var reopen = (mode === 'reopen');
-    var sym = curSym_(a.Currency);
-    var link = CONFIG.EMPLOYEE_BASE_URL + '?email=' + encodeURIComponent(a.EmployeeEmail) + '&aid=' + encodeURIComponent(a.AssignmentID);
-    var hello = a.EmployeeName ? ('Hello, ' + esc_(a.EmployeeName) + '!') : 'Hello!';
-    var subject = (reopen ? 'Report returned for correction: ' : 'New report: ') + a.ProjectName + ' (' + CONFIG.COMPANY_NAME + ')';
-    var line = reopen
-      ? 'Your report for <b>' + esc_(a.ProjectName) + '</b> has been returned for correction. Please review it and submit again.'
-      : 'You have been asked to prepare a report for the project <b>' + esc_(a.ProjectName) + '</b>' +
-        (a.Customer ? ' (customer: ' + esc_(a.Customer) + ')' : '') + '.';
-    var html =
-      '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#15202B;line-height:1.6">' +
-      '<p>' + hello + '</p>' +
-      '<p>' + line + '</p>' +
-      '<p>Your rate: <b>' + sym + a.Rate + '/h</b>.</p>' +
-      (a.Comment ? '<p>Comment: ' + esc_(a.Comment) + '</p>' : '') +
-      '<p><a href="' + link + '" style="display:inline-block;background:#2563A8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px">Open report</a></p>' +
-      '<p style="color:#5B6671;font-size:12px">You will be asked for your email and password. If the button does not work, copy this link:<br>' + link + '</p>' +
-      '<p style="color:#5B6671;font-size:12px">' + esc_(CONFIG.COMPANY_NAME) + '</p></div>';
-    MailApp.sendEmail({ to: a.EmployeeEmail, subject: subject, htmlBody: html });
-  } catch (e) {}
+function notifyEmployee_(a, mode) { try { mailEmployeeReport_(a, mode); } catch (e) {} }
+
+function mailEmployeeReport_(a, mode) {
+  var reopen = (mode === 'reopen'), remind = (mode === 'remind');
+  var sym = curSym_(a.Currency);
+  var link = CONFIG.EMPLOYEE_BASE_URL + '?email=' + encodeURIComponent(a.EmployeeEmail) + '&aid=' + encodeURIComponent(a.AssignmentID);
+  var hello = a.EmployeeName ? ('Hello, ' + esc_(a.EmployeeName) + '!') : 'Hello!';
+  var subject = (reopen ? 'Report returned for correction: ' : remind ? 'Reminder — report pending: ' : 'New report: ') + a.ProjectName + ' (' + CONFIG.COMPANY_NAME + ')';
+  var line = reopen
+    ? 'Your report for <b>' + esc_(a.ProjectName) + '</b> has been returned for correction. Please review it and submit again.'
+    : remind
+    ? 'This is a reminder to complete and submit your report for the project <b>' + esc_(a.ProjectName) + '</b>' + (a.Customer ? ' (customer: ' + esc_(a.Customer) + ')' : '') + '. It has not been submitted yet.'
+    : 'You have been asked to prepare a report for the project <b>' + esc_(a.ProjectName) + '</b>' + (a.Customer ? ' (customer: ' + esc_(a.Customer) + ')' : '') + '.';
+  var html =
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#15202B;line-height:1.6">' +
+    '<p>' + hello + '</p>' +
+    '<p>' + line + '</p>' +
+    '<p>Your rate: <b>' + sym + a.Rate + '/h</b>.</p>' +
+    (a.Comment ? '<p>Comment: ' + esc_(a.Comment) + '</p>' : '') +
+    '<p><a href="' + link + '" style="display:inline-block;background:#2563A8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px">Open report</a></p>' +
+    '<p style="color:#5B6671;font-size:12px">You will be asked for your email and password. If the button does not work, copy this link:<br>' + link + '</p>' +
+    '<p style="color:#5B6671;font-size:12px">' + esc_(CONFIG.COMPANY_NAME) + '</p></div>';
+  MailApp.sendEmail({ to: a.EmployeeEmail, subject: subject, htmlBody: html });
+}
+
+function adminInvite_(d) {
+  requireAdmin_(d);
+  var emp = findRow_(SHEETS.employees, 'Email', normEmail_(d.email));
+  if (!emp) return { ok: false, error: 'Team member not found' };
+  var link = CONFIG.EMPLOYEE_BASE_URL + '?email=' + encodeURIComponent(emp.Email);
+  var hello = emp.FullName ? ('Hello, ' + esc_(emp.FullName) + '!') : 'Hello!';
+  var pwd = trim_(emp.Password);
+  var pwdLine = pwd ? '<p>Password: <b>' + esc_(pwd) + '</b></p>' : '<p>Your administrator will share your password separately.</p>';
+  var html =
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#15202B;line-height:1.6">' +
+    '<p>' + hello + '</p>' +
+    '<p>You have access to the ' + esc_(CONFIG.COMPANY_NAME) + ' reporting page, where you can fill in and submit your work reports.</p>' +
+    '<p>Login email: <b>' + esc_(emp.Email) + '</b></p>' + pwdLine +
+    '<p><a href="' + link + '" style="display:inline-block;background:#2563A8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px">Open reporting page</a></p>' +
+    '<p style="color:#5B6671;font-size:12px">If the button does not work, copy this link:<br>' + link + '</p>' +
+    '<p style="color:#5B6671;font-size:12px">' + esc_(CONFIG.COMPANY_NAME) + '</p></div>';
+  MailApp.sendEmail({ to: emp.Email, subject: 'Access to ' + CONFIG.COMPANY_NAME + ' reporting', htmlBody: html });
+  return { ok: true };
+}
+
+function adminRemind_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', d.assignmentId);
+  if (!a) return { ok: false, error: 'Report not found' };
+  if (a.Status === 'submitted') return { ok: false, error: 'Report already submitted — reminder not needed' };
+  if (a.Status === 'recalled') return { ok: false, error: 'Task is recalled — release it first' };
+  mailEmployeeReport_(a, 'remind');
+  return { ok: true };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -328,8 +382,9 @@ function employeeWrite_(d, finalize) {
       ProjectName: a.ProjectName, EmployeeEmail: normEmail_(d.email), ActivityDescription: desc, CreatedAt: now
     });
   });
-  var upd = { ReportedHours: hours, ReportedAmount: amount, UpdatedAt: now };
-  if (finalize) { upd.Status = 'submitted'; upd.SubmittedAt = now; } else { upd.Status = 'draft'; }
+  var sub = trim_(d.submittedDate);
+  var upd = { ReportedHours: hours, ReportedAmount: amount, SubmittedAt: sub, UpdatedAt: now };
+  if (finalize) { upd.Status = 'submitted'; if (!sub) upd.SubmittedAt = now.slice(0, 10); } else { upd.Status = 'draft'; }
   updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
 
   if (finalize) { try { notifyAdminSubmitted_(a, hours, amount); } catch (e) {} }
