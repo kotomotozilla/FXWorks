@@ -96,6 +96,8 @@
           <div style="flex:2"><label>Project name *</label><input id="p_name" placeholder="VHF upgrade, Almaty"></div>
           <div style="flex:2"><label>Customer</label><input id="p_customer" placeholder="SkyGrid"></div>
         </div>
+        <div style="height:10px"></div>
+        <div><label>Description</label><textarea id="p_desc" placeholder="Project scope / context (visible to team members)"></textarea></div>
         <div style="height:14px"></div>
         <button class="btn" id="p_btn" onclick="createProject()">Create project</button>
       </div>
@@ -151,6 +153,8 @@
     <div style="flex:2"><label>Project name</label><input id="pm_name"></div>
     <div style="flex:2"><label>Customer</label><input id="pm_customer"></div>
   </div>
+  <div style="height:10px"></div>
+  <div><label>Description</label><textarea id="pm_desc" placeholder="Project scope / context (visible to team members)"></textarea></div>
   <div style="height:12px"></div>
   <div class="acts">
     <button class="btn sm" id="pm_save" onclick="saveProject()">Save project</button>
@@ -202,10 +206,10 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-06-29.2';
+const BUILD = '2026-06-29.4';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -340,8 +344,8 @@ async function createProject(){
   if(!name){ notice('projErr','err','Enter a project name.'); return; }
   const b=$('p_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    const r = await api('create_project', { name, customer:$('p_customer').value.trim() });
-    $('p_name').value=''; $('p_customer').value='';
+    const r = await api('create_project', { name, customer:$('p_customer').value.trim(), description:$('p_desc').value.trim() });
+    $('p_name').value=''; $('p_customer').value=''; $('p_desc').value='';
     await loadProjects(); notice('projErr','ok','Project created. Open it to add employees.');
     openProject(r.project.ProjectID);
   }catch(e){ notice('projErr','err', esc(e.message)); }
@@ -358,7 +362,7 @@ async function openProject(pid){
 function renderProjectModal(){
   const p = CURRENT.project, asgs = CURRENT.assignments||[];
   $('pm_title').textContent = p.Name;
-  $('pm_name').value = p.Name; $('pm_customer').value = p.Customer||'';
+  $('pm_name').value = p.Name; $('pm_customer').value = p.Customer||''; $('pm_desc').value = p.Description||'';
   notice('pm_err','','');
   // assignments
   $('pm_asgs').innerHTML = asgs.length ? asgs.map(a=>{
@@ -400,7 +404,7 @@ async function saveProject(){
   notice('pm_err','',''); const name=$('pm_name').value.trim();
   if(!name){ notice('pm_err','err','Project name is required.'); return; }
   const b=$('pm_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  try{ await api('update_project',{projectId:CURRENT.project.ProjectID, name, customer:$('pm_customer').value.trim()}); await refreshModal(); notice('pm_err','ok','Saved.'); }
+  try{ await api('update_project',{projectId:CURRENT.project.ProjectID, name, customer:$('pm_customer').value.trim(), description:$('pm_desc').value.trim()}); await refreshModal(); notice('pm_err','ok','Saved.'); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent='Save project'; }
 }
@@ -424,13 +428,17 @@ async function saveComment(aid, btn){
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Save comment'; }
 }
 async function setStatus(aid, op, btn){
-  const msg = op==='recall' ? 'Recall this report? It becomes unavailable to the team member (the draft is kept).'
-            : op==='reopen' ? 'Return this report to the team member for correction? They will be able to edit it again and will receive an email.'
-            : null;
-  if(msg && !confirm(msg)) return;
+  let payload = {assignmentId:aid};
+  if(op==='recall'){
+    if(!confirm('Recall this report? It becomes unavailable to the team member (the draft is kept).')) return;
+  }else if(op==='reopen'){
+    const c = prompt('Return for correction — comment to the team member (optional). They will be emailed and can edit again:', '');
+    if(c===null) return;               // cancelled
+    payload.comment = c.trim();
+  }
   const action = {recall:'recall_assignment', release:'release_assignment', reopen:'reopen_assignment'}[op];
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api(action,{assignmentId:aid}); await refreshModal(); }
+  try{ await api(action, payload); await refreshModal(); }
   catch(e){ alert(e.message); }
 }
 async function deleteAssignment(aid, btn){
@@ -494,15 +502,12 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   const list = (activities && activities.length)
     ? '<ol>'+activities.map(x=>`<li>${esc(x)}</li>`).join('')+'</ol>'
     : '<span style="color:#777">—</span>';
-  const sign = withSign ? `
-    <div class="sign">
-      <div class="cap">Performed by:</div>
-      <div class="srow">
-        <div class="scell"><div class="sname">${esc(a.EmployeeName||a.EmployeeEmail)}</div><div class="sline">Name</div></div>
-        <div class="scell"><div class="sname">&nbsp;</div><div class="sline">Signature</div></div>
-        <div class="scell"><div class="sname">${submitted||'&nbsp;'}</div><div class="sline">Date</div></div>
-      </div>
-    </div>` : '';
+  const perf = `
+    <div class="perf">
+      <div><span class="k">Performed by:</span> ${esc(a.EmployeeName||a.EmployeeEmail)}</div>
+      <div><span class="k">Date:</span> ${submitted||'\u2014'}</div>
+      ${withSign ? `<div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>` : ''}
+    </div>`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Project Work Completion Report</title>
 <style>
   @page{ margin:20mm 18mm; }
@@ -517,10 +522,8 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   td.label{width:44%;font-weight:bold;background:#f2f2f2}
   ol{margin:2px 0 2px 18px;padding:0} li{margin:3px 0}
   .foot{margin-top:26px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;font-family:Arial,Helvetica,sans-serif}
-  .sign{margin-top:44px} .sign .cap{font-size:10pt;margin-bottom:22px}
-  .srow{display:flex;gap:36px} .scell{flex:1}
-  .sname{min-height:22px;border-bottom:1px solid #333;padding-bottom:3px}
-  .sline{font-size:9pt;color:#555;margin-top:3px;font-family:Arial,Helvetica,sans-serif}
+  .perf{margin-top:40px;font-size:11pt} .perf>div{margin:7px 0} .perf .k{font-weight:bold}
+  .sig{margin-top:26px} .sigline{border-bottom:1px solid #333;max-width:340px;height:24px} .siglbl{font-size:9pt;color:#555;margin-top:3px;font-family:Arial,Helvetica,sans-serif}
   @media print{ .no-print{display:none} body{padding:0} }
 </style></head><body>
   <div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>
@@ -532,9 +535,8 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
     <tr><td class="label" colspan="2">A brief description and a list of completed tasks for the project:</td></tr>
     <tr><td colspan="2">${list}</td></tr>
     <tr><td class="label">The total number of hours spent:</td><td>${hrs(hours)}</td></tr>
-    <tr><td class="label">Report date:</td><td>${submitted||'&nbsp;'}</td></tr>
   </table>
-  ${sign}
+  ${perf}
   <div class="foot">CONFIDENTIAL</div>
   <script>setTimeout(function(){try{window.print();}catch(e){}},500);<\/script>
 </body></html>`;

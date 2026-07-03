@@ -92,6 +92,7 @@
     <button class="back" onclick="backToProjects()">← Back to projects</button>
     <h1 id="rpTitle">Reports</h1>
     <p class="sub" id="rpSub"></p>
+    <div id="rpDesc"></div>
     <div id="reportsErr"></div>
     <div id="reportCards"></div>
   </section>
@@ -100,6 +101,7 @@
     <button class="back" onclick="backToReports()">← Back to reports</button>
     <h1 id="rName"></h1>
     <p class="sub" id="rMeta"></p>
+    <div id="rDesc"></div>
     <div id="rComment"></div>
 
     <div class="dash">
@@ -139,7 +141,7 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€'};
 let STATE = { email:'', password:'', assignments:[], currentProjectId:'', current:null };
 
@@ -171,7 +173,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-06-29.2';
+const BUILD='2026-06-29.4';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -230,6 +232,7 @@ function renderReports(pid, flash){
   const g = items[0];
   $('rpTitle').textContent = g ? g.ProjectName : 'Reports';
   $('rpSub').textContent = g && g.Customer ? 'Customer: '+g.Customer : '';
+  $('rpDesc').innerHTML = (g && g.ProjectDescription) ? `<div class="comment">📋 ${esc(g.ProjectDescription)}</div>` : '';
   notice('reportsErr', flash?'ok':'', flash||'');
   if(!items.length){ $('reportCards').innerHTML = '<div class="empty">No reports.</div>'; return; }
   $('reportCards').innerHTML = items.map(a=>{
@@ -258,6 +261,7 @@ async function openReport(aid){
     const ro = a.Status==='submitted';
     $('rName').textContent = a.ProjectName;
     $('rMeta').textContent = [a.Title?a.Title:('Report · '+fmtDate(a.CreatedAt)), a.Customer?'Customer: '+a.Customer:'', a.SubmittedAt?'Submitted: '+fmtDate(a.SubmittedAt):''].filter(Boolean).join('   •   ');
+    $('rDesc').innerHTML = a.ProjectDescription ? `<div class="comment">📋 ${esc(a.ProjectDescription)}</div>` : '';
     $('rComment').innerHTML = a.Comment ? `<div class="comment">💬 ${esc(a.Comment)}</div>` : '';
     $('dRate').textContent = s+fmtMoney(a.Rate)+'/h';
     notice('submitMsg','','');
@@ -332,15 +336,12 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   const list = (activities && activities.length)
     ? '<ol>'+activities.map(x=>`<li>${esc(x)}</li>`).join('')+'</ol>'
     : '<span style="color:#777">—</span>';
-  const sign = withSign ? `
-    <div class="sign">
-      <div class="cap">Performed by:</div>
-      <div class="srow">
-        <div class="scell"><div class="sname">${esc(a.EmployeeName||a.EmployeeEmail)}</div><div class="sline">Name</div></div>
-        <div class="scell"><div class="sname">&nbsp;</div><div class="sline">Signature</div></div>
-        <div class="scell"><div class="sname">${submitted||'&nbsp;'}</div><div class="sline">Date</div></div>
-      </div>
-    </div>` : '';
+  const perf = `
+    <div class="perf">
+      <div><span class="k">Performed by:</span> ${esc(a.EmployeeName||a.EmployeeEmail)}</div>
+      <div><span class="k">Date:</span> ${submitted||'\u2014'}</div>
+      ${withSign ? `<div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>` : ''}
+    </div>`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Project Work Completion Report</title>
 <style>
   @page{ margin:20mm 18mm; }
@@ -355,10 +356,8 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   td.label{width:44%;font-weight:bold;background:#f2f2f2}
   ol{margin:2px 0 2px 18px;padding:0} li{margin:3px 0}
   .foot{margin-top:26px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;font-family:Arial,Helvetica,sans-serif}
-  .sign{margin-top:44px} .sign .cap{font-size:10pt;margin-bottom:22px}
-  .srow{display:flex;gap:36px} .scell{flex:1}
-  .sname{min-height:22px;border-bottom:1px solid #333;padding-bottom:3px}
-  .sline{font-size:9pt;color:#555;margin-top:3px;font-family:Arial,Helvetica,sans-serif}
+  .perf{margin-top:40px;font-size:11pt} .perf>div{margin:7px 0} .perf .k{font-weight:bold}
+  .sig{margin-top:26px} .sigline{border-bottom:1px solid #333;max-width:340px;height:24px} .siglbl{font-size:9pt;color:#555;margin-top:3px;font-family:Arial,Helvetica,sans-serif}
   @media print{ .no-print{display:none} body{padding:0} }
 </style></head><body>
   <div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>
@@ -370,9 +369,8 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
     <tr><td class="label" colspan="2">A brief description and a list of completed tasks for the project:</td></tr>
     <tr><td colspan="2">${list}</td></tr>
     <tr><td class="label">The total number of hours spent:</td><td>${fmtH(hours)}</td></tr>
-    <tr><td class="label">Report date:</td><td>${submitted||'&nbsp;'}</td></tr>
   </table>
-  ${sign}
+  ${perf}
   <div class="foot">CONFIDENTIAL</div>
   <script>setTimeout(function(){try{window.print();}catch(e){}},500);<\/script>
 </body></html>`;

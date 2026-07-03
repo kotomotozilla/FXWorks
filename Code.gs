@@ -17,15 +17,15 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-06-29.2';
+const BUILD = '2026-06-29.4';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { employees: 'Employees', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt'],
-  projects:    ['ProjectID', 'Name', 'Customer', 'CreatedAt', 'UpdatedAt'],
-  assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'EmployeeEmail', 'EmployeeName',
+  projects:    ['ProjectID', 'Name', 'Customer', 'Description', 'CreatedAt', 'UpdatedAt'],
+  assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
                 'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
@@ -140,7 +140,7 @@ function adminCreateProject_(d) {
   var name = trim_(d.name);
   if (!name) return { ok: false, error: 'Project name is required' };
   var now = new Date().toISOString();
-  var row = { ProjectID: Utilities.getUuid(), Name: name, Customer: trim_(d.customer), CreatedAt: now, UpdatedAt: now };
+  var row = { ProjectID: Utilities.getUuid(), Name: name, Customer: trim_(d.customer), Description: trim_(d.description), CreatedAt: now, UpdatedAt: now };
   appendRow_(SHEETS.projects, row);
   return { ok: true, project: row };
 }
@@ -156,11 +156,11 @@ function adminUpdateProject_(d) {
   var p = findRow_(SHEETS.projects, 'ProjectID', d.projectId);
   if (!p) return { ok: false, error: 'Project not found' };
   var name = trim_(d.name); if (!name) return { ok: false, error: 'Project name is required' };
-  var customer = trim_(d.customer);
-  updateRow_(SHEETS.projects, 'ProjectID', p.ProjectID, { Name: name, Customer: customer, UpdatedAt: new Date().toISOString() });
+  var customer = trim_(d.customer), desc = trim_(d.description);
+  updateRow_(SHEETS.projects, 'ProjectID', p.ProjectID, { Name: name, Customer: customer, Description: desc, UpdatedAt: new Date().toISOString() });
   // Denormalize onto assignments and entries.
   readAll_(SHEETS.assignments).forEach(function (a) {
-    if (a.ProjectID === p.ProjectID) updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { ProjectName: name, Customer: customer });
+    if (a.ProjectID === p.ProjectID) updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { ProjectName: name, Customer: customer, ProjectDescription: desc });
   });
   readAll_(SHEETS.entries).forEach(function (en) {
     if (en.ProjectID === p.ProjectID) updateRow_(SHEETS.entries, 'EntryID', en.EntryID, { ProjectName: name });
@@ -192,7 +192,7 @@ function adminAddAssignment_(d) {
   var currency = CURRENCIES.indexOf(trim_(emp.Currency)) >= 0 ? trim_(emp.Currency) : 'USD';
   var comment = trim_(d.comment), title = trim_(d.title), now = new Date().toISOString();
   var row = {
-    AssignmentID: Utilities.getUuid(), ProjectID: p.ProjectID, ProjectName: p.Name, Customer: p.Customer,
+    AssignmentID: Utilities.getUuid(), ProjectID: p.ProjectID, ProjectName: p.Name, Customer: p.Customer, ProjectDescription: p.Description,
     EmployeeEmail: email, EmployeeName: emp.FullName || '', Title: title, Currency: currency, Rate: num_(emp.Rate),
     Comment: comment, LastNotifiedComment: comment, Status: 'released', ReportedHours: '', ReportedAmount: '',
     ReleasedAt: now, SubmittedAt: '', UpdatedAt: now, CreatedAt: now
@@ -234,9 +234,13 @@ function adminReopen_(d) {
   requireAdmin_(d);
   var a = findRow_(SHEETS.assignments, 'AssignmentID', d.assignmentId);
   if (!a) return { ok: false, error: 'Report not found' };
-  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { Status: 'draft', UpdatedAt: new Date().toISOString() });
+  var comment = trim_(d.comment);
+  var upd = { Status: 'draft', UpdatedAt: new Date().toISOString() };
+  if (comment) { upd.Comment = comment; upd.LastNotifiedComment = comment; }
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
   a.Status = 'draft';
-  notifyEmployee_(a, 'reopen');   // employee can edit again; notify them
+  if (comment) a.Comment = comment;
+  notifyEmployee_(a, 'reopen');   // team member can edit again; notify them (comment included)
   return { ok: true };
 }
 
