@@ -85,6 +85,7 @@
   <main id="app" class="hidden">
     <div class="tabs">
       <button id="tab-projects" class="active" onclick="switchTab('projects')">Projects</button>
+      <button id="tab-contracts" onclick="switchTab('contracts')">Contracts</button>
       <button id="tab-counterparties" onclick="switchTab('counterparties')">Counterparties</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
     </div>
@@ -101,12 +102,51 @@
         </div>
         <div style="height:10px"></div>
         <div><label>Description</label><textarea id="p_desc" placeholder="Project scope / context (visible to team members)"></textarea></div>
+        <div style="height:10px"></div>
+        <div><label>Linked contract (optional)</label><select id="p_contract"><option value="">— none —</option></select></div>
         <div style="height:14px"></div>
         <button class="btn" id="p_btn" onclick="createProject()">Create project</button>
       </div>
       <div class="panel">
         <h2>Projects</h2>
         <div class="scroll"><table id="projTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- CONTRACTS -->
+    <section id="view-contracts" class="hidden">
+      <div class="panel">
+        <h2 id="ct_formTitle">New contract</h2>
+        <p class="muted">Number can be left blank — it is generated as <code>agr/YYYY/MM/DD-N</code> from the signing date. A sub-contract points to its general contract.</p>
+        <div id="ctErr"></div>
+        <div class="row">
+          <div><label>Number</label><input id="ct_number" placeholder="auto: agr/YYYY/MM/DD-N"></div>
+          <div style="flex:2"><label>Counterparty</label><select id="ct_cp"></select></div>
+          <div style="max-width:210px"><label>Direction</label>
+            <select id="ct_dir"><option value="incoming">Incoming (we receive)</option><option value="outgoing">Outgoing (we pay)</option></select></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div><label>Sign date</label><input id="ct_sign" type="date"></div>
+          <div><label>Start date</label><input id="ct_start" type="date"></div>
+          <div><label>End date</label><input id="ct_end" type="date"></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div><label>Amount</label><input id="ct_amount" type="number" min="0" step="0.01" placeholder="0"></div>
+          <div style="max-width:150px"><label>Currency</label>
+            <select id="ct_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
+          <div style="flex:2"><label>General (parent) contract — leave empty for a general contract</label><select id="ct_parent"></select></div>
+        </div>
+        <div style="height:10px"></div>
+        <div><label>Description</label><textarea id="ct_desc" placeholder="Subject / scope"></textarea></div>
+        <div style="height:14px"></div>
+        <button class="btn" id="ct_btn" onclick="saveContract()">Create contract</button>
+        <button class="btn ghost" id="ct_cancel" onclick="ctClear()" style="display:none">Cancel edit</button>
+      </div>
+      <div class="panel">
+        <h2>Contracts</h2>
+        <div class="scroll"><table id="ctTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
 
@@ -171,6 +211,8 @@
   </div>
   <div style="height:10px"></div>
   <div><label>Description</label><textarea id="pm_desc" placeholder="Project scope / context (visible to team members)"></textarea></div>
+  <div style="height:10px"></div>
+  <div><label>Linked contract (optional)</label><select id="pm_contract"><option value="">— none —</option></select></div>
   <div style="height:12px"></div>
   <div class="acts">
     <button class="btn sm" id="pm_save" onclick="saveProject()">Save project</button>
@@ -222,10 +264,10 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-05.1';
+const BUILD = '2026-07-05.2';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -236,7 +278,7 @@ function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return is
 function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
 
 let PIN = sessionStorage.getItem('fx_pin') || '';
-let COUNTERPARTIES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '';
+let COUNTERPARTIES = [], CONTRACTS = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '', EDIT_CT = '';
 
 async function api(action, payload={}){
   let res;
@@ -274,12 +316,15 @@ function enterApp(){
   $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
   renderWho();
   if(!BE_BUILD){ api('admin_login').then(r=>{ BE_BUILD=r.build||''; renderWho(); }).catch(()=>{}); }
-  loadCounterparties().then(loadProjects);
+  loadCounterparties().then(loadContracts).then(loadProjects);
 }
 function switchTab(t){
-  ['projects','counterparties','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties();
+  ['projects','contracts','counterparties','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts();
 }
+function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
+function ctNumber(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?c.Number:''; }
+function dirEn(d){ return d==='outgoing'?'Outgoing (we pay)':'Incoming (we receive)'; }
 function statusEn(s){return {released:'Released',recalled:'Recalled',draft:'In progress (draft)',submitted:'Submitted'}[s]||s;}
 
 // ── Counterparties ──
@@ -357,6 +402,81 @@ function editCounterparty(id){
   window.scrollTo(0,0);
 }
 
+// ── Contracts ──
+function ctCpOptions(sel){ return '<option value="">— none —</option>'+COUNTERPARTIES.map(c=>`<option value="${esc(c.CounterpartyID)}" ${String(sel)===String(c.CounterpartyID)?'selected':''}>${esc(c.Name||c.Email||'—')}</option>`).join(''); }
+function ctParentOptions(sel, excludeId){
+  const gens = CONTRACTS.filter(c=>!c.ParentContractID && String(c.ContractID)!==String(excludeId));
+  return '<option value="">— none (general contract) —</option>'+gens.map(c=>`<option value="${esc(c.ContractID)}" ${String(sel)===String(c.ContractID)?'selected':''}>${esc(c.Number)} — ${esc(cpName(c.CounterpartyID))}</option>`).join('');
+}
+function contractOptions(sel){ return '<option value="">— none —</option>'+CONTRACTS.map(c=>`<option value="${esc(c.ContractID)}" ${String(sel)===String(c.ContractID)?'selected':''}>${esc(c.Number)} — ${esc(cpName(c.CounterpartyID))}</option>`).join(''); }
+function ctClear(){
+  EDIT_CT='';
+  ['ct_number','ct_amount','ct_desc','ct_sign','ct_start','ct_end'].forEach(id=>$(id).value='');
+  $('ct_dir').value='incoming'; $('ct_currency').value='USD';
+  $('ct_cp').innerHTML=ctCpOptions(''); $('ct_parent').innerHTML=ctParentOptions('','');
+  $('ct_formTitle').textContent='New contract'; $('ct_btn').textContent='Create contract'; $('ct_cancel').style.display='none';
+  notice('ctErr','','');
+}
+async function loadContracts(){
+  try{
+    const r = await api('list_contracts'); CONTRACTS = r.contracts||[];
+    // dropdowns
+    $('ct_cp').innerHTML = ctCpOptions($('ct_cp').value);
+    $('ct_parent').innerHTML = ctParentOptions($('ct_parent').value, EDIT_CT);
+    if($('p_contract')) $('p_contract').innerHTML = contractOptions($('p_contract').value);
+    // table
+    const tb = $('ctTable').querySelector('tbody');
+    if(!CONTRACTS.length){ tb.innerHTML='<tr><td class="empty">No contracts yet.</td></tr>'; return; }
+    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th>Direction</th><th class="num">Amount</th><th>Signed</th><th>Term</th><th>Parent</th><th></th></tr>'+
+    CONTRACTS.map(c=>{const s=cur(c.Currency);return `<tr>
+      <td>${esc(c.Number)}${c.Description?`<div class="muted">${esc(String(c.Description).slice(0,60))}${String(c.Description).length>60?'…':''}</div>`:''}</td>
+      <td>${esc(cpName(c.CounterpartyID))}</td>
+      <td class="muted">${c.Direction==='outgoing'?'Outgoing':'Incoming'}</td>
+      <td class="num">${(c.Amount!==''&&c.Amount!=null)?s+money(c.Amount):'—'}</td>
+      <td class="muted">${esc(c.SignDate?fmtDate(c.SignDate):'—')}</td>
+      <td class="muted">${esc(c.StartDate?fmtDate(c.StartDate):'—')}${c.EndDate?' → '+esc(fmtDate(c.EndDate)):''}</td>
+      <td class="muted">${c.ParentContractID?esc(ctNumber(c.ParentContractID)):'—'}</td>
+      <td><div class="acts"><button class="btn ghost sm" onclick="editContract('${esc(c.ContractID)}')">Edit</button>
+        <button class="btn warn sm" onclick="delContract('${esc(c.ContractID)}','${esc(c.Number)}',this)">Delete</button></div></td></tr>`;}).join('');
+  }catch(e){ notice('ctErr','err', esc(e.message)); }
+}
+async function saveContract(){
+  notice('ctErr','','');
+  const b=$('ct_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const payload = { id:EDIT_CT, number:$('ct_number').value.trim(), counterpartyId:$('ct_cp').value, direction:$('ct_dir').value,
+    signDate:$('ct_sign').value, startDate:$('ct_start').value, endDate:$('ct_end').value,
+    amount:$('ct_amount').value, currency:$('ct_currency').value, parentContractId:$('ct_parent').value, description:$('ct_desc').value.trim() };
+  try{
+    await api(EDIT_CT?'update_contract':'create_contract', payload);
+    ctClear(); await loadContracts(); notice('ctErr','ok','Contract saved.');
+  }catch(e){ notice('ctErr','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent = EDIT_CT?'Update contract':'Create contract'; }
+}
+async function delContract(id, number, btn){
+  if(!confirm('Delete contract "'+(number||'')+'"? Links to projects and sub-contracts will be cleared.')) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('delete_contract',{id}); await loadContracts(); await loadProjects(); }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
+}
+function editContract(id){
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(id));
+  if(!c) return;
+  EDIT_CT = c.ContractID;
+  $('ct_number').value = c.Number||'';
+  $('ct_cp').innerHTML = ctCpOptions(c.CounterpartyID);
+  $('ct_dir').value = (c.Direction==='outgoing')?'outgoing':'incoming';
+  $('ct_sign').value = c.SignDate?fmtDate(c.SignDate):'';
+  $('ct_start').value = c.StartDate?fmtDate(c.StartDate):'';
+  $('ct_end').value = c.EndDate?fmtDate(c.EndDate):'';
+  $('ct_amount').value = (c.Amount===''||c.Amount==null)?'':c.Amount;
+  $('ct_currency').value = (['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0)?c.Currency:'USD';
+  $('ct_parent').innerHTML = ctParentOptions(c.ParentContractID, c.ContractID);
+  $('ct_desc').value = c.Description||'';
+  $('ct_formTitle').textContent='Edit contract'; $('ct_btn').textContent='Update contract'; $('ct_cancel').style.display='';
+  notice('ctErr','ok','Editing '+esc(c.Number)+'.');
+  switchTab('contracts'); window.scrollTo(0,0);
+}
+
 // ── Projects list ──
 async function loadProjects(){
   try{
@@ -380,8 +500,8 @@ async function createProject(){
   if(!name){ notice('projErr','err','Enter a project name.'); return; }
   const b=$('p_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    const r = await api('create_project', { name, customer:$('p_customer').value.trim(), description:$('p_desc').value.trim() });
-    $('p_name').value=''; $('p_customer').value=''; $('p_desc').value='';
+    const r = await api('create_project', { name, customer:$('p_customer').value.trim(), description:$('p_desc').value.trim(), contractId:$('p_contract').value });
+    $('p_name').value=''; $('p_customer').value=''; $('p_desc').value=''; $('p_contract').value='';
     await loadProjects(); notice('projErr','ok','Project created. Open it to add employees.');
     openProject(r.project.ProjectID);
   }catch(e){ notice('projErr','err', esc(e.message)); }
@@ -398,7 +518,7 @@ async function openProject(pid){
 function renderProjectModal(){
   const p = CURRENT.project, asgs = CURRENT.assignments||[];
   $('pm_title').textContent = p.Name;
-  $('pm_name').value = p.Name; $('pm_customer').value = p.Customer||''; $('pm_desc').value = p.Description||'';
+  $('pm_name').value = p.Name; $('pm_customer').value = p.Customer||''; $('pm_desc').value = p.Description||''; $('pm_contract').innerHTML = contractOptions(p.ContractID||'');
   notice('pm_err','','');
   // assignments
   $('pm_asgs').innerHTML = asgs.length ? asgs.map(a=>{
@@ -441,7 +561,7 @@ async function saveProject(){
   notice('pm_err','',''); const name=$('pm_name').value.trim();
   if(!name){ notice('pm_err','err','Project name is required.'); return; }
   const b=$('pm_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  try{ await api('update_project',{projectId:CURRENT.project.ProjectID, name, customer:$('pm_customer').value.trim(), description:$('pm_desc').value.trim()}); await refreshModal(); notice('pm_err','ok','Saved.'); }
+  try{ await api('update_project',{projectId:CURRENT.project.ProjectID, name, customer:$('pm_customer').value.trim(), description:$('pm_desc').value.trim(), contractId:$('pm_contract').value}); await refreshModal(); notice('pm_err','ok','Saved.'); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent='Save project'; }
 }

@@ -17,15 +17,17 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-05.1';
+const BUILD = '2026-07-05.2';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'CreatedAt'],
   employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt'],
-  projects:    ['ProjectID', 'Name', 'Customer', 'Description', 'CreatedAt', 'UpdatedAt'],
+  contracts:   ['ContractID', 'Number', 'Description', 'CounterpartyID', 'Direction', 'SignDate', 'StartDate', 'EndDate',
+                'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'ParentContractID', 'CreatedAt'],
+  projects:    ['ProjectID', 'Name', 'Customer', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
                 'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt'],
@@ -58,6 +60,11 @@ function route_(action, d) {
     case 'list_counterparties': requireAdmin_(d); ensureCounterparties_(); return { ok: true, counterparties: readAll_(SHEETS.counterparties) };
     case 'delete_counterparty': return adminDeleteCounterparty_(d);
     case 'invite_counterparty': return adminInviteCounterparty_(d);
+    // Contracts
+    case 'create_contract':    return adminCreateContract_(d);
+    case 'list_contracts':     requireAdmin_(d); return { ok: true, contracts: readAll_(SHEETS.contracts) };
+    case 'update_contract':    return adminUpdateContract_(d);
+    case 'delete_contract':    return adminDeleteContract_(d);
     // Projects
     case 'create_project':     return adminCreateProject_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
@@ -157,6 +164,69 @@ function adminDeleteCounterparty_(d) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Contracts
+// ─────────────────────────────────────────────────────────────────────────────
+function autoNumber_(sheetName, dateField, dateStr, prefix) {
+  var d = (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) ? dateStr : new Date().toISOString().slice(0, 10);
+  var p = d.split('-'), n = 0;
+  readAll_(sheetName).forEach(function (r) { if (String(r[dateField]).slice(0, 10) === d) n++; });
+  return prefix + '/' + p[0] + '/' + p[1] + '/' + p[2] + '-' + (n + 1);
+}
+function numberTaken_(sheetName, number, excludeId, idField) {
+  return readAll_(sheetName).some(function (r) {
+    return String(r.Number).trim() === number && String(r[idField]) !== String(excludeId);
+  });
+}
+function contractFields_(d) {
+  var currency = CURRENCIES.indexOf(trim_(d.currency)) >= 0 ? trim_(d.currency) : 'USD';
+  return {
+    Description: trim_(d.description), CounterpartyID: trim_(d.counterpartyId),
+    Direction: (trim_(d.direction) === 'outgoing') ? 'outgoing' : 'incoming',
+    SignDate: trim_(d.signDate), StartDate: trim_(d.startDate), EndDate: trim_(d.endDate),
+    Amount: num_(d.amount), Currency: currency, ParentContractID: trim_(d.parentContractId)
+  };
+}
+function adminCreateContract_(d) {
+  requireAdmin_(d);
+  var f = contractFields_(d);
+  var number = trim_(d.number);
+  if (!number) number = autoNumber_(SHEETS.contracts, 'SignDate', f.SignDate, 'agr');
+  else if (numberTaken_(SHEETS.contracts, number, '', 'ContractID')) return { ok: false, error: 'Contract number already exists' };
+  var row = {
+    ContractID: Utilities.getUuid(), Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID,
+    Direction: f.Direction, SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate,
+    Amount: f.Amount, Currency: f.Currency, AmountUSD: '', FxRate: '', FxAsOf: '',
+    ParentContractID: f.ParentContractID, CreatedAt: new Date().toISOString()
+  };
+  appendRow_(SHEETS.contracts, row);
+  return { ok: true, contract: row };
+}
+function adminUpdateContract_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.id), c = findRow_(SHEETS.contracts, 'ContractID', id);
+  if (!c) return { ok: false, error: 'Contract not found' };
+  var f = contractFields_(d);
+  if (f.ParentContractID === id) return { ok: false, error: 'A contract cannot be its own parent' };
+  var number = trim_(d.number) || c.Number;
+  if (numberTaken_(SHEETS.contracts, number, id, 'ContractID')) return { ok: false, error: 'Contract number already exists' };
+  updateRow_(SHEETS.contracts, 'ContractID', id, {
+    Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID, Direction: f.Direction,
+    SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate, Amount: f.Amount, Currency: f.Currency,
+    ParentContractID: f.ParentContractID
+  });
+  return { ok: true };
+}
+function adminDeleteContract_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.id);
+  // Clear references so nothing dangles.
+  readAll_(SHEETS.projects).forEach(function (p) { if (String(p.ContractID) === id) updateRow_(SHEETS.projects, 'ProjectID', p.ProjectID, { ContractID: '' }); });
+  readAll_(SHEETS.contracts).forEach(function (c) { if (String(c.ParentContractID) === id) updateRow_(SHEETS.contracts, 'ContractID', c.ContractID, { ParentContractID: '' }); });
+  deleteRowsWhere_(SHEETS.contracts, 'ContractID', id);
+  return { ok: true };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Projects
 // ─────────────────────────────────────────────────────────────────────────────
 function adminCreateProject_(d) {
@@ -164,7 +234,7 @@ function adminCreateProject_(d) {
   var name = trim_(d.name);
   if (!name) return { ok: false, error: 'Project name is required' };
   var now = new Date().toISOString();
-  var row = { ProjectID: Utilities.getUuid(), Name: name, Customer: trim_(d.customer), Description: trim_(d.description), CreatedAt: now, UpdatedAt: now };
+  var row = { ProjectID: Utilities.getUuid(), Name: name, Customer: trim_(d.customer), Description: trim_(d.description), ContractID: trim_(d.contractId), CreatedAt: now, UpdatedAt: now };
   appendRow_(SHEETS.projects, row);
   return { ok: true, project: row };
 }
@@ -181,7 +251,9 @@ function adminUpdateProject_(d) {
   if (!p) return { ok: false, error: 'Project not found' };
   var name = trim_(d.name); if (!name) return { ok: false, error: 'Project name is required' };
   var customer = trim_(d.customer), desc = trim_(d.description);
-  updateRow_(SHEETS.projects, 'ProjectID', p.ProjectID, { Name: name, Customer: customer, Description: desc, UpdatedAt: new Date().toISOString() });
+  var pupd = { Name: name, Customer: customer, Description: desc, UpdatedAt: new Date().toISOString() };
+  if (d.contractId !== undefined) pupd.ContractID = trim_(d.contractId);
+  updateRow_(SHEETS.projects, 'ProjectID', p.ProjectID, pupd);
   // Denormalize onto assignments and entries.
   readAll_(SHEETS.assignments).forEach(function (a) {
     if (a.ProjectID === p.ProjectID) updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { ProjectName: name, Customer: customer, ProjectDescription: desc });
@@ -497,7 +569,15 @@ function readAll_(name) {
 }
 function appendRow_(name, obj) {
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
-  sh.appendRow(head.map(function (h) { return obj[h] != null ? obj[h] : ''; }));
+  var arr = head.map(function (h) { return obj[h] != null ? obj[h] : ''; });
+  sh.appendRow(arr);
+  // Keep plain YYYY-MM-DD dates as text (no timezone-shifted serials).
+  var r = sh.getLastRow();
+  for (var i = 0; i < arr.length; i++) {
+    if (typeof arr[i] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(arr[i])) {
+      var cell = sh.getRange(r, i + 1); cell.setNumberFormat('@'); cell.setValue(arr[i]);
+    }
+  }
 }
 function findRow_(name, idField, idValue) {
   if (idValue === '' || idValue == null) return null;
