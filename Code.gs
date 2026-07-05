@@ -17,12 +17,13 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-06-29.6';
+const BUILD = '2026-07-05.1';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { employees: 'Employees', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
+  counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'CreatedAt'],
   employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt'],
   projects:    ['ProjectID', 'Name', 'Customer', 'Description', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
@@ -31,7 +32,7 @@ const HEADERS = {
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
 
-const CURRENCIES = ['USD', 'EUR'];
+const CURRENCIES = ['USD', 'EUR', 'AED', 'SGD'];
 // Statuses: released (active, visible) | recalled (hidden) | draft | submitted
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,10 +54,10 @@ function route_(action, d) {
   switch (action) {
     case 'admin_login':        requireAdmin_(d); return { ok: true, build: BUILD };
     // Employees
-    case 'create_employee':    return adminCreateEmployee_(d);
-    case 'list_employees':     requireAdmin_(d); return { ok: true, employees: readAll_(SHEETS.employees) };
-    case 'delete_employee':    return adminDeleteEmployee_(d);
-    case 'invite_employee':    return adminInvite_(d);
+    case 'save_counterparty':  return adminSaveCounterparty_(d);
+    case 'list_counterparties': requireAdmin_(d); ensureCounterparties_(); return { ok: true, counterparties: readAll_(SHEETS.counterparties) };
+    case 'delete_counterparty': return adminDeleteCounterparty_(d);
+    case 'invite_counterparty': return adminInviteCounterparty_(d);
     // Projects
     case 'create_project':     return adminCreateProject_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
@@ -85,50 +86,73 @@ function route_(action, d) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Employees
 // ─────────────────────────────────────────────────────────────────────────────
-function adminCreateEmployee_(d) {
-  requireAdmin_(d);
-  var email = normEmail_(d.email);
-  if (!isEmail_(email)) return { ok: false, error: 'Invalid email' };
-  var currency = CURRENCIES.indexOf(trim_(d.currency)) >= 0 ? trim_(d.currency) : 'USD';
-  var rate = num_(d.rate), pwd = trim_(d.password), name = trim_(d.fullName);
-  var orig = normEmail_(d.originalEmail);
+function ensureCounterparties_() {
+  getSheet_(SHEETS.counterparties);
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('cp_migrated')) return;
+  var rows = readAll_(SHEETS.counterparties);
+  if (rows.length) { props.setProperty('cp_migrated', '1'); return; }
+  // One-time migration from the old Employees directory (kept as a backup).
+  var emps = readAll_(SHEETS.employees);
+  emps.forEach(function (e) {
+    appendRow_(SHEETS.counterparties, {
+      CounterpartyID: Utilities.getUuid(), Name: e.FullName || e.Email, Type: 'individual',
+      Address: '', Email: normEmail_(e.Email), Phone: '', Password: e.Password || '',
+      HasReportingAccess: 'yes', Rate: e.Rate || '', Currency: e.Currency || 'USD',
+      CreatedAt: e.CreatedAt || new Date().toISOString()
+    });
+  });
+  props.setProperty('cp_migrated', '1');
+}
 
-  // Editing an existing record whose email is being changed.
-  if (orig && orig !== email) {
-    var rec = findRow_(SHEETS.employees, 'Email', orig);
-    if (!rec) return { ok: false, error: 'Original team-member record not found' };
-    if (findRow_(SHEETS.employees, 'Email', email)) return { ok: false, error: 'Another team member already uses this email' };
-    var upd = { Email: email, FullName: name, Rate: rate, Currency: currency };
-    if (pwd) upd.Password = pwd;
-    updateRow_(SHEETS.employees, 'Email', orig, upd);
-    // Cascade the email/name change onto assignments and entries.
-    readAll_(SHEETS.assignments).forEach(function (a) {
-      if (normEmail_(a.EmployeeEmail) === orig) updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { EmployeeEmail: email, EmployeeName: name });
+function adminSaveCounterparty_(d) {
+  requireAdmin_(d);
+  ensureCounterparties_();
+  var name = trim_(d.name);
+  if (!name) return { ok: false, error: 'Name is required' };
+  var type = (trim_(d.type) === 'business') ? 'business' : 'individual';
+  var email = normEmail_(d.email);
+  var access = truthy_(d.hasAccess) ? 'yes' : 'no';
+  var pwd = trim_(d.password), rate = num_(d.rate);
+  var currency = CURRENCIES.indexOf(trim_(d.currency)) >= 0 ? trim_(d.currency) : 'USD';
+  var phone = trim_(d.phone), address = trim_(d.address), id = trim_(d.id);
+
+  if (access === 'yes' && !isEmail_(email)) return { ok: false, error: 'Reporting access requires a valid email' };
+  if (email) {
+    var clash = readAll_(SHEETS.counterparties).some(function (c) {
+      return normEmail_(c.Email) === email && String(c.CounterpartyID) !== String(id);
     });
-    readAll_(SHEETS.entries).forEach(function (en) {
-      if (normEmail_(en.EmployeeEmail) === orig) updateRow_(SHEETS.entries, 'EntryID', en.EntryID, { EmployeeEmail: email });
-    });
-    return { ok: true, updated: true, emailChanged: true };
+    if (clash) return { ok: false, error: 'Another counterparty already uses this email' };
   }
 
-  var existing = findRow_(SHEETS.employees, 'Email', email);
-  if (existing) {
-    var upd2 = { FullName: name, Rate: rate, Currency: currency };
-    if (pwd) upd2.Password = pwd;                 // blank keeps the old password
-    updateRow_(SHEETS.employees, 'Email', email, upd2);
+  if (id) {
+    var rec = findRow_(SHEETS.counterparties, 'CounterpartyID', id);
+    if (!rec) return { ok: false, error: 'Counterparty not found' };
+    var oldEmail = normEmail_(rec.Email);
+    var upd = { Name: name, Type: type, Address: address, Email: email, Phone: phone, HasReportingAccess: access, Rate: rate, Currency: currency };
+    if (pwd) upd.Password = pwd;                 // blank keeps the old password
+    updateRow_(SHEETS.counterparties, 'CounterpartyID', id, upd);
+    // Reporting link is by email — cascade email/name changes onto assignments and entries.
+    if (oldEmail && oldEmail !== email) {
+      readAll_(SHEETS.assignments).forEach(function (a) { if (normEmail_(a.EmployeeEmail) === oldEmail) updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { EmployeeEmail: email, EmployeeName: name }); });
+      readAll_(SHEETS.entries).forEach(function (en) { if (normEmail_(en.EmployeeEmail) === oldEmail) updateRow_(SHEETS.entries, 'EntryID', en.EntryID, { EmployeeEmail: email }); });
+    } else if (email) {
+      readAll_(SHEETS.assignments).forEach(function (a) { if (normEmail_(a.EmployeeEmail) === email) updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { EmployeeName: name }); });
+    }
     return { ok: true, updated: true };
   }
-  appendRow_(SHEETS.employees, {
-    Email: email, FullName: name, Rate: rate, Currency: currency,
-    Password: pwd, CreatedAt: new Date().toISOString()
+
+  appendRow_(SHEETS.counterparties, {
+    CounterpartyID: Utilities.getUuid(), Name: name, Type: type, Address: address, Email: email, Phone: phone,
+    Password: pwd, HasReportingAccess: access, Rate: rate, Currency: currency, CreatedAt: new Date().toISOString()
   });
   return { ok: true };
 }
-function adminDeleteEmployee_(d) {
+
+function adminDeleteCounterparty_(d) {
   requireAdmin_(d);
-  var email = normEmail_(d.email);
-  var sh = getSheet_(SHEETS.employees), values = sh.getDataRange().getValues(), col = values[0].indexOf('Email');
-  for (var i = values.length - 1; i >= 1; i--) if (normEmail_(values[i][col]) === email) sh.deleteRow(i + 1);
+  ensureCounterparties_();
+  deleteRowsWhere_(SHEETS.counterparties, 'CounterpartyID', trim_(d.id));
   return { ok: true };
 }
 
@@ -181,19 +205,21 @@ function adminDeleteProject_(d) {
 // ─────────────────────────────────────────────────────────────────────────────
 function adminAddAssignment_(d) {
   requireAdmin_(d);
+  ensureCounterparties_();
   var p = findRow_(SHEETS.projects, 'ProjectID', d.projectId);
   if (!p) return { ok: false, error: 'Project not found' };
   var email = normEmail_(d.email);
   if (!isEmail_(email)) return { ok: false, error: 'Select a team member' };
-  var emp = findRow_(SHEETS.employees, 'Email', email);
-  if (!emp) return { ok: false, error: 'Team member not found in the directory' };
+  var cp = findRow_(SHEETS.counterparties, 'Email', email);
+  if (!cp) return { ok: false, error: 'Team member not found in the directory' };
+  if (String(trim_(cp.HasReportingAccess)).toLowerCase() !== 'yes') return { ok: false, error: 'This counterparty has no reporting access' };
 
   // Multiple reports per (project × team member) are allowed; they are distinguished by Title.
-  var currency = CURRENCIES.indexOf(trim_(emp.Currency)) >= 0 ? trim_(emp.Currency) : 'USD';
+  var currency = CURRENCIES.indexOf(trim_(cp.Currency)) >= 0 ? trim_(cp.Currency) : 'USD';
   var comment = trim_(d.comment), title = trim_(d.title), now = new Date().toISOString();
   var row = {
     AssignmentID: Utilities.getUuid(), ProjectID: p.ProjectID, ProjectName: p.Name, Customer: p.Customer, ProjectDescription: p.Description,
-    EmployeeEmail: email, EmployeeName: emp.FullName || '', Title: title, Currency: currency, Rate: num_(emp.Rate),
+    EmployeeEmail: email, EmployeeName: cp.Name || '', Title: title, Currency: currency, Rate: num_(cp.Rate),
     Comment: comment, LastNotifiedComment: comment, Status: 'released', ReportedHours: '', ReportedAmount: '',
     ReleasedAt: now, SubmittedAt: '', UpdatedAt: now, CreatedAt: now
   };
@@ -310,23 +336,25 @@ function mailEmployeeReport_(a, mode) {
   MailApp.sendEmail({ to: a.EmployeeEmail, subject: subject, htmlBody: html });
 }
 
-function adminInvite_(d) {
+function adminInviteCounterparty_(d) {
   requireAdmin_(d);
-  var emp = findRow_(SHEETS.employees, 'Email', normEmail_(d.email));
-  if (!emp) return { ok: false, error: 'Team member not found' };
-  var link = CONFIG.EMPLOYEE_BASE_URL + '?email=' + encodeURIComponent(emp.Email);
-  var hello = emp.FullName ? ('Hello, ' + esc_(emp.FullName) + '!') : 'Hello!';
-  var pwd = trim_(emp.Password);
+  ensureCounterparties_();
+  var cp = findRow_(SHEETS.counterparties, 'Email', normEmail_(d.email));
+  if (!cp) return { ok: false, error: 'Counterparty not found' };
+  if (String(trim_(cp.HasReportingAccess)).toLowerCase() !== 'yes') return { ok: false, error: 'This counterparty has no reporting access' };
+  var link = CONFIG.EMPLOYEE_BASE_URL + '?email=' + encodeURIComponent(cp.Email);
+  var hello = cp.Name ? ('Hello, ' + esc_(cp.Name) + '!') : 'Hello!';
+  var pwd = trim_(cp.Password);
   var pwdLine = pwd ? '<p>Password: <b>' + esc_(pwd) + '</b></p>' : '<p>Your administrator will share your password separately.</p>';
   var html =
     '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#15202B;line-height:1.6">' +
     '<p>' + hello + '</p>' +
     '<p>You have access to the ' + esc_(CONFIG.COMPANY_NAME) + ' reporting page, where you can fill in and submit your work reports.</p>' +
-    '<p>Login email: <b>' + esc_(emp.Email) + '</b></p>' + pwdLine +
+    '<p>Login email: <b>' + esc_(cp.Email) + '</b></p>' + pwdLine +
     '<p><a href="' + link + '" style="display:inline-block;background:#2563A8;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px">Open reporting page</a></p>' +
     '<p style="color:#5B6671;font-size:12px">If the button does not work, copy this link:<br>' + link + '</p>' +
     '<p style="color:#5B6671;font-size:12px">' + esc_(CONFIG.COMPANY_NAME) + '</p></div>';
-  MailApp.sendEmail({ to: emp.Email, subject: 'Access to ' + CONFIG.COMPANY_NAME + ' reporting', htmlBody: html });
+  MailApp.sendEmail({ to: cp.Email, subject: 'Access to ' + CONFIG.COMPANY_NAME + ' reporting', htmlBody: html });
   return { ok: true };
 }
 
@@ -344,10 +372,13 @@ function adminRemind_(d) {
 // Employee (email + password)
 // ─────────────────────────────────────────────────────────────────────────────
 function verifyEmployee_(d) {
+  ensureCounterparties_();
   var email = normEmail_(d.email), pwd = trim_(d.password);
-  var e = findRow_(SHEETS.employees, 'Email', email);
-  if (!e || String(trim_(e.Password)) !== String(pwd) || trim_(e.Password) === '') return null;
-  return e;
+  var c = findRow_(SHEETS.counterparties, 'Email', email);
+  if (!c) return null;
+  if (String(trim_(c.HasReportingAccess)).toLowerCase() !== 'yes') return null;
+  if (trim_(c.Password) === '' || String(trim_(c.Password)) !== String(pwd)) return null;
+  return c;
 }
 function employeeList_(d) {
   var emp = verifyEmployee_(d);
@@ -512,14 +543,16 @@ function jsonOut_(obj, e) {
   return ContentService.createTextOutput(txt).setMimeType(ContentService.MimeType.JSON);
 }
 function trim_(v) { return v == null ? '' : String(v).trim(); }
+function truthy_(v) { v = String(v == null ? '' : v).toLowerCase().trim(); return v === 'true' || v === 'yes' || v === '1' || v === 'on'; }
 function normEmail_(v) { return trim_(v).toLowerCase(); }
 function isEmail_(v) { return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v); }
 function num_(v) { var n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? n : 0; }
 function round2_(n) { return Math.round(n * 100) / 100; }
-function curSym_(c) { return c === 'EUR' ? '€' : '$'; }
+function curSym_(c) { return c === 'EUR' ? '€' : c === 'AED' ? 'AED ' : c === 'SGD' ? 'S$' : '$'; }
 function esc_(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
 function setup() {
-  getSheet_(SHEETS.employees); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
+  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.employees); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
+  ensureCounterparties_();
   SpreadsheetApp.getActive().toast('Sheets created.');
 }

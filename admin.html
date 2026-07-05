@@ -85,7 +85,7 @@
   <main id="app" class="hidden">
     <div class="tabs">
       <button id="tab-projects" class="active" onclick="switchTab('projects')">Projects</button>
-      <button id="tab-employees" onclick="switchTab('employees')">Team members</button>
+      <button id="tab-counterparties" onclick="switchTab('counterparties')">Counterparties</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
     </div>
 
@@ -110,29 +110,42 @@
       </div>
     </section>
 
-    <!-- EMPLOYEES -->
-    <section id="view-employees" class="hidden">
+    <!-- COUNTERPARTIES -->
+    <section id="view-counterparties" class="hidden">
       <div class="panel">
-        <h2>Add team member</h2>
-        <p class="muted">Set a password here — the team member uses email + password to sign in. Re-adding the same email updates the record (leave password blank to keep it).</p>
-        <div id="empErr"></div>
+        <h2>Add counterparty</h2>
+        <p class="muted">Businesses or individuals. Tick "reporting access" for people who submit reports — they'll sign in with email + password and can be added to projects.</p>
+        <div id="cpErr"></div>
         <div class="row">
-          <div style="flex:2"><label>Full name</label><input id="e_name" placeholder="John A. Smith"></div>
-          <div style="flex:2"><label>Email *</label><input id="e_email" type="email" placeholder="name@company.com"></div>
+          <div style="flex:2"><label>Name *</label><input id="c_name" placeholder="John A. Smith / Acme Ltd"></div>
+          <div style="max-width:170px"><label>Type</label>
+            <select id="c_type"><option value="individual">Individual</option><option value="business">Business</option></select></div>
         </div>
         <div style="height:10px"></div>
         <div class="row">
-          <div><label>Rate per hour</label><input id="e_rate" type="number" min="0" step="0.01" placeholder="0"></div>
-          <div style="max-width:130px"><label>Currency</label>
-            <select id="e_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option></select></div>
-          <div><label>Password *</label><input id="e_pass" type="text" placeholder="set a password"></div>
+          <div style="flex:2"><label>Email</label><input id="c_email" type="email" placeholder="name@company.com"></div>
+          <div><label>Phone</label><input id="c_phone" placeholder="+971…"></div>
+        </div>
+        <div style="height:10px"></div>
+        <div><label>Address</label><textarea id="c_address" placeholder="Optional"></textarea></div>
+        <div style="height:10px"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)">
+          <input type="checkbox" id="c_access" style="width:auto" onchange="cpAccessToggle()"> Has access to the reporting system</label>
+        <div id="c_reporting" class="hidden">
+          <div style="height:10px"></div>
+          <div class="row">
+            <div><label>Rate per hour</label><input id="c_rate" type="number" min="0" step="0.01" placeholder="0"></div>
+            <div style="max-width:150px"><label>Currency</label>
+              <select id="c_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
+            <div><label>Password</label><input id="c_pass" type="text" placeholder="set a password"></div>
+          </div>
         </div>
         <div style="height:14px"></div>
-        <button class="btn" id="e_btn" onclick="createEmployee()">Save team member</button>
+        <button class="btn" id="c_btn" onclick="saveCounterparty()">Save counterparty</button>
       </div>
       <div class="panel">
-        <h2>Team members</h2>
-        <div class="scroll"><table id="empTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
+        <h2>Counterparties</h2>
+        <div class="scroll"><table id="cpTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
 
@@ -209,10 +222,10 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
-const SYM = {USD:'$', EUR:'€'};
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
+const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-06-29.6';
+const BUILD = '2026-07-05.1';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -223,7 +236,7 @@ function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return is
 function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
 
 let PIN = sessionStorage.getItem('fx_pin') || '';
-let EMPLOYEES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_ORIG = '';
+let COUNTERPARTIES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '';
 
 async function api(action, payload={}){
   let res;
@@ -261,66 +274,86 @@ function enterApp(){
   $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
   renderWho();
   if(!BE_BUILD){ api('admin_login').then(r=>{ BE_BUILD=r.build||''; renderWho(); }).catch(()=>{}); }
-  loadEmployees().then(loadProjects);
+  loadCounterparties().then(loadProjects);
 }
 function switchTab(t){
-  ['projects','employees','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='employees') loadEmployees();
+  ['projects','counterparties','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties();
 }
 function statusEn(s){return {released:'Released',recalled:'Recalled',draft:'In progress (draft)',submitted:'Submitted'}[s]||s;}
 
-// ── Employees ──
-async function loadEmployees(){
-  try{
-    const r = await api('list_employees'); EMPLOYEES = r.employees;
-    const tb = $('empTable').querySelector('tbody');
-    if(!EMPLOYEES.length){ tb.innerHTML='<tr><td class="empty">No team members yet.</td></tr>'; }
-    else{
-      tb.innerHTML='<tr><th>Full name</th><th>Email</th><th class="num">Rate</th><th>Password</th><th></th></tr>'+
-      EMPLOYEES.map(e=>{const s=cur(e.Currency);return `<tr>
-        <td>${esc(e.FullName||'—')}</td><td>${esc(e.Email)}</td>
-        <td class="num">${s}${money(e.Rate)}/h</td>
-        <td class="muted">${esc(e.Password||'—')}</td>
-        <td><div class="acts"><button class="btn ghost sm" onclick="editEmployee('${esc(e.Email)}')">Edit</button>
-          <button class="btn ghost sm" onclick="inviteEmployee('${esc(e.Email)}',this)">Invite</button>
-          <button class="btn warn sm" onclick="delEmployee('${esc(e.Email)}', this)">Delete</button></div></td></tr>`;}).join('');
-    }
-  }catch(e){ notice('empErr','err', esc(e.message)); }
+// ── Counterparties ──
+function cpAccessToggle(){ $('c_reporting').classList.toggle('hidden', !$('c_access').checked); }
+function cpClear(){
+  EDIT_CP='';
+  ['c_name','c_email','c_phone','c_address','c_rate','c_pass'].forEach(id=>$(id).value='');
+  $('c_type').value='individual'; $('c_currency').value='USD'; $('c_access').checked=false;
+  $('c_pass').placeholder='set a password'; cpAccessToggle(); $('c_btn').textContent='Save counterparty';
 }
-async function createEmployee(){
-  notice('empErr','',''); const email=$('e_email').value.trim();
-  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('empErr','err','Enter a valid email.'); return; }
-  const b=$('e_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+async function loadCounterparties(){
   try{
-    await api('create_employee', { email, originalEmail:EDIT_ORIG, fullName:$('e_name').value.trim(), rate:$('e_rate').value, currency:$('e_currency').value, password:$('e_pass').value });
-    ['e_name','e_email','e_rate','e_pass'].forEach(id=>$(id).value=''); $('e_pass').placeholder='set a password'; EDIT_ORIG='';
-    await loadEmployees(); notice('empErr','ok','Team member saved.');
-  }catch(e){ notice('empErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Save team member'; }
+    const r = await api('list_counterparties'); COUNTERPARTIES = r.counterparties||[];
+    const tb = $('cpTable').querySelector('tbody');
+    if(!COUNTERPARTIES.length){ tb.innerHTML='<tr><td class="empty">No counterparties yet.</td></tr>'; return; }
+    tb.innerHTML='<tr><th>Name</th><th>Type</th><th>Email</th><th>Reporting</th><th class="num">Rate</th><th></th></tr>'+
+    COUNTERPARTIES.map(c=>{
+      const access = String(c.HasReportingAccess).toLowerCase()==='yes';
+      const s=cur(c.Currency);
+      const rate = access && c.Rate!=='' && c.Rate!=null ? `${s}${money(c.Rate)}/h` : '—';
+      const inviteBtn = access ? `<button class="btn ghost sm" onclick="inviteCounterparty('${esc(c.Email)}',this)">Invite</button>` : '';
+      return `<tr>
+        <td>${esc(c.Name||'—')}</td>
+        <td class="muted">${c.Type==='business'?'Business':'Individual'}</td>
+        <td>${esc(c.Email||'—')}</td>
+        <td>${access?'<span class="tag submitted">yes</span>':'<span class="muted">no</span>'}</td>
+        <td class="num">${rate}</td>
+        <td><div class="acts"><button class="btn ghost sm" onclick="editCounterparty('${esc(c.CounterpartyID)}')">Edit</button>
+          ${inviteBtn}
+          <button class="btn warn sm" onclick="delCounterparty('${esc(c.CounterpartyID)}','${esc(c.Name||'')}',this)">Delete</button></div></td></tr>`;
+    }).join('');
+  }catch(e){ notice('cpErr','err', esc(e.message)); }
 }
-async function delEmployee(email, btn){
-  if(!confirm('Delete this team member from the directory? Existing reports remain.')) return;
+async function saveCounterparty(){
+  notice('cpErr','',''); const name=$('c_name').value.trim();
+  if(!name){ notice('cpErr','err','Name is required.'); return; }
+  const access=$('c_access').checked;
+  const email=$('c_email').value.trim();
+  if(access && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('cpErr','err','Reporting access requires a valid email.'); return; }
+  const b=$('c_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  try{
+    await api('save_counterparty', { id:EDIT_CP, name, type:$('c_type').value, email, phone:$('c_phone').value.trim(),
+      address:$('c_address').value.trim(), hasAccess:access, password:$('c_pass').value, rate:$('c_rate').value, currency:$('c_currency').value });
+    cpClear(); await loadCounterparties(); notice('cpErr','ok','Counterparty saved.');
+  }catch(e){ notice('cpErr','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Save counterparty'; }
+}
+async function delCounterparty(id, name, btn){
+  if(!confirm('Delete "'+(name||'this counterparty')+'" from the directory? Existing reports remain.')) return;
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('delete_employee',{email}); await loadEmployees(); }
+  try{ await api('delete_counterparty',{id}); await loadCounterparties(); }
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
 }
-async function inviteEmployee(email, btn){
+async function inviteCounterparty(email, btn){
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('invite_employee',{email}); notice('empErr','ok','Invite sent to '+esc(email)+'.'); btn.textContent='Invite'; }
-  catch(e){ notice('empErr','err', esc(e.message)); btn.textContent='Invite'; }
+  try{ await api('invite_counterparty',{email}); notice('cpErr','ok','Invite sent to '+esc(email)+'.'); btn.textContent='Invite'; }
+  catch(e){ notice('cpErr','err', esc(e.message)); btn.textContent='Invite'; }
   finally{ btn.disabled=false; }
 }
-function editEmployee(email){
-  const e = EMPLOYEES.find(x=>String(x.Email).toLowerCase()===String(email).toLowerCase());
-  if(!e) return;
-  EDIT_ORIG = e.Email;
-  $('e_name').value = e.FullName||'';
-  $('e_email').value = e.Email;
-  $('e_rate').value = (e.Rate===''||e.Rate==null)?'':e.Rate;
-  $('e_currency').value = (e.Currency==='EUR'?'EUR':'USD');
-  $('e_pass').value = '';
-  $('e_pass').placeholder = 'leave blank to keep current';
-  notice('empErr','ok','Editing '+esc(e.Email)+' — change any field (including email) and Save. Leave password blank to keep it.');
+function editCounterparty(id){
+  const c = COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id));
+  if(!c) return;
+  EDIT_CP = c.CounterpartyID;
+  $('c_name').value = c.Name||'';
+  $('c_type').value = (c.Type==='business')?'business':'individual';
+  $('c_email').value = c.Email||'';
+  $('c_phone').value = c.Phone||'';
+  $('c_address').value = c.Address||'';
+  $('c_access').checked = String(c.HasReportingAccess).toLowerCase()==='yes';
+  $('c_rate').value = (c.Rate===''||c.Rate==null)?'':c.Rate;
+  $('c_currency').value = (['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0)?c.Currency:'USD';
+  $('c_pass').value=''; $('c_pass').placeholder='leave blank to keep current';
+  cpAccessToggle(); $('c_btn').textContent='Update counterparty';
+  notice('cpErr','ok','Editing '+esc(c.Name||c.Email||'')+' — change any field and Save. Leave password blank to keep it.');
   window.scrollTo(0,0);
 }
 
@@ -395,10 +428,11 @@ function renderProjectModal(){
       </div>
     </div>`;
   }).join('') : '<p class="empty">No employees added yet.</p>';
-  // add-team-member dropdown (multiple reports per person are allowed, so list everyone)
-  $('pm_addEmp').innerHTML = EMPLOYEES.length
-    ? '<option value="">— select —</option>'+EMPLOYEES.map(e=>`<option value="${esc(e.Email)}">${esc(e.FullName||e.Email)} — ${esc(e.Email)}</option>`).join('')
-    : '<option value="">No team members in the directory</option>';
+  // add-team-member dropdown: only counterparties with reporting access (multiple reports per person allowed)
+  const rep = COUNTERPARTIES.filter(c=>String(c.HasReportingAccess).toLowerCase()==='yes' && c.Email);
+  $('pm_addEmp').innerHTML = rep.length
+    ? '<option value="">— select —</option>'+rep.map(c=>`<option value="${esc(c.Email)}">${esc(c.Name||c.Email)} — ${esc(c.Email)}</option>`).join('')
+    : '<option value="">No counterparties with reporting access</option>';
   $('pm_addComment').value=''; if($('pm_addTitle')) $('pm_addTitle').value='';
 }
 async function refreshModal(){ const r = await api('get_project',{projectId:CURRENT.project.ProjectID}); CURRENT=r; renderProjectModal(); loadProjects(); }

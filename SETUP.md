@@ -46,7 +46,7 @@ Check: open that URL in a browser — it should return `{"ok":true,"service":"fr
 
 **Administrator** (`admin.html`):
 1. Sign in with the PIN.
-2. **Employees** → add people: full name, email, rate, currency, and a **password** (the employee signs in with email + password). Re-adding the same email updates the record; leave password blank to keep the old one.
+2. **Counterparties** → the directory of businesses and individuals. Tick **"Has access to the reporting system"** for people who submit reports and give them rate, currency and a **password** (they sign in with email + password). Only counterparties with reporting access can be added to a project. (Your old Employees list is migrated here automatically on first run; the Employees tab is kept in the sheet as a backup.)
 3. **Projects** → create a project with just **name** and **customer**.
 4. Open the project (**Open**) to manage it:
    - **Add team member**: pick from the directory, an optional **report title** (to tell apart several reports of the same person, e.g. "May 2026" / "Phase 1") and a comment, then **Add & notify**. The same person can be added several times — each one is a separate report.
@@ -87,7 +87,8 @@ An employee is emailed only when they are **added** to a project, or when their 
 
 ## Data model (sheet tabs)
 
-- **Employees**: full name, email, rate, currency, password.
+- **Counterparties**: name, type (business/individual), address, email, phone, password, reporting-access flag, rate, currency. Reporting "team members" are the counterparties with reporting access.
+- **Employees**: legacy directory, kept as a backup after migration to Counterparties.
 - **Projects**: name, customer (one row per project).
 - **Assignments**: one row per (project × employee) — employee, rate/currency, comment, status, and (once submitted) reported hours and amount.
 - **Entries**: activity detail — one row per activity of a report.
