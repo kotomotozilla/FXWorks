@@ -30,7 +30,7 @@
   .btn.ghost{background:#fff;color:var(--accent);border:1px solid var(--line)} .btn.ghost:hover{border-color:var(--accent)}
   .btn.warn{background:#fff;color:var(--warn);border:1px solid #e6c3ba} .btn.warn:hover{border-color:var(--warn)}
   .btn.sm{padding:6px 11px;font-size:13px;border-radius:8px}
-  .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:140px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1 1 150px;min-width:0}
   .panel{border:1px solid var(--line);border-radius:14px;padding:18px;background:#fff;margin:0 0 18px}
   .tabs{display:flex;gap:4px;margin:0 0 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
   .tabs button{background:none;border:0;cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;color:var(--muted);padding:10px 14px;border-bottom:2px solid transparent;margin-bottom:-1px}
@@ -99,12 +99,14 @@
         <div id="projErr"></div>
         <div class="row">
           <div style="flex:2"><label>Project name *</label><input id="p_name" placeholder="VHF upgrade, Almaty"></div>
-          <div style="flex:2"><label>Customer</label><input id="p_customer" placeholder="SkyGrid"></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div style="flex:2"><label>Contract (optional)</label><select id="p_contract" onchange="projContractChange('p')"><option value="">— none —</option></select></div>
+          <div style="flex:2"><label>Counterparty *</label><select id="p_cp" onchange="projCpChange('p')"></select></div>
         </div>
         <div style="height:10px"></div>
         <div><label>Description</label><textarea id="p_desc" placeholder="Project scope / context (visible to team members)"></textarea></div>
-        <div style="height:10px"></div>
-        <div><label>Linked contract (optional)</label><select id="p_contract"><option value="">— none —</option></select></div>
         <div style="height:14px"></div>
         <button class="btn" id="p_btn" onclick="createProject()">Create project</button>
       </div>
@@ -241,12 +243,14 @@
   <div id="pm_err"></div>
   <div class="row">
     <div style="flex:2"><label>Project name</label><input id="pm_name"></div>
-    <div style="flex:2"><label>Customer</label><input id="pm_customer"></div>
+  </div>
+  <div style="height:10px"></div>
+  <div class="row">
+    <div style="flex:2"><label>Contract (optional)</label><select id="pm_contract" onchange="projContractChange('pm')"><option value="">— none —</option></select></div>
+    <div style="flex:2"><label>Counterparty *</label><select id="pm_cp" onchange="projCpChange('pm')"></select></div>
   </div>
   <div style="height:10px"></div>
   <div><label>Description</label><textarea id="pm_desc" placeholder="Project scope / context (visible to team members)"></textarea></div>
-  <div style="height:10px"></div>
-  <div><label>Linked contract (optional)</label><select id="pm_contract"><option value="">— none —</option></select></div>
   <div style="height:12px"></div>
   <div class="acts">
     <button class="btn sm" id="pm_save" onclick="saveProject()">Save project</button>
@@ -268,6 +272,14 @@
 </div></div>
 
 <!-- Report editor modal -->
+<div id="cpModal" class="modal hidden"><div class="box">
+  <h2><span id="cpm_title">Counterparty</span><button class="x" onclick="closeModal('cpModal')">×</button></h2>
+  <div id="cpm_body"></div>
+  <div class="sep"></div>
+  <h2 style="font-size:15px">Files</h2>
+  <div id="cpm_attach"></div>
+</div></div>
+
 <div id="invModal" class="modal hidden"><div class="box">
   <h2><span id="invm_title">Invoice</span><button class="x" onclick="closeModal('invModal')">×</button></h2>
   <div id="invm_body"></div>
@@ -314,7 +326,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-05.7';
+const BUILD = '2026-07-05.8';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -399,11 +411,13 @@ async function loadCounterparties(){
         <td>${esc(c.Email||'—')}</td>
         <td>${access?'<span class="tag submitted">yes</span>':'<span class="muted">no</span>'}</td>
         <td class="num">${rate}</td>
-        <td><div class="acts"><button class="btn ghost sm" onclick="editCounterparty('${esc(c.CounterpartyID)}')">Edit</button>
+        <td><div class="acts"><button class="btn ghost sm" onclick="openCounterparty('${esc(c.CounterpartyID)}')">Files</button>
+          <button class="btn ghost sm" onclick="editCounterparty('${esc(c.CounterpartyID)}')">Edit</button>
           ${inviteBtn}
           <button class="btn warn sm" onclick="delCounterparty('${esc(c.CounterpartyID)}','${esc(c.Name||'')}',this)">Delete</button></div></td></tr>`;
     }).join('');
   }catch(e){ notice('cpErr','err', esc(e.message)); }
+  if($('p_cp')) $('p_cp').innerHTML = ctCpOptions($('p_cp').value);
 }
 async function saveCounterparty(){
   notice('cpErr','',''); const name=$('c_name').value.trim();
@@ -478,11 +492,14 @@ async function renderAttachments(elId, parentType, parentId){
     const r = await api('list_attachments',{parentType, parentId});
     const items = r.attachments||[];
     const list = items.length ? items.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--line)">
-        <a href="${esc(a.Url)}" target="_blank" rel="noopener">📎 ${esc(a.FileName)}</a>
+        <span><a href="${esc(a.Url)}" target="_blank" rel="noopener">📎 ${esc(a.FileName)}</a>${a.Description?`<div class="muted" style="font-size:12px">${esc(a.Description)}</div>`:''}</span>
         <button class="btn warn sm" onclick="deleteAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Delete</button>
       </div>`).join('') : '<div class="muted" style="padding:7px 0">No files.</div>';
-    el.innerHTML = `<div class="row" style="align-items:center;gap:8px"><input type="file" id="${elId}_file" accept="application/pdf,image/*">
-        <button class="btn sm" id="${elId}_btn" onclick="uploadAttachment('${parentType}','${parentId}','${elId}')">Upload</button></div>
+    el.innerHTML = `<div class="row" style="align-items:end">
+        <div style="flex:2 1 200px"><input type="file" id="${elId}_file" accept="application/pdf,image/*"></div>
+        <div style="flex:2 1 200px"><input type="text" id="${elId}_desc" placeholder="Description (optional)"></div>
+        <div style="flex:0 0 auto"><button class="btn sm" id="${elId}_btn" onclick="uploadAttachment('${parentType}','${parentId}','${elId}')">Upload</button></div>
+      </div>
       <div style="height:6px"></div>${list}
       <p class="muted" style="font-size:11px">Stored privately in your Google Drive (folder "FXWorks Attachments") — only you, the Drive owner, can open them. Max ~20 MB per file.</p>`;
   }catch(e){ el.innerHTML='<div class="notice err">'+esc(e.message)+'</div>'; }
@@ -494,7 +511,8 @@ async function uploadAttachment(parentType, parentId, elId){
   const btn=$(elId+'_btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
   try{
     const b64 = await fileToBase64(file);
-    await api('add_attachment',{parentType, parentId, fileName:file.name, mimeType:file.type||'application/octet-stream', dataBase64:b64});
+    const desc = $(elId+'_desc') ? $(elId+'_desc').value.trim() : '';
+    await api('add_attachment',{parentType, parentId, fileName:file.name, description:desc, mimeType:file.type||'application/octet-stream', dataBase64:b64});
     await renderAttachments(elId, parentType, parentId);
   }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Upload'; }
 }
@@ -502,6 +520,21 @@ async function deleteAttachment(id, parentType, parentId, elId){
   if(!confirm('Delete this file? It will be moved to Trash in your Google Drive.')) return;
   try{ await api('delete_attachment',{id}); await renderAttachments(elId, parentType, parentId); }
   catch(e){ alert(e.message); }
+}
+function openCounterparty(id){
+  const c = COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id));
+  if(!c) return;
+  $('cpm_title').textContent = c.Name||c.Email||'Counterparty';
+  const rows = [
+    ['Type', c.Type==='business'?'Business':'Individual'],
+    ['Email', c.Email?esc(c.Email):'—'],
+    ['Phone', c.Phone?esc(c.Phone):'—'],
+    ['Address', c.Address?esc(c.Address):'—'],
+    ['Reporting access', String(c.HasReportingAccess).toLowerCase()==='yes'?'yes':'no']
+  ];
+  $('cpm_body').innerHTML = rows.map(r=>`<div style="display:flex;justify-content:space-between;padding:4px 0;gap:12px"><span class="muted">${r[0]}</span><span style="text-align:right">${r[1]}</span></div>`).join('');
+  renderAttachments('cpm_attach','counterparty',id);
+  $('cpModal').classList.remove('hidden');
 }
 function openInvoice(id){
   const v = INVOICES.find(x=>String(x.InvoiceID)===String(id));
@@ -604,9 +637,11 @@ function ctParentOptions(sel, excludeId){
   return '<option value="">— none (general contract) —</option>'+gens.map(c=>`<option value="${esc(c.ContractID)}" ${String(sel)===String(c.ContractID)?'selected':''}>${esc(c.Number)} — ${esc(cpName(c.CounterpartyID))}</option>`).join('');
 }
 function contractOptions(sel){ return '<option value="">— none —</option>'+CONTRACTS.map(c=>`<option value="${esc(c.ContractID)}" ${String(sel)===String(c.ContractID)?'selected':''}>${esc(c.Number)} — ${esc(cpName(c.CounterpartyID))}</option>`).join(''); }
+function todayISO(){ const d=new Date(), off=d.getTimezoneOffset(); return new Date(d.getTime()-off*60000).toISOString().slice(0,10); }
 function ctClear(){
   EDIT_CT='';
-  ['ct_number','ct_amount','ct_desc','ct_sign','ct_start','ct_end'].forEach(id=>$(id).value='');
+  ['ct_number','ct_amount','ct_desc','ct_end'].forEach(id=>$(id).value='');
+  $('ct_sign').value=todayISO(); $('ct_start').value=todayISO();
   $('ct_dir').value='incoming'; $('ct_currency').value='USD';
   $('ct_cp').innerHTML=ctCpOptions(''); $('ct_parent').innerHTML=ctParentOptions('','');
   $('ct_formTitle').textContent='New contract'; $('ct_btn').textContent='Create contract'; $('ct_cancel').style.display='none';
@@ -615,6 +650,7 @@ function ctClear(){
 async function loadContracts(){
   try{
     const r = await api('list_contracts'); CONTRACTS = r.contracts||[];
+    if(!EDIT_CT){ if(!$('ct_sign').value) $('ct_sign').value=todayISO(); if(!$('ct_start').value) $('ct_start').value=todayISO(); }
     // dropdowns
     $('ct_cp').innerHTML = ctCpOptions($('ct_cp').value);
     $('ct_parent').innerHTML = ctParentOptions($('ct_parent').value, EDIT_CT);
@@ -728,13 +764,15 @@ async function loadProjects(){
     const r = await api('list_projects'); PROJECTS = r.projects; ASSIGNMENTS = r.assignments||[];
     const tb = $('projTable').querySelector('tbody');
     if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">No projects yet.</td></tr>'; return; }
-    tb.innerHTML = '<tr><th>Project</th><th>Customer</th><th>Team members</th><th></th></tr>'+
+    tb.innerHTML = '<tr><th>Project</th><th>Contract / Counterparty</th><th>Team members</th><th></th></tr>'+
     PROJECTS.map(p=>{
       const list = ASSIGNMENTS.filter(a=>a.ProjectID===p.ProjectID);
       const sub = list.length ? list.map(a=>statusEn(a.Status)).reduce((m,s)=>{m[s]=(m[s]||0)+1;return m;},{}) : null;
       const subTxt = sub ? Object.keys(sub).map(k=>`${sub[k]} ${k.toLowerCase()}`).join(', ') : '—';
+      const cpn = p.CounterpartyID ? cpName(p.CounterpartyID) : (p.Customer||'—');
+      const link = p.ContractID ? `${esc(ctNumber(p.ContractID))} <span class="muted">· ${esc(cpn)}</span>` : esc(cpn);
       return `<tr>
-        <td>${esc(p.Name)}</td><td>${esc(p.Customer||'')}</td>
+        <td>${esc(p.Name)}</td><td>${link}</td>
         <td>${list.length}${list.length?` <span class="muted">(${esc(subTxt)})</span>`:''}</td>
         <td><button class="btn ghost sm" onclick="openProject('${p.ProjectID}')">Open</button></td></tr>`;
     }).join('');
@@ -743,14 +781,25 @@ async function loadProjects(){
 async function createProject(){
   notice('projErr','',''); const name=$('p_name').value.trim();
   if(!name){ notice('projErr','err','Enter a project name.'); return; }
+  if(!$('p_cp').value){ notice('projErr','err','Select a counterparty.'); return; }
   const b=$('p_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    const r = await api('create_project', { name, customer:$('p_customer').value.trim(), description:$('p_desc').value.trim(), contractId:$('p_contract').value });
-    $('p_name').value=''; $('p_customer').value=''; $('p_desc').value=''; $('p_contract').value='';
+    const r = await api('create_project', { name, counterpartyId:$('p_cp').value, contractId:$('p_contract').value, description:$('p_desc').value.trim() });
+    $('p_name').value=''; $('p_desc').value=''; $('p_contract').value=''; $('p_cp').value='';
     await loadProjects(); notice('projErr','ok','Project created. Open it to add employees.');
     openProject(r.project.ProjectID);
   }catch(e){ notice('projErr','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent='Create project'; }
+}
+// contract <-> counterparty binding on the project form
+function projContractChange(pfx){
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String($(pfx+'_contract').value));
+  if(c && c.CounterpartyID){ $(pfx+'_cp').value = c.CounterpartyID; }
+}
+function projCpChange(pfx){
+  const cid = $(pfx+'_contract').value; if(!cid) return;
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(cid));
+  if(c && String(c.CounterpartyID)!==String($(pfx+'_cp').value)) $(pfx+'_contract').value='';
 }
 
 // ── Project detail ──
@@ -763,7 +812,9 @@ async function openProject(pid){
 function renderProjectModal(){
   const p = CURRENT.project, asgs = CURRENT.assignments||[];
   $('pm_title').textContent = p.Name;
-  $('pm_name').value = p.Name; $('pm_customer').value = p.Customer||''; $('pm_desc').value = p.Description||''; $('pm_contract').innerHTML = contractOptions(p.ContractID||'');
+  $('pm_name').value = p.Name; $('pm_desc').value = p.Description||'';
+  $('pm_contract').innerHTML = contractOptions(p.ContractID||'');
+  $('pm_cp').innerHTML = ctCpOptions(p.CounterpartyID||'');
   notice('pm_err','','');
   // assignments
   $('pm_asgs').innerHTML = asgs.length ? asgs.map(a=>{
@@ -806,7 +857,8 @@ async function saveProject(){
   notice('pm_err','',''); const name=$('pm_name').value.trim();
   if(!name){ notice('pm_err','err','Project name is required.'); return; }
   const b=$('pm_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  try{ await api('update_project',{projectId:CURRENT.project.ProjectID, name, customer:$('pm_customer').value.trim(), description:$('pm_desc').value.trim(), contractId:$('pm_contract').value}); await refreshModal(); notice('pm_err','ok','Saved.'); }
+  if(!$('pm_cp').value){ notice('pm_err','err','Select a counterparty.'); b.disabled=false; b.textContent='Save project'; return; }
+  try{ await api('update_project',{projectId:CURRENT.project.ProjectID, name, counterpartyId:$('pm_cp').value, contractId:$('pm_contract').value, description:$('pm_desc').value.trim()}); await refreshModal(); notice('pm_err','ok','Saved.'); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent='Save project'; }
 }

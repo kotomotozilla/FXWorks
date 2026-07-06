@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-05.7';
+const BUILD = '2026-07-05.8';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -31,8 +31,8 @@ const HEADERS = {
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'ParentContractID', 'CreatedAt'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
-  attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'DriveFileID', 'Url', 'CreatedAt'],
-  projects:    ['ProjectID', 'Name', 'Customer', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
+  attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DriveFileID', 'Url', 'CreatedAt'],
+  projects:    ['ProjectID', 'Name', 'Customer', 'CounterpartyID', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
                 'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt'],
@@ -191,7 +191,7 @@ function attachmentsFolder_() {
 }
 function adminAddAttachment_(d) {
   requireAdmin_(d);
-  var parentType = (trim_(d.parentType) === 'invoice') ? 'invoice' : 'contract';
+  var parentType = attachType_(d.parentType);
   var parentId = trim_(d.parentId);
   if (!parentId) return { ok: false, error: 'Missing parent record' };
   var fileName = trim_(d.fileName) || 'attachment';
@@ -203,15 +203,16 @@ function adminAddAttachment_(d) {
     var file = attachmentsFolder_().createFile(blob);   // private by default (owner-only)
     var row = {
       AttachmentID: Utilities.getUuid(), ParentType: parentType, ParentID: parentId,
-      FileName: fileName, DriveFileID: file.getId(), Url: file.getUrl(), CreatedAt: new Date().toISOString()
+      FileName: fileName, Description: trim_(d.description), DriveFileID: file.getId(), Url: file.getUrl(), CreatedAt: new Date().toISOString()
     };
     appendRow_(SHEETS.attachments, row);
     return { ok: true, attachment: row };
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
 }
+function attachType_(t) { t = trim_(t); return (t === 'invoice' || t === 'counterparty') ? t : 'contract'; }
 function adminListAttachments_(d) {
   requireAdmin_(d);
-  var pt = (trim_(d.parentType) === 'invoice') ? 'invoice' : 'contract';
+  var pt = attachType_(d.parentType);
   var pid = trim_(d.parentId);
   var all = readAll_(SHEETS.attachments).filter(function (a) { return a.ParentType === pt && String(a.ParentID) === pid; });
   return { ok: true, attachments: all };
@@ -231,6 +232,13 @@ function deleteAttachmentsFor_(parentType, parentId) {
     }
   });
 }
+
+function addOneYear_(dateStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '';
+  var p = dateStr.split('-');
+  return (Number(p[0]) + 1) + '-' + p[1] + '-' + p[2];
+}
+function cpName_(id) { var c = findRow_(SHEETS.counterparties, 'CounterpartyID', trim_(id)); return c ? (c.Name || c.Email || '') : ''; }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Contracts
@@ -258,6 +266,10 @@ function contractFields_(d) {
 function adminCreateContract_(d) {
   requireAdmin_(d);
   var f = contractFields_(d);
+  var today = new Date().toISOString().slice(0, 10);
+  if (!f.SignDate) f.SignDate = today;
+  if (!f.StartDate) f.StartDate = today;
+  if (!f.EndDate) f.EndDate = addOneYear_(f.StartDate || today);
   var number = trim_(d.number);
   if (!number) number = autoNumber_(SHEETS.contracts, 'SignDate', f.SignDate, 'agr');
   else if (numberTaken_(SHEETS.contracts, number, '', 'ContractID')) return { ok: false, error: 'Contract number already exists' };
@@ -393,8 +405,11 @@ function adminCreateProject_(d) {
   requireAdmin_(d);
   var name = trim_(d.name);
   if (!name) return { ok: false, error: 'Project name is required' };
+  var contractId = trim_(d.contractId), counterpartyId = trim_(d.counterpartyId);
+  if (contractId) { var ct = findRow_(SHEETS.contracts, 'ContractID', contractId); if (ct) counterpartyId = trim_(ct.CounterpartyID); }
+  if (!counterpartyId) return { ok: false, error: 'Select a counterparty' };
   var now = new Date().toISOString();
-  var row = { ProjectID: Utilities.getUuid(), Name: name, Customer: trim_(d.customer), Description: trim_(d.description), ContractID: trim_(d.contractId), CreatedAt: now, UpdatedAt: now };
+  var row = { ProjectID: Utilities.getUuid(), Name: name, Customer: cpName_(counterpartyId), CounterpartyID: counterpartyId, Description: trim_(d.description), ContractID: contractId, CreatedAt: now, UpdatedAt: now };
   appendRow_(SHEETS.projects, row);
   return { ok: true, project: row };
 }
@@ -410,10 +425,13 @@ function adminUpdateProject_(d) {
   var p = findRow_(SHEETS.projects, 'ProjectID', d.projectId);
   if (!p) return { ok: false, error: 'Project not found' };
   var name = trim_(d.name); if (!name) return { ok: false, error: 'Project name is required' };
-  var customer = trim_(d.customer), desc = trim_(d.description);
-  var pupd = { Name: name, Customer: customer, Description: desc, UpdatedAt: new Date().toISOString() };
-  if (d.contractId !== undefined) pupd.ContractID = trim_(d.contractId);
-  updateRow_(SHEETS.projects, 'ProjectID', p.ProjectID, pupd);
+  var contractId = trim_(d.contractId), counterpartyId = trim_(d.counterpartyId);
+  if (contractId) { var ct = findRow_(SHEETS.contracts, 'ContractID', contractId); if (ct) counterpartyId = trim_(ct.CounterpartyID); }
+  if (!counterpartyId) return { ok: false, error: 'Select a counterparty' };
+  var customer = cpName_(counterpartyId), desc = trim_(d.description);
+  updateRow_(SHEETS.projects, 'ProjectID', p.ProjectID, {
+    Name: name, Customer: customer, CounterpartyID: counterpartyId, Description: desc, ContractID: contractId, UpdatedAt: new Date().toISOString()
+  });
   // Denormalize onto assignments and entries.
   readAll_(SHEETS.assignments).forEach(function (a) {
     if (a.ProjectID === p.ProjectID) updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { ProjectName: name, Customer: customer, ProjectDescription: desc });
