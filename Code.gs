@@ -8,10 +8,12 @@
 // SETTINGS — fill in before deployment
 // ─────────────────────────────────────────────────────────────────────────────
 const CONFIG = {
-  ADMIN_PASSCODE: 'CHANGE-ME-admin-pin',
-  EMPLOYEE_BASE_URL: 'https://USERNAME.github.io/REPO/employee.html',
-  ADMIN_BASE_URL:    'https://USERNAME.github.io/REPO/admin.html',
-  ADMIN_EMAIL: '',                 // recommended: set this so submit emails reach you
+  ADMIN_PASSCODE: '12345',
+  EMPLOYEE_BASE_URL: 'https://kotomotozilla.github.io/FXWorks/employee.html',
+  ADMIN_BASE_URL:    'https://kotomotozilla.github.io/FXWorks/admin.html',
+  // Admin email for "report ready" notifications.
+  // If empty — the script owner's address is used.
+  ADMIN_EMAIL: 'info@fraktalex.com',
   SHEET_ID: '',
   COMPANY_NAME: 'Fraktalex Limited'
 };
