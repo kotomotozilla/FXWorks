@@ -17,7 +17,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-05.4';
+const BUILD = '2026-07-05.5';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -72,6 +72,9 @@ function route_(action, d) {
     case 'list_invoices':      requireAdmin_(d); return { ok: true, invoices: readAll_(SHEETS.invoices) };
     case 'update_invoice':     return adminUpdateInvoice_(d);
     case 'delete_invoice':     return adminDeleteInvoice_(d);
+    case 'recalc_contract_fx': return adminRecalcContractFx_(d);
+    case 'recalc_invoice_fx':  return adminRecalcInvoiceFx_(d);
+    case 'recalc_all_fx':      return adminRecalcAllFx_(d);
     // Projects
     case 'create_project':     return adminCreateProject_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
@@ -205,6 +208,8 @@ function adminCreateContract_(d) {
     Amount: f.Amount, Currency: f.Currency, AmountUSD: '', FxRate: '', FxAsOf: '',
     ParentContractID: f.ParentContractID, CreatedAt: new Date().toISOString()
   };
+  var fx = computeFx_(f.Currency, f.Amount, f.SignDate);
+  row.AmountUSD = fx.AmountUSD; row.FxRate = fx.FxRate; row.FxAsOf = fx.FxAsOf;
   appendRow_(SHEETS.contracts, row);
   return { ok: true, contract: row };
 }
@@ -216,9 +221,11 @@ function adminUpdateContract_(d) {
   if (f.ParentContractID === id) return { ok: false, error: 'A contract cannot be its own parent' };
   var number = trim_(d.number) || c.Number;
   if (numberTaken_(SHEETS.contracts, number, id, 'ContractID')) return { ok: false, error: 'Contract number already exists' };
+  var cfx = computeFx_(f.Currency, f.Amount, f.SignDate);
   updateRow_(SHEETS.contracts, 'ContractID', id, {
     Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID, Direction: f.Direction,
     SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate, Amount: f.Amount, Currency: f.Currency,
+    AmountUSD: cfx.AmountUSD, FxRate: cfx.FxRate, FxAsOf: cfx.FxAsOf,
     ParentContractID: f.ParentContractID
   });
   return { ok: true };
@@ -256,6 +263,8 @@ function adminCreateInvoice_(d) {
     InvoiceDate: f.InvoiceDate, DueDate: f.DueDate, Amount: f.Amount, Currency: f.Currency,
     AmountUSD: '', FxRate: '', FxAsOf: '', CreatedAt: new Date().toISOString()
   };
+  var ifx = computeFx_(f.Currency, f.Amount, f.InvoiceDate);
+  row.AmountUSD = ifx.AmountUSD; row.FxRate = ifx.FxRate; row.FxAsOf = ifx.FxAsOf;
   appendRow_(SHEETS.invoices, row);
   return { ok: true, invoice: row };
 }
@@ -266,9 +275,11 @@ function adminUpdateInvoice_(d) {
   var f = invoiceFields_(d);
   var number = trim_(d.number) || v.Number;
   if (numberTaken_(SHEETS.invoices, number, id, 'InvoiceID')) return { ok: false, error: 'Invoice number already exists' };
+  var vfx = computeFx_(f.Currency, f.Amount, f.InvoiceDate);
   updateRow_(SHEETS.invoices, 'InvoiceID', id, {
     Number: number, ContractID: f.ContractID, CounterpartyID: f.CounterpartyID,
-    InvoiceDate: f.InvoiceDate, DueDate: f.DueDate, Amount: f.Amount, Currency: f.Currency
+    InvoiceDate: f.InvoiceDate, DueDate: f.DueDate, Amount: f.Amount, Currency: f.Currency,
+    AmountUSD: vfx.AmountUSD, FxRate: vfx.FxRate, FxAsOf: vfx.FxAsOf
   });
   return { ok: true };
 }
@@ -276,6 +287,42 @@ function adminDeleteInvoice_(d) {
   requireAdmin_(d);
   deleteRowsWhere_(SHEETS.invoices, 'InvoiceID', trim_(d.id));
   return { ok: true };
+}
+
+function adminRecalcContractFx_(d) {
+  requireAdmin_(d);
+  var c = findRow_(SHEETS.contracts, 'ContractID', trim_(d.id));
+  if (!c) return { ok: false, error: 'Contract not found' };
+  var fx = computeFx_(c.Currency, c.Amount, c.SignDate);
+  if (fx.AmountUSD === '') return { ok: false, error: 'Rate unavailable right now — try again later' };
+  updateRow_(SHEETS.contracts, 'ContractID', c.ContractID, fx);
+  return { ok: true, fx: fx };
+}
+function adminRecalcInvoiceFx_(d) {
+  requireAdmin_(d);
+  var v = findRow_(SHEETS.invoices, 'InvoiceID', trim_(d.id));
+  if (!v) return { ok: false, error: 'Invoice not found' };
+  var fx = computeFx_(v.Currency, v.Amount, v.InvoiceDate);
+  if (fx.AmountUSD === '') return { ok: false, error: 'Rate unavailable right now — try again later' };
+  updateRow_(SHEETS.invoices, 'InvoiceID', v.InvoiceID, fx);
+  return { ok: true, fx: fx };
+}
+function adminRecalcAllFx_(d) {
+  requireAdmin_(d);
+  var done = 0, remaining = 0, cap = 40;
+  readAll_(SHEETS.contracts).forEach(function (c) {
+    if ((c.AmountUSD === '' || c.AmountUSD == null) && num_(c.Amount) > 0) {
+      if (done < cap) { var fx = computeFx_(c.Currency, c.Amount, c.SignDate); if (fx.AmountUSD !== '') { updateRow_(SHEETS.contracts, 'ContractID', c.ContractID, fx); done++; } else remaining++; }
+      else remaining++;
+    }
+  });
+  readAll_(SHEETS.invoices).forEach(function (v) {
+    if ((v.AmountUSD === '' || v.AmountUSD == null) && num_(v.Amount) > 0) {
+      if (done < cap) { var fx = computeFx_(v.Currency, v.Amount, v.InvoiceDate); if (fx.AmountUSD !== '') { updateRow_(SHEETS.invoices, 'InvoiceID', v.InvoiceID, fx); done++; } else remaining++; }
+      else remaining++;
+    }
+  });
+  return { ok: true, done: done, remaining: remaining };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -681,6 +728,28 @@ function isEmail_(v) { return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v); }
 function num_(v) { var n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? n : 0; }
 function round2_(n) { return Math.round(n * 100) / 100; }
 function curSym_(c) { return c === 'EUR' ? '€' : c === 'AED' ? 'AED ' : c === 'SGD' ? 'S$' : '$'; }
+
+// FX: USD per 1 unit of `currency` on `dateStr` (YYYY-MM-DD). Returns null if unavailable.
+function fxRateToUsd_(currency, dateStr) {
+  currency = trim_(currency).toUpperCase();
+  if (currency === 'USD') return { rate: 1, asOf: dateStr || new Date().toISOString().slice(0, 10) };
+  if (currency === 'AED') return { rate: Math.round((1 / 3.6725) * 1e6) / 1e6, asOf: dateStr || new Date().toISOString().slice(0, 10) };
+  var d = (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) ? dateStr : 'latest';
+  try {
+    var url = 'https://api.frankfurter.app/' + d + '?from=' + encodeURIComponent(currency) + '&to=USD';
+    var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    if (resp.getResponseCode() === 200) {
+      var j = JSON.parse(resp.getContentText());
+      if (j && j.rates && j.rates.USD) return { rate: j.rates.USD, asOf: j.date || d };
+    }
+  } catch (e) {}
+  return null;
+}
+function computeFx_(currency, amount, dateStr) {
+  var r = fxRateToUsd_(currency, dateStr);
+  if (!r) return { AmountUSD: '', FxRate: '', FxAsOf: '' };
+  return { AmountUSD: round2_(num_(amount) * r.rate), FxRate: r.rate, FxAsOf: r.asOf };
+}
 function esc_(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
 function setup() {

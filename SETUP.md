@@ -96,3 +96,8 @@ An employee is emailed only when they are **added** to a project, or when their 
 - **Entries**: activity detail — one row per activity of a report.
 
 > Upgrading from an earlier version: if a tab's columns differ from what the code expects, the backend **migrates the data in place** — it remaps existing rows by column name, adds new columns (blank), and keeps any extra old columns. No data is lost, so you don't need to delete or recreate tabs.
+
+## Currency conversion to USD
+Contract and invoice amounts are auto-converted to USD using historical rates on the contract's signing date / the invoice date (EUR & SGD via the free Frankfurter API; AED at its fixed USD peg; USD = 1). If a rate is temporarily unavailable, the USD field is left blank and can be filled later with the **↻ Recalculate missing USD** button (or the per-row **↻ USD**).
+
+**Re-authorization:** because the script now makes an external request (to fetch rates), the first deployment after this change will ask you to re-authorize additional permissions. Approve them (Review permissions → Allow). If contracts/invoices in a foreign currency show no USD value, open the Apps Script editor once and run any function to trigger the authorization prompt, then use Recalculate.

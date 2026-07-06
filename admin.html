@@ -146,7 +146,7 @@
         <button class="btn ghost" id="ct_cancel" onclick="ctClear()" style="display:none">Cancel edit</button>
       </div>
       <div class="panel">
-        <h2>Contracts</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2>Contracts</h2><button class="btn ghost sm" onclick="recalcAllFx(this)">↻ Recalculate missing USD</button></div>
         <div class="scroll"><table id="ctTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
@@ -179,7 +179,7 @@
         <button class="btn ghost" id="inv_cancel" onclick="invClear()" style="display:none">Cancel edit</button>
       </div>
       <div class="panel">
-        <h2>Invoices</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2>Invoices</h2><button class="btn ghost sm" onclick="recalcAllFx(this)">↻ Recalculate missing USD</button></div>
         <div class="scroll"><table id="invTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
@@ -306,7 +306,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-05.4';
+const BUILD = '2026-07-05.5';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -441,6 +441,27 @@ function editCounterparty(id){
   window.scrollTo(0,0);
 }
 
+// ── FX recalculation ──
+async function recalcContractFx(id, btn){
+  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('recalc_contract_fx',{id}); await loadContracts(); }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent=t; }
+}
+async function recalcInvoiceFx(id, btn){
+  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('recalc_invoice_fx',{id}); await loadInvoices(); }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent=t; }
+}
+async function recalcAllFx(btn){
+  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{
+    const r = await api('recalc_all_fx',{});
+    await loadContracts(); await loadInvoices();
+    alert(`Recalculated ${r.done}. ${r.remaining? r.remaining+' still without USD — click again (rates may be temporarily unavailable).':'All amounts converted.'}`);
+  }catch(e){ alert(e.message); }
+  finally{ btn.disabled=false; btn.textContent=t; }
+}
+
 // ── Invoices ──
 function ctDirection(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?dirEn(c.Direction):''; }
 function invClear(){
@@ -465,16 +486,18 @@ async function loadInvoices(){
     $('inv_cp').innerHTML = ctCpOptions($('inv_cp').value);
     const tb = $('invTable').querySelector('tbody');
     if(!INVOICES.length){ tb.innerHTML='<tr><td class="empty">No invoices yet.</td></tr>'; return; }
-    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th>Contract</th><th>Direction</th><th class="num">Amount</th><th>Invoice date</th><th>Due</th><th></th></tr>'+
+    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th>Contract</th><th>Direction</th><th class="num">Amount</th><th class="num">USD</th><th>Invoice date</th><th>Due</th><th></th></tr>'+
     INVOICES.map(v=>{const s=cur(v.Currency);return `<tr>
       <td>${esc(v.Number)}</td>
       <td>${esc(cpName(v.CounterpartyID))}</td>
       <td class="muted">${v.ContractID?esc(ctNumber(v.ContractID)):'—'}</td>
       <td class="muted">${v.ContractID?(ctDirection(v.ContractID)==='Outgoing (we pay)'?'Outgoing':'Incoming'):'—'}</td>
       <td class="num">${(v.Amount!==''&&v.Amount!=null)?s+money(v.Amount):'—'}</td>
+      <td class="num">${(v.AmountUSD!==''&&v.AmountUSD!=null)?'$'+money(v.AmountUSD):'—'}${v.FxAsOf?`<div class="muted" style="font-size:11px">@${esc(v.FxAsOf)}</div>`:''}</td>
       <td class="muted">${esc(v.InvoiceDate?fmtDate(v.InvoiceDate):'—')}</td>
       <td class="muted">${esc(v.DueDate?fmtDate(v.DueDate):'—')}</td>
-      <td><div class="acts"><button class="btn ghost sm" onclick="editInvoice('${esc(v.InvoiceID)}')">Edit</button>
+      <td><div class="acts"><button class="btn ghost sm" onclick="recalcInvoiceFx('${esc(v.InvoiceID)}',this)" title="Recalculate USD">↻ USD</button>
+        <button class="btn ghost sm" onclick="editInvoice('${esc(v.InvoiceID)}')">Edit</button>
         <button class="btn warn sm" onclick="delInvoice('${esc(v.InvoiceID)}','${esc(v.Number)}',this)">Delete</button></div></td></tr>`;}).join('');
   }catch(e){ notice('invErr','err', esc(e.message)); }
 }
@@ -540,16 +563,18 @@ async function loadContracts(){
     // table
     const tb = $('ctTable').querySelector('tbody');
     if(!CONTRACTS.length){ tb.innerHTML='<tr><td class="empty">No contracts yet.</td></tr>'; return; }
-    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th>Direction</th><th class="num">Amount</th><th>Signed</th><th>Term</th><th>Parent</th><th></th></tr>'+
+    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th>Direction</th><th class="num">Amount</th><th class="num">USD</th><th>Signed</th><th>Term</th><th>Parent</th><th></th></tr>'+
     CONTRACTS.map(c=>{const s=cur(c.Currency);return `<tr>
       <td>${esc(c.Number)}${c.Description?`<div class="muted">${esc(String(c.Description).slice(0,60))}${String(c.Description).length>60?'…':''}</div>`:''}</td>
       <td>${esc(cpName(c.CounterpartyID))}</td>
       <td class="muted">${c.Direction==='outgoing'?'Outgoing':'Incoming'}</td>
       <td class="num">${(c.Amount!==''&&c.Amount!=null)?s+money(c.Amount):'—'}</td>
+      <td class="num">${(c.AmountUSD!==''&&c.AmountUSD!=null)?'$'+money(c.AmountUSD):'—'}${c.FxAsOf?`<div class="muted" style="font-size:11px">@${esc(c.FxAsOf)}</div>`:''}</td>
       <td class="muted">${esc(c.SignDate?fmtDate(c.SignDate):'—')}</td>
       <td class="muted">${esc(c.StartDate?fmtDate(c.StartDate):'—')}${c.EndDate?' → '+esc(fmtDate(c.EndDate)):''}</td>
       <td class="muted">${c.ParentContractID?esc(ctNumber(c.ParentContractID)):'—'}</td>
       <td><div class="acts"><button class="btn ghost sm" onclick="openContract('${esc(c.ContractID)}')">Open</button>
+        <button class="btn ghost sm" onclick="recalcContractFx('${esc(c.ContractID)}',this)" title="Recalculate USD">↻ USD</button>
         <button class="btn ghost sm" onclick="editContract('${esc(c.ContractID)}')">Edit</button>
         <button class="btn warn sm" onclick="delContract('${esc(c.ContractID)}','${esc(c.Number)}',this)">Delete</button></div></td></tr>`;}).join('');
   }catch(e){ notice('ctErr','err', esc(e.message)); }
