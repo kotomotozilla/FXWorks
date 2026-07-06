@@ -17,7 +17,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-05.3';
+const BUILD = '2026-07-05.4';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };

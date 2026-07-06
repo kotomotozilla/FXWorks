@@ -268,6 +268,11 @@
 </div></div>
 
 <!-- Report editor modal -->
+<div id="ctModal" class="modal hidden"><div class="box">
+  <h2><span id="ctm_title">Contract</span><button class="x" onclick="closeModal('ctModal')">×</button></h2>
+  <div id="ctm_body"></div>
+</div></div>
+
 <div id="repModal" class="modal hidden"><div class="box">
   <h2><span id="rm_title">Report</span><button class="x" onclick="closeModal('repModal')">×</button></h2>
   <div id="rm_sub" class="muted" style="margin-bottom:10px"></div>
@@ -298,10 +303,10 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-05.3';
+const BUILD = '2026-07-05.4';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -544,7 +549,8 @@ async function loadContracts(){
       <td class="muted">${esc(c.SignDate?fmtDate(c.SignDate):'—')}</td>
       <td class="muted">${esc(c.StartDate?fmtDate(c.StartDate):'—')}${c.EndDate?' → '+esc(fmtDate(c.EndDate)):''}</td>
       <td class="muted">${c.ParentContractID?esc(ctNumber(c.ParentContractID)):'—'}</td>
-      <td><div class="acts"><button class="btn ghost sm" onclick="editContract('${esc(c.ContractID)}')">Edit</button>
+      <td><div class="acts"><button class="btn ghost sm" onclick="openContract('${esc(c.ContractID)}')">Open</button>
+        <button class="btn ghost sm" onclick="editContract('${esc(c.ContractID)}')">Edit</button>
         <button class="btn warn sm" onclick="delContract('${esc(c.ContractID)}','${esc(c.Number)}',this)">Delete</button></div></td></tr>`;}).join('');
   }catch(e){ notice('ctErr','err', esc(e.message)); }
 }
@@ -566,6 +572,49 @@ async function delContract(id, number, btn){
   try{ await api('delete_contract',{id}); await loadContracts(); await loadProjects(); }
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
 }
+function openContract(id){
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(id));
+  if(!c) return;
+  const s=cur(c.Currency);
+  const subs = CONTRACTS.filter(x=>String(x.ParentContractID)===String(id));
+  const invs = INVOICES.filter(x=>String(x.ContractID)===String(id));
+  const projs = PROJECTS.filter(x=>String(x.ContractID)===String(id));
+  $('ctm_title').textContent = c.Number;
+  let html = `<p class="muted">${esc(cpName(c.CounterpartyID))} · ${dirEn(c.Direction)}${(c.Amount!==''&&c.Amount!=null)?' · '+s+money(c.Amount):''}</p>`;
+  const term = [c.SignDate?'Signed '+fmtDate(c.SignDate):'', c.StartDate?fmtDate(c.StartDate):'', c.EndDate?'→ '+fmtDate(c.EndDate):''].filter(Boolean).join(' · ');
+  if(term) html += `<p class="muted">${esc(term)}</p>`;
+  if(c.ParentContractID) html += `<p class="muted">Sub-contract of <a href="#" onclick="openContract('${esc(c.ParentContractID)}');return false;">${esc(ctNumber(c.ParentContractID))}</a></p>`;
+  if(c.Description) html += `<div class="comment">${esc(c.Description)}</div>`;
+
+  html += '<div class="sep"></div><h2 style="font-size:15px">Invoices ('+invs.length+')</h2>';
+  html += invs.length ? invs.map(v=>{const vs=cur(v.Currency);return `<div class="asg"><div class="top2">
+      <div><div class="nm">${esc(v.Number)}</div><div class="em">${v.InvoiceDate?esc(fmtDate(v.InvoiceDate)):''}${v.DueDate?' · due '+esc(fmtDate(v.DueDate)):''}</div></div>
+      <div style="text-align:right">${(v.Amount!==''&&v.Amount!=null)?vs+money(v.Amount):'—'}<div><button class="btn ghost sm" onclick="openInvoiceFromContract('${esc(v.InvoiceID)}')">Open</button></div></div>
+    </div></div>`;}).join('') : '<p class="empty">No invoices.</p>';
+
+  html += '<div class="sep"></div><h2 style="font-size:15px">Sub-contracts ('+subs.length+')</h2>';
+  html += subs.length ? subs.map(x=>{const xs=cur(x.Currency);return `<div class="asg"><div class="top2">
+      <div><div class="nm">${esc(x.Number)}</div><div class="em">${esc(cpName(x.CounterpartyID))} · ${x.Direction==='outgoing'?'Outgoing':'Incoming'}</div></div>
+      <div style="text-align:right">${(x.Amount!==''&&x.Amount!=null)?xs+money(x.Amount):'—'}<div><button class="btn ghost sm" onclick="openContract('${esc(x.ContractID)}')">Open</button></div></div>
+    </div></div>`;}).join('') : '<p class="empty">No sub-contracts.</p>';
+
+  html += '<div class="sep"></div><h2 style="font-size:15px">Projects ('+projs.length+')</h2>';
+  html += projs.length ? projs.map(p=>{
+    const rs = ASSIGNMENTS.filter(a=>String(a.ProjectID)===String(p.ProjectID));
+    const reps = rs.length ? rs.map(a=>{const as=cur(a.Currency);return `<div style="padding:7px 0;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <span>${esc(a.EmployeeName||a.EmployeeEmail)}${a.Title?' · '+esc(a.Title):''} <span class="tag ${esc(a.Status)}">${statusEn(a.Status)}</span></span>
+        <span class="muted">${(a.ReportedHours!==''&&a.ReportedHours!=null)?hrs(a.ReportedHours)+' h · '+as+money(a.ReportedAmount||0):''} <button class="btn ghost sm" onclick="pdfFromList('${a.AssignmentID}')">PDF</button></span>
+      </div>`;}).join('') : '<div class="muted" style="padding:7px 0">No reports.</div>';
+    return `<div class="asg"><div class="top2"><div><div class="nm">${esc(p.Name)}</div><div class="em">${esc(p.Customer||'')}</div></div>
+      <button class="btn ghost sm" onclick="openProjectFromContract('${p.ProjectID}')">Open project</button></div>${reps}</div>`;
+  }).join('') : '<p class="empty">No projects linked.</p>';
+
+  $('ctm_body').innerHTML = html;
+  $('ctModal').classList.remove('hidden');
+}
+function openInvoiceFromContract(id){ closeModal('ctModal'); editInvoice(id); }
+function openProjectFromContract(pid){ closeModal('ctModal'); openProject(pid); }
+
 function editContract(id){
   const c = CONTRACTS.find(x=>String(x.ContractID)===String(id));
   if(!c) return;
