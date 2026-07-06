@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-05.5';
+const BUILD = '2026-07-05.6';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -738,7 +738,7 @@ function fxRateToUsd_(currency, dateStr) {
   if (currency === 'AED') return { rate: Math.round((1 / 3.6725) * 1e6) / 1e6, asOf: dateStr || new Date().toISOString().slice(0, 10) };
   var d = (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) ? dateStr : 'latest';
   try {
-    var url = 'https://api.frankfurter.app/' + d + '?from=' + encodeURIComponent(currency) + '&to=USD';
+    var url = 'https://api.frankfurter.dev/v1/' + d + '?base=' + encodeURIComponent(currency) + '&symbols=USD';
     var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
     if (resp.getResponseCode() === 200) {
       var j = JSON.parse(resp.getContentText());
@@ -753,6 +753,24 @@ function computeFx_(currency, amount, dateStr) {
   return { AmountUSD: round2_(num_(amount) * r.rate), FxRate: r.rate, FxAsOf: r.asOf };
 }
 function esc_(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+// Run this from the Apps Script editor and copy the Execution log.
+// It calls the rate service directly and reports the exact HTTP status / error.
+function testFx() {
+  var out = [];
+  var url = 'https://api.frankfurter.dev/v1/2025-06-02?base=EUR&symbols=USD';
+  out.push('URL: ' + url);
+  try {
+    var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    out.push('HTTP ' + resp.getResponseCode());
+    out.push('BODY ' + String(resp.getContentText()).slice(0, 400));
+  } catch (e) {
+    out.push('EXCEPTION: ' + e);
+  }
+  var s = out.join('\n');
+  Logger.log(s);
+  return s;
+}
 
 function setup() {
   getSheet_(SHEETS.counterparties); getSheet_(SHEETS.employees); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
