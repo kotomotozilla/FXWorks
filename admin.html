@@ -268,6 +268,14 @@
 </div></div>
 
 <!-- Report editor modal -->
+<div id="invModal" class="modal hidden"><div class="box">
+  <h2><span id="invm_title">Invoice</span><button class="x" onclick="closeModal('invModal')">×</button></h2>
+  <div id="invm_body"></div>
+  <div class="sep"></div>
+  <h2 style="font-size:15px">Attachments</h2>
+  <div id="invm_attach"></div>
+</div></div>
+
 <div id="ctModal" class="modal hidden"><div class="box">
   <h2><span id="ctm_title">Contract</span><button class="x" onclick="closeModal('ctModal')">×</button></h2>
   <div id="ctm_body"></div>
@@ -306,7 +314,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-05.6';
+const BUILD = '2026-07-05.7';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -462,6 +470,57 @@ async function recalcAllFx(btn){
   finally{ btn.disabled=false; btn.textContent=t; }
 }
 
+// ── Attachments (private files in owner's Google Drive) ──
+function fileToBase64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(file); }); }
+async function renderAttachments(elId, parentType, parentId){
+  const el=$(elId); el.innerHTML='<div class="muted">Loading…</div>';
+  try{
+    const r = await api('list_attachments',{parentType, parentId});
+    const items = r.attachments||[];
+    const list = items.length ? items.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--line)">
+        <a href="${esc(a.Url)}" target="_blank" rel="noopener">📎 ${esc(a.FileName)}</a>
+        <button class="btn warn sm" onclick="deleteAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Delete</button>
+      </div>`).join('') : '<div class="muted" style="padding:7px 0">No files.</div>';
+    el.innerHTML = `<div class="row" style="align-items:center;gap:8px"><input type="file" id="${elId}_file" accept="application/pdf,image/*">
+        <button class="btn sm" id="${elId}_btn" onclick="uploadAttachment('${parentType}','${parentId}','${elId}')">Upload</button></div>
+      <div style="height:6px"></div>${list}
+      <p class="muted" style="font-size:11px">Stored privately in your Google Drive (folder "FXWorks Attachments") — only you, the Drive owner, can open them. Max ~20 MB per file.</p>`;
+  }catch(e){ el.innerHTML='<div class="notice err">'+esc(e.message)+'</div>'; }
+}
+async function uploadAttachment(parentType, parentId, elId){
+  const input=$(elId+'_file'); const file=input.files[0];
+  if(!file){ alert('Choose a file first.'); return; }
+  if(file.size > 20*1024*1024){ alert('File too large (max ~20 MB).'); return; }
+  const btn=$(elId+'_btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    const b64 = await fileToBase64(file);
+    await api('add_attachment',{parentType, parentId, fileName:file.name, mimeType:file.type||'application/octet-stream', dataBase64:b64});
+    await renderAttachments(elId, parentType, parentId);
+  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Upload'; }
+}
+async function deleteAttachment(id, parentType, parentId, elId){
+  if(!confirm('Delete this file? It will be moved to Trash in your Google Drive.')) return;
+  try{ await api('delete_attachment',{id}); await renderAttachments(elId, parentType, parentId); }
+  catch(e){ alert(e.message); }
+}
+function openInvoice(id){
+  const v = INVOICES.find(x=>String(x.InvoiceID)===String(id));
+  if(!v) return;
+  const s=cur(v.Currency);
+  $('invm_title').textContent = v.Number;
+  const rows = [
+    ['Counterparty', esc(cpName(v.CounterpartyID))],
+    ['Contract', v.ContractID?esc(ctNumber(v.ContractID))+' · '+(ctDirection(v.ContractID)||''):'—'],
+    ['Amount', (v.Amount!==''&&v.Amount!=null)?s+money(v.Amount):'—'],
+    ['USD', (v.AmountUSD!==''&&v.AmountUSD!=null)?'$'+money(v.AmountUSD)+(v.FxAsOf?' @'+esc(v.FxAsOf):''):'—'],
+    ['Invoice date', v.InvoiceDate?esc(fmtDate(v.InvoiceDate)):'—'],
+    ['Due date', v.DueDate?esc(fmtDate(v.DueDate)):'—']
+  ];
+  $('invm_body').innerHTML = rows.map(r=>`<div style="display:flex;justify-content:space-between;padding:4px 0"><span class="muted">${r[0]}</span><span>${r[1]}</span></div>`).join('');
+  renderAttachments('invm_attach','invoice',id);
+  $('invModal').classList.remove('hidden');
+}
+
 // ── Invoices ──
 function ctDirection(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?dirEn(c.Direction):''; }
 function invClear(){
@@ -496,7 +555,8 @@ async function loadInvoices(){
       <td class="num">${(v.AmountUSD!==''&&v.AmountUSD!=null)?'$'+money(v.AmountUSD):'—'}${v.FxAsOf?`<div class="muted" style="font-size:11px">@${esc(v.FxAsOf)}</div>`:''}</td>
       <td class="muted">${esc(v.InvoiceDate?fmtDate(v.InvoiceDate):'—')}</td>
       <td class="muted">${esc(v.DueDate?fmtDate(v.DueDate):'—')}</td>
-      <td><div class="acts"><button class="btn ghost sm" onclick="recalcInvoiceFx('${esc(v.InvoiceID)}',this)" title="Recalculate USD">↻ USD</button>
+      <td><div class="acts"><button class="btn ghost sm" onclick="openInvoice('${esc(v.InvoiceID)}')">Open</button>
+        <button class="btn ghost sm" onclick="recalcInvoiceFx('${esc(v.InvoiceID)}',this)" title="Recalculate USD">↻ USD</button>
         <button class="btn ghost sm" onclick="editInvoice('${esc(v.InvoiceID)}')">Edit</button>
         <button class="btn warn sm" onclick="delInvoice('${esc(v.InvoiceID)}','${esc(v.Number)}',this)">Delete</button></div></td></tr>`;}).join('');
   }catch(e){ notice('invErr','err', esc(e.message)); }
@@ -634,7 +694,10 @@ function openContract(id){
       <button class="btn ghost sm" onclick="openProjectFromContract('${p.ProjectID}')">Open project</button></div>${reps}</div>`;
   }).join('') : '<p class="empty">No projects linked.</p>';
 
+  html += '<div class="sep"></div><h2 style="font-size:15px">Attachments</h2><div id="ctm_attach"></div>';
+
   $('ctm_body').innerHTML = html;
+  renderAttachments('ctm_attach','contract',id);
   $('ctModal').classList.remove('hidden');
 }
 function openInvoiceFromContract(id){ closeModal('ctModal'); editInvoice(id); }

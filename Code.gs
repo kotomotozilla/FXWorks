@@ -19,10 +19,10 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-05.6';
+const BUILD = '2026-07-05.7';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'CreatedAt'],
@@ -31,6 +31,7 @@ const HEADERS = {
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'ParentContractID', 'CreatedAt'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
+  attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'DriveFileID', 'Url', 'CreatedAt'],
   projects:    ['ProjectID', 'Name', 'Customer', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
@@ -74,6 +75,10 @@ function route_(action, d) {
     case 'list_invoices':      requireAdmin_(d); return { ok: true, invoices: readAll_(SHEETS.invoices) };
     case 'update_invoice':     return adminUpdateInvoice_(d);
     case 'delete_invoice':     return adminDeleteInvoice_(d);
+    // Attachments (PDF/photo for contracts & invoices, private in owner's Drive)
+    case 'add_attachment':     return adminAddAttachment_(d);
+    case 'list_attachments':   return adminListAttachments_(d);
+    case 'delete_attachment':  return adminDeleteAttachment_(d);
     case 'recalc_contract_fx': return adminRecalcContractFx_(d);
     case 'recalc_invoice_fx':  return adminRecalcInvoiceFx_(d);
     case 'recalc_all_fx':      return adminRecalcAllFx_(d);
@@ -176,6 +181,58 @@ function adminDeleteCounterparty_(d) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Attachments — stored privately in the owner's Google Drive (folder "FXWorks Attachments").
+// Files are NOT shared: only the Drive owner (you) can open them.
+// ─────────────────────────────────────────────────────────────────────────────
+function attachmentsFolder_() {
+  var name = 'FXWorks Attachments';
+  var it = DriveApp.getFoldersByName(name);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(name);
+}
+function adminAddAttachment_(d) {
+  requireAdmin_(d);
+  var parentType = (trim_(d.parentType) === 'invoice') ? 'invoice' : 'contract';
+  var parentId = trim_(d.parentId);
+  if (!parentId) return { ok: false, error: 'Missing parent record' };
+  var fileName = trim_(d.fileName) || 'attachment';
+  var mime = trim_(d.mimeType) || 'application/octet-stream';
+  var b64 = d.dataBase64 || '';
+  if (!b64) return { ok: false, error: 'No file data' };
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(b64), mime, fileName);
+    var file = attachmentsFolder_().createFile(blob);   // private by default (owner-only)
+    var row = {
+      AttachmentID: Utilities.getUuid(), ParentType: parentType, ParentID: parentId,
+      FileName: fileName, DriveFileID: file.getId(), Url: file.getUrl(), CreatedAt: new Date().toISOString()
+    };
+    appendRow_(SHEETS.attachments, row);
+    return { ok: true, attachment: row };
+  } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
+}
+function adminListAttachments_(d) {
+  requireAdmin_(d);
+  var pt = (trim_(d.parentType) === 'invoice') ? 'invoice' : 'contract';
+  var pid = trim_(d.parentId);
+  var all = readAll_(SHEETS.attachments).filter(function (a) { return a.ParentType === pt && String(a.ParentID) === pid; });
+  return { ok: true, attachments: all };
+}
+function adminDeleteAttachment_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.attachments, 'AttachmentID', trim_(d.id));
+  if (a && a.DriveFileID) { try { DriveApp.getFileById(a.DriveFileID).setTrashed(true); } catch (e) {} }
+  deleteRowsWhere_(SHEETS.attachments, 'AttachmentID', trim_(d.id));
+  return { ok: true };
+}
+function deleteAttachmentsFor_(parentType, parentId) {
+  readAll_(SHEETS.attachments).forEach(function (a) {
+    if (a.ParentType === parentType && String(a.ParentID) === String(parentId)) {
+      if (a.DriveFileID) { try { DriveApp.getFileById(a.DriveFileID).setTrashed(true); } catch (e) {} }
+      deleteRowsWhere_(SHEETS.attachments, 'AttachmentID', a.AttachmentID);
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Contracts
 // ─────────────────────────────────────────────────────────────────────────────
 function autoNumber_(sheetName, dateField, dateStr, prefix) {
@@ -239,6 +296,7 @@ function adminDeleteContract_(d) {
   readAll_(SHEETS.projects).forEach(function (p) { if (String(p.ContractID) === id) updateRow_(SHEETS.projects, 'ProjectID', p.ProjectID, { ContractID: '' }); });
   readAll_(SHEETS.contracts).forEach(function (c) { if (String(c.ParentContractID) === id) updateRow_(SHEETS.contracts, 'ContractID', c.ContractID, { ParentContractID: '' }); });
   readAll_(SHEETS.invoices).forEach(function (v) { if (String(v.ContractID) === id) updateRow_(SHEETS.invoices, 'InvoiceID', v.InvoiceID, { ContractID: '' }); });
+  deleteAttachmentsFor_('contract', id);
   deleteRowsWhere_(SHEETS.contracts, 'ContractID', id);
   return { ok: true };
 }
@@ -287,6 +345,7 @@ function adminUpdateInvoice_(d) {
 }
 function adminDeleteInvoice_(d) {
   requireAdmin_(d);
+  deleteAttachmentsFor_('invoice', trim_(d.id));
   deleteRowsWhere_(SHEETS.invoices, 'InvoiceID', trim_(d.id));
   return { ok: true };
 }
@@ -773,7 +832,7 @@ function testFx() {
 }
 
 function setup() {
-  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.employees); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
+  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
   ensureCounterparties_();
   SpreadsheetApp.getActive().toast('Sheets created.');
 }

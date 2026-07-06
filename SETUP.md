@@ -101,3 +101,8 @@ An employee is emailed only when they are **added** to a project, or when their 
 Contract and invoice amounts are auto-converted to USD using historical rates on the contract's signing date / the invoice date (EUR & SGD via the free Frankfurter API; AED at its fixed USD peg; USD = 1). If a rate is temporarily unavailable, the USD field is left blank and can be filled later with the **↻ Recalculate missing USD** button (or the per-row **↻ USD**).
 
 **Re-authorization:** because the script now makes an external request (to fetch rates), the first deployment after this change will ask you to re-authorize additional permissions. Approve them (Review permissions → Allow). If contracts/invoices in a foreign currency show no USD value, open the Apps Script editor once and run any function to trigger the authorization prompt, then use Recalculate.
+
+## Attachments (contracts & invoices)
+Open a contract (Contracts → Open) or an invoice (Invoices → Open) and use the **Attachments** section to upload a PDF or photo (max ~20 MB). Files are stored **privately** in your Google Drive, in a folder called **FXWorks Attachments** — only you (the Drive owner) can open them; the link will not work for anyone not signed in to your Google account. Deleting an attachment moves the Drive file to Trash. Deleting a contract or invoice also removes its attachments.
+
+**Re-authorization:** attachments require Drive access, so add `https://www.googleapis.com/auth/drive` to the `oauthScopes` in `appsscript.json`, save, run `testFx` (or any function) once to trigger the consent screen, and Allow. Then publish a New version of the deployment.
