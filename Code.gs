@@ -17,16 +17,18 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-05.2';
+const BUILD = '2026-07-05.3';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'CreatedAt'],
   employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt'],
   contracts:   ['ContractID', 'Number', 'Description', 'CounterpartyID', 'Direction', 'SignDate', 'StartDate', 'EndDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'ParentContractID', 'CreatedAt'],
+  invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
+                'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
   projects:    ['ProjectID', 'Name', 'Customer', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
@@ -65,6 +67,11 @@ function route_(action, d) {
     case 'list_contracts':     requireAdmin_(d); return { ok: true, contracts: readAll_(SHEETS.contracts) };
     case 'update_contract':    return adminUpdateContract_(d);
     case 'delete_contract':    return adminDeleteContract_(d);
+    // Invoices
+    case 'create_invoice':     return adminCreateInvoice_(d);
+    case 'list_invoices':      requireAdmin_(d); return { ok: true, invoices: readAll_(SHEETS.invoices) };
+    case 'update_invoice':     return adminUpdateInvoice_(d);
+    case 'delete_invoice':     return adminDeleteInvoice_(d);
     // Projects
     case 'create_project':     return adminCreateProject_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
@@ -222,7 +229,52 @@ function adminDeleteContract_(d) {
   // Clear references so nothing dangles.
   readAll_(SHEETS.projects).forEach(function (p) { if (String(p.ContractID) === id) updateRow_(SHEETS.projects, 'ProjectID', p.ProjectID, { ContractID: '' }); });
   readAll_(SHEETS.contracts).forEach(function (c) { if (String(c.ParentContractID) === id) updateRow_(SHEETS.contracts, 'ContractID', c.ContractID, { ParentContractID: '' }); });
+  readAll_(SHEETS.invoices).forEach(function (v) { if (String(v.ContractID) === id) updateRow_(SHEETS.invoices, 'InvoiceID', v.InvoiceID, { ContractID: '' }); });
   deleteRowsWhere_(SHEETS.contracts, 'ContractID', id);
+  return { ok: true };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Invoices  (direction is derived from the linked contract, not stored)
+// ─────────────────────────────────────────────────────────────────────────────
+function invoiceFields_(d) {
+  var currency = CURRENCIES.indexOf(trim_(d.currency)) >= 0 ? trim_(d.currency) : 'USD';
+  return {
+    ContractID: trim_(d.contractId), CounterpartyID: trim_(d.counterpartyId),
+    InvoiceDate: trim_(d.invoiceDate), DueDate: trim_(d.dueDate),
+    Amount: num_(d.amount), Currency: currency
+  };
+}
+function adminCreateInvoice_(d) {
+  requireAdmin_(d);
+  var f = invoiceFields_(d);
+  var number = trim_(d.number);
+  if (!number) number = autoNumber_(SHEETS.invoices, 'InvoiceDate', f.InvoiceDate, 'inv');
+  else if (numberTaken_(SHEETS.invoices, number, '', 'InvoiceID')) return { ok: false, error: 'Invoice number already exists' };
+  var row = {
+    InvoiceID: Utilities.getUuid(), Number: number, ContractID: f.ContractID, CounterpartyID: f.CounterpartyID,
+    InvoiceDate: f.InvoiceDate, DueDate: f.DueDate, Amount: f.Amount, Currency: f.Currency,
+    AmountUSD: '', FxRate: '', FxAsOf: '', CreatedAt: new Date().toISOString()
+  };
+  appendRow_(SHEETS.invoices, row);
+  return { ok: true, invoice: row };
+}
+function adminUpdateInvoice_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.id), v = findRow_(SHEETS.invoices, 'InvoiceID', id);
+  if (!v) return { ok: false, error: 'Invoice not found' };
+  var f = invoiceFields_(d);
+  var number = trim_(d.number) || v.Number;
+  if (numberTaken_(SHEETS.invoices, number, id, 'InvoiceID')) return { ok: false, error: 'Invoice number already exists' };
+  updateRow_(SHEETS.invoices, 'InvoiceID', id, {
+    Number: number, ContractID: f.ContractID, CounterpartyID: f.CounterpartyID,
+    InvoiceDate: f.InvoiceDate, DueDate: f.DueDate, Amount: f.Amount, Currency: f.Currency
+  });
+  return { ok: true };
+}
+function adminDeleteInvoice_(d) {
+  requireAdmin_(d);
+  deleteRowsWhere_(SHEETS.invoices, 'InvoiceID', trim_(d.id));
   return { ok: true };
 }
 

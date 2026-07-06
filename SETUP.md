@@ -88,6 +88,7 @@ An employee is emailed only when they are **added** to a project, or when their 
 ## Data model (sheet tabs)
 
 - **Contracts**: number (auto `agr/YYYY/MM/DD-N` from the signing date if left blank, otherwise unique), counterparty, direction (incoming = we receive / outgoing = we pay), sign/start/end dates, amount + currency, optional parent (general) contract for sub-contracts. A project can optionally be linked to a contract.
+- **Invoices**: number (auto `inv/YYYY/MM/DD-N` from the invoice date if left blank, otherwise unique), optional linked contract, counterparty, invoice date, due date, amount + currency. Direction is inherited from the linked contract.
 - **Counterparties**: name, type (business/individual), address, email, phone, password, reporting-access flag, rate, currency. Reporting "team members" are the counterparties with reporting access.
 - **Employees**: legacy directory, kept as a backup after migration to Counterparties.
 - **Projects**: name, customer (one row per project).

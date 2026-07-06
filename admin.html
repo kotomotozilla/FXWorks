@@ -86,6 +86,7 @@
     <div class="tabs">
       <button id="tab-projects" class="active" onclick="switchTab('projects')">Projects</button>
       <button id="tab-contracts" onclick="switchTab('contracts')">Contracts</button>
+      <button id="tab-invoices" onclick="switchTab('invoices')">Invoices</button>
       <button id="tab-counterparties" onclick="switchTab('counterparties')">Counterparties</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
     </div>
@@ -147,6 +148,39 @@
       <div class="panel">
         <h2>Contracts</h2>
         <div class="scroll"><table id="ctTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- INVOICES -->
+    <section id="view-invoices" class="hidden">
+      <div class="panel">
+        <h2 id="inv_formTitle">New invoice</h2>
+        <p class="muted">Number can be left blank — it is generated as <code>inv/YYYY/MM/DD-N</code> from the invoice date. Direction is inherited from the linked contract.</p>
+        <div id="invErr"></div>
+        <div class="row">
+          <div><label>Number</label><input id="inv_number" placeholder="auto: inv/YYYY/MM/DD-N"></div>
+          <div style="flex:2"><label>Contract (optional)</label><select id="inv_contract" onchange="invContractChange()"></select></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div style="flex:2"><label>Counterparty</label><select id="inv_cp"></select></div>
+          <div id="inv_dirWrap" style="max-width:230px"><label>Direction (from contract)</label><input id="inv_dir" disabled></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div><label>Invoice date</label><input id="inv_date" type="date"></div>
+          <div><label>Due date</label><input id="inv_due" type="date"></div>
+          <div><label>Amount</label><input id="inv_amount" type="number" min="0" step="0.01" placeholder="0"></div>
+          <div style="max-width:150px"><label>Currency</label>
+            <select id="inv_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
+        </div>
+        <div style="height:14px"></div>
+        <button class="btn" id="inv_btn" onclick="saveInvoice()">Create invoice</button>
+        <button class="btn ghost" id="inv_cancel" onclick="invClear()" style="display:none">Cancel edit</button>
+      </div>
+      <div class="panel">
+        <h2>Invoices</h2>
+        <div class="scroll"><table id="invTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
 
@@ -264,10 +298,10 @@
 </div></div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
+const APPS_SCRIPT_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-05.2';
+const BUILD = '2026-07-05.3';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -278,7 +312,7 @@ function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return is
 function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
 
 let PIN = sessionStorage.getItem('fx_pin') || '';
-let COUNTERPARTIES = [], CONTRACTS = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '', EDIT_CT = '';
+let COUNTERPARTIES = [], CONTRACTS = [], INVOICES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '', EDIT_CT = '', EDIT_INV = '';
 
 async function api(action, payload={}){
   let res;
@@ -316,11 +350,11 @@ function enterApp(){
   $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
   renderWho();
   if(!BE_BUILD){ api('admin_login').then(r=>{ BE_BUILD=r.build||''; renderWho(); }).catch(()=>{}); }
-  loadCounterparties().then(loadContracts).then(loadProjects);
+  loadCounterparties().then(loadContracts).then(loadInvoices).then(loadProjects);
 }
 function switchTab(t){
-  ['projects','contracts','counterparties','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts();
+  ['projects','contracts','invoices','counterparties','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices();
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
 function ctNumber(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?c.Number:''; }
@@ -402,6 +436,79 @@ function editCounterparty(id){
   window.scrollTo(0,0);
 }
 
+// ── Invoices ──
+function ctDirection(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?dirEn(c.Direction):''; }
+function invClear(){
+  EDIT_INV='';
+  ['inv_number','inv_amount','inv_date','inv_due'].forEach(id=>$(id).value='');
+  $('inv_currency').value='USD'; $('inv_dir').value='';
+  $('inv_contract').innerHTML = contractOptions('');
+  $('inv_cp').innerHTML = ctCpOptions('');
+  $('inv_formTitle').textContent='New invoice'; $('inv_btn').textContent='Create invoice'; $('inv_cancel').style.display='none';
+  notice('invErr','','');
+}
+function invContractChange(){
+  const cid = $('inv_contract').value;
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(cid));
+  $('inv_dir').value = c ? dirEn(c.Direction) : '';
+  if(c && c.CounterpartyID){ $('inv_cp').innerHTML = ctCpOptions(c.CounterpartyID); }   // default counterparty from contract
+}
+async function loadInvoices(){
+  try{
+    const r = await api('list_invoices'); INVOICES = r.invoices||[];
+    $('inv_contract').innerHTML = contractOptions($('inv_contract').value);
+    $('inv_cp').innerHTML = ctCpOptions($('inv_cp').value);
+    const tb = $('invTable').querySelector('tbody');
+    if(!INVOICES.length){ tb.innerHTML='<tr><td class="empty">No invoices yet.</td></tr>'; return; }
+    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th>Contract</th><th>Direction</th><th class="num">Amount</th><th>Invoice date</th><th>Due</th><th></th></tr>'+
+    INVOICES.map(v=>{const s=cur(v.Currency);return `<tr>
+      <td>${esc(v.Number)}</td>
+      <td>${esc(cpName(v.CounterpartyID))}</td>
+      <td class="muted">${v.ContractID?esc(ctNumber(v.ContractID)):'—'}</td>
+      <td class="muted">${v.ContractID?(ctDirection(v.ContractID)==='Outgoing (we pay)'?'Outgoing':'Incoming'):'—'}</td>
+      <td class="num">${(v.Amount!==''&&v.Amount!=null)?s+money(v.Amount):'—'}</td>
+      <td class="muted">${esc(v.InvoiceDate?fmtDate(v.InvoiceDate):'—')}</td>
+      <td class="muted">${esc(v.DueDate?fmtDate(v.DueDate):'—')}</td>
+      <td><div class="acts"><button class="btn ghost sm" onclick="editInvoice('${esc(v.InvoiceID)}')">Edit</button>
+        <button class="btn warn sm" onclick="delInvoice('${esc(v.InvoiceID)}','${esc(v.Number)}',this)">Delete</button></div></td></tr>`;}).join('');
+  }catch(e){ notice('invErr','err', esc(e.message)); }
+}
+async function saveInvoice(){
+  notice('invErr','','');
+  const cpId=$('inv_cp').value;
+  if(!cpId){ notice('invErr','err','Select a counterparty.'); return; }
+  const b=$('inv_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const payload={ id:EDIT_INV, number:$('inv_number').value.trim(), contractId:$('inv_contract').value, counterpartyId:cpId,
+    invoiceDate:$('inv_date').value, dueDate:$('inv_due').value, amount:$('inv_amount').value, currency:$('inv_currency').value };
+  try{
+    await api(EDIT_INV?'update_invoice':'create_invoice', payload);
+    invClear(); await loadInvoices(); notice('invErr','ok','Invoice saved.');
+  }catch(e){ notice('invErr','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent = EDIT_INV?'Update invoice':'Create invoice'; }
+}
+async function delInvoice(id, number, btn){
+  if(!confirm('Delete invoice "'+(number||'')+'"?')) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('delete_invoice',{id}); await loadInvoices(); }
+  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
+}
+function editInvoice(id){
+  const v = INVOICES.find(x=>String(x.InvoiceID)===String(id));
+  if(!v) return;
+  EDIT_INV = v.InvoiceID;
+  $('inv_number').value = v.Number||'';
+  $('inv_contract').innerHTML = contractOptions(v.ContractID||'');
+  $('inv_cp').innerHTML = ctCpOptions(v.CounterpartyID||'');
+  $('inv_dir').value = v.ContractID ? ctDirection(v.ContractID) : '';
+  $('inv_date').value = v.InvoiceDate?fmtDate(v.InvoiceDate):'';
+  $('inv_due').value = v.DueDate?fmtDate(v.DueDate):'';
+  $('inv_amount').value = (v.Amount===''||v.Amount==null)?'':v.Amount;
+  $('inv_currency').value = (['USD','EUR','AED','SGD'].indexOf(v.Currency)>=0)?v.Currency:'USD';
+  $('inv_formTitle').textContent='Edit invoice'; $('inv_btn').textContent='Update invoice'; $('inv_cancel').style.display='';
+  notice('invErr','ok','Editing '+esc(v.Number)+'.');
+  switchTab('invoices'); window.scrollTo(0,0);
+}
+
 // ── Contracts ──
 function ctCpOptions(sel){ return '<option value="">— none —</option>'+COUNTERPARTIES.map(c=>`<option value="${esc(c.CounterpartyID)}" ${String(sel)===String(c.CounterpartyID)?'selected':''}>${esc(c.Name||c.Email||'—')}</option>`).join(''); }
 function ctParentOptions(sel, excludeId){
@@ -424,6 +531,7 @@ async function loadContracts(){
     $('ct_cp').innerHTML = ctCpOptions($('ct_cp').value);
     $('ct_parent').innerHTML = ctParentOptions($('ct_parent').value, EDIT_CT);
     if($('p_contract')) $('p_contract').innerHTML = contractOptions($('p_contract').value);
+    if($('inv_contract')) $('inv_contract').innerHTML = contractOptions($('inv_contract').value);
     // table
     const tb = $('ctTable').querySelector('tbody');
     if(!CONTRACTS.length){ tb.innerHTML='<tr><td class="empty">No contracts yet.</td></tr>'; return; }
