@@ -381,8 +381,14 @@ function enterApp(){
   $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
   renderWho();
   if(!BE_BUILD){ api('admin_login').then(r=>{ BE_BUILD=r.build||''; renderWho(); }).catch(()=>{}); }
-  loadCounterparties().then(loadContracts).then(loadInvoices).then(loadProjects);
+  // Load in parallel and render the visible Projects tab as soon as possible.
+  // Projects render immediately; the Contract/Counterparty names fill in once those lists arrive.
+  loadProjects();
+  loadCounterparties().then(afterRefLoaded);
+  loadContracts().then(afterRefLoaded);
+  loadInvoices();
 }
+function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){
   ['projects','contracts','invoices','counterparties','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
   if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices();
@@ -767,22 +773,25 @@ function editContract(id){
 // ── Projects list ──
 async function loadProjects(){
   try{
-    const r = await api('list_projects'); PROJECTS = r.projects; ASSIGNMENTS = r.assignments||[];
-    const tb = $('projTable').querySelector('tbody');
-    if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">No projects yet.</td></tr>'; return; }
-    tb.innerHTML = '<tr><th>Project</th><th>Contract / Counterparty</th><th>Team members</th><th></th></tr>'+
-    PROJECTS.map(p=>{
-      const list = ASSIGNMENTS.filter(a=>a.ProjectID===p.ProjectID);
-      const sub = list.length ? list.map(a=>statusEn(a.Status)).reduce((m,s)=>{m[s]=(m[s]||0)+1;return m;},{}) : null;
-      const subTxt = sub ? Object.keys(sub).map(k=>`${sub[k]} ${k.toLowerCase()}`).join(', ') : '—';
-      const cpn = p.CounterpartyID ? cpName(p.CounterpartyID) : (p.Customer||'—');
-      const link = p.ContractID ? `${esc(ctNumber(p.ContractID))} <span class="muted">· ${esc(cpn)}</span>` : esc(cpn);
-      return `<tr>
-        <td>${esc(p.Name)}</td><td>${link}</td>
-        <td>${list.length}${list.length?` <span class="muted">(${esc(subTxt)})</span>`:''}</td>
-        <td><button class="btn ghost sm" onclick="openProject('${p.ProjectID}')">Open</button></td></tr>`;
-    }).join('');
+    const r = await api('list_projects'); PROJECTS = r.projects||[]; ASSIGNMENTS = r.assignments||[];
+    renderProjectsList();
   }catch(e){ notice('projErr','err', esc(e.message)); }
+}
+function renderProjectsList(){
+  const tb = $('projTable').querySelector('tbody');
+  if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">No projects yet.</td></tr>'; return; }
+  tb.innerHTML = '<tr><th>Project</th><th>Contract / Counterparty</th><th>Team members</th><th></th></tr>'+
+  PROJECTS.map(p=>{
+    const list = ASSIGNMENTS.filter(a=>a.ProjectID===p.ProjectID);
+    const sub = list.length ? list.map(a=>statusEn(a.Status)).reduce((m,s)=>{m[s]=(m[s]||0)+1;return m;},{}) : null;
+    const subTxt = sub ? Object.keys(sub).map(k=>`${sub[k]} ${k.toLowerCase()}`).join(', ') : '—';
+    const cpn = p.CounterpartyID ? cpName(p.CounterpartyID) : (p.Customer||'—');
+    const link = p.ContractID ? `${esc(ctNumber(p.ContractID))} <span class="muted">· ${esc(cpn)}</span>` : esc(cpn);
+    return `<tr>
+      <td>${esc(p.Name)}</td><td>${link}</td>
+      <td>${list.length}${list.length?` <span class="muted">(${esc(subTxt)})</span>`:''}</td>
+      <td><button class="btn ghost sm" onclick="openProject('${p.ProjectID}')">Open</button></td></tr>`;
+  }).join('');
 }
 async function createProject(){
   notice('projErr','',''); const name=$('p_name').value.trim();
