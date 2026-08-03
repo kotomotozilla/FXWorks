@@ -278,9 +278,69 @@
 </div></div>
 
 <!-- Report editor modal -->
+<div id="wrModal" class="modal hidden"><div class="box">
+  <h2><span id="wr_title">Work report</span><button class="x" onclick="closeModal('wrModal')">×</button></h2>
+  <div class="row" style="align-items:end">
+    <div><label>From</label><input id="wr_from" type="date"></div>
+    <div><label>To</label><input id="wr_to" type="date"></div>
+    <div style="flex:0 0 auto"><button class="btn sm" onclick="generateWorkReport()">Generate</button></div>
+    <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="printWorkReport()">Print / PDF</button></div>
+  </div>
+  <div style="height:10px"></div>
+  <div id="wr_body"><p class="muted">Select a date range and click Generate.</p></div>
+</div></div>
+
 <div id="cpModal" class="modal hidden"><div class="box">
   <h2><span id="cpm_title">Counterparty</span><button class="x" onclick="closeModal('cpModal')">×</button></h2>
   <div id="cpm_body"></div>
+  <div class="sep"></div>
+  <h2 style="font-size:15px">Requisite sets</h2>
+  <p class="muted">Legal details, bank account and signatory used in generated contracts. The set marked <b>default</b> is pre-selected when a contract is created.</p>
+  <div id="rq_err"></div>
+  <div id="cpm_reqs"></div>
+  <div style="height:10px"></div>
+  <button class="btn ghost sm" onclick="reqNew()">+ Add requisite set</button>
+  <div id="rq_form" class="hidden" style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px">
+    <div class="row">
+      <div><label>Label</label><input id="rq_label" placeholder="Main / HSBC"></div>
+      <div style="flex:2"><label>Legal name</label><input id="rq_legalName" placeholder="Full legal name"></div>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <div><label>Jurisdiction</label><input id="rq_jurisdiction" placeholder="Hong Kong SAR"></div>
+      <div><label>Registration / licence No.</label><input id="rq_regNumber"></div>
+    </div>
+    <div style="height:8px"></div>
+    <div><label>Legal address</label><textarea id="rq_address"></textarea></div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <div style="flex:2"><label>Bank name</label><input id="rq_bankName"></div>
+      <div style="flex:2"><label>Bank address</label><input id="rq_bankAddress"></div>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <div style="flex:2"><label>Beneficiary name</label><input id="rq_beneficiaryName"></div>
+      <div style="flex:2"><label>Account / IBAN</label><input id="rq_accountNumber"></div>
+      <div><label>SWIFT</label><input id="rq_swift"></div>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <div style="flex:2"><label>Correspondent bank</label><input id="rq_corrBank"></div>
+      <div><label>Corr. SWIFT</label><input id="rq_corrSwift"></div>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <div style="flex:2"><label>Signatory name</label><input id="rq_signatoryName" placeholder="Konstantin Maiorov"></div>
+      <div><label>Signatory title</label><input id="rq_signatoryTitle" placeholder="Director"></div>
+    </div>
+    <div style="height:10px"></div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" id="rq_isDefault" style="width:auto"> Use as default for this counterparty</label>
+    <div style="height:10px"></div>
+    <div class="acts">
+      <button class="btn sm" id="rq_save" onclick="reqSave()">Save requisite set</button>
+      <button class="btn ghost sm" onclick="reqCancel()">Cancel</button>
+    </div>
+  </div>
   <div class="sep"></div>
   <h2 style="font-size:15px">Files</h2>
   <div id="cpm_attach"></div>
@@ -332,7 +392,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-05.8';
+const BUILD = '2026-07-19.1';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -343,7 +403,7 @@ function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return is
 function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:'';}
 
 let PIN = sessionStorage.getItem('fx_pin') || '';
-let COUNTERPARTIES = [], CONTRACTS = [], INVOICES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '', EDIT_CT = '', EDIT_INV = '';
+let COUNTERPARTIES = [], CONTRACTS = [], INVOICES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '', EDIT_CT = '', EDIT_INV = '', WR = null;
 
 async function api(action, payload={}){
   let res;
@@ -398,6 +458,79 @@ function ctNumber(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(i
 function dirEn(d){ return d==='outgoing'?'Outgoing (we pay)':'Incoming (we receive)'; }
 function statusEn(s){return {released:'Released',recalled:'Recalled',draft:'In progress (draft)',submitted:'Submitted'}[s]||s;}
 
+// ── Work report per counterparty (work performed by the selected counterparty) ──
+function isoLocal(d){ const off=d.getTimezoneOffset(); return new Date(d.getTime()-off*60000).toISOString().slice(0,10); }
+function prevMonthRange(){ const n=new Date(); return [ isoLocal(new Date(n.getFullYear(), n.getMonth()-1, 1)), isoLocal(new Date(n.getFullYear(), n.getMonth(), 0)) ]; }
+function openWorkReport(cpId){
+  const cp = COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(cpId));
+  if(!cp) return;
+  WR = { cpId, name: cp.Name||cp.Email||'' };
+  $('wr_title').textContent = 'Work report — '+(cp.Name||cp.Email||'');
+  const [f,t]=prevMonthRange(); $('wr_from').value=f; $('wr_to').value=t;
+  $('wrModal').classList.remove('hidden');
+  generateWorkReport();
+}
+function generateWorkReport(){
+  if(!WR) return;
+  const cp = COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(WR.cpId));
+  if(!cp) return;
+  const email=(cp.Email||'').toLowerCase();
+  const from=$('wr_from').value, to=$('wr_to').value; WR.from=from; WR.to=to;
+  WR.rows = ASSIGNMENTS.filter(a=>{
+    if((a.EmployeeEmail||'').toLowerCase()!==email) return false;
+    if(a.Status!=='submitted') return false;
+    const d = a.SubmittedAt?fmtDate(a.SubmittedAt):''; if(!d) return false;
+    if(from && d<from) return false;
+    if(to && d>to) return false;
+    return true;
+  }).map(a=>{
+    const proj = PROJECTS.find(p=>String(p.ProjectID)===String(a.ProjectID));
+    const hours=+a.ReportedHours||0;
+    const amount=(a.ReportedAmount!==''&&a.ReportedAmount!=null)?+a.ReportedAmount:hours*(+a.Rate||0);
+    return { project:a.ProjectName||'', title:a.Title||'', customer:a.Customer||'', contract:(proj&&proj.ContractID)?ctNumber(proj.ContractID):'', hours, amount, currency:a.Currency||'USD', date:a.SubmittedAt?fmtDate(a.SubmittedAt):'' };
+  }).sort((x,y)=>(x.date<y.date?-1:1));
+  renderWorkReport();
+}
+function renderWorkReport(){
+  const rows=(WR&&WR.rows)||[];
+  if(!rows.length){ $('wr_body').innerHTML='<p class="empty">No completed (submitted) work in this range.</p>'; return; }
+  let totH=0; const totA={};
+  const body = rows.map(r=>{ totH+=r.hours; totA[r.currency]=(totA[r.currency]||0)+r.amount;
+    return `<tr><td>${esc(r.project)}${r.title?`<div class="muted">${esc(r.title)}</div>`:''}</td>
+      <td>${esc(r.customer||'—')}</td><td class="muted">${esc(r.contract||'—')}</td>
+      <td class="num">${hrs(r.hours)}</td><td class="num">${cur(r.currency)}${money(r.amount)}</td>
+      <td class="muted">${esc(r.date)}</td></tr>`;
+  }).join('');
+  const totals = Object.keys(totA).map(c=>`${cur(c)}${money(totA[c])}`).join(' + ')||'—';
+  $('wr_body').innerHTML = `<div class="scroll"><table>
+    <tr><th>Project</th><th>Counterparty</th><th>Contract</th><th class="num">Hours</th><th class="num">Amount</th><th>Date</th></tr>
+    ${body}
+    <tr><td colspan="3" style="text-align:right"><b>Total</b></td><td class="num"><b>${hrs(totH)}</b></td><td class="num"><b>${esc(totals)}</b></td><td></td></tr>
+  </table></div><p class="muted" style="font-size:11px">Completed (submitted) reports where ${esc(WR.name)} is the performer, by submission date.</p>`;
+}
+function printWorkReport(){
+  const rows=(WR&&WR.rows)||[];
+  if(!rows.length){ alert('Nothing to print for this range.'); return; }
+  let totH=0; const totA={};
+  const trs = rows.map(r=>{ totH+=r.hours; totA[r.currency]=(totA[r.currency]||0)+r.amount;
+    return `<tr><td>${esc(r.project)}${r.title?' — '+esc(r.title):''}</td><td>${esc(r.customer||'')}</td><td>${esc(r.contract||'')}</td><td class="r">${hrs(r.hours)}</td><td class="r">${cur(r.currency)}${money(r.amount)}</td><td>${esc(r.date)}</td></tr>`;
+  }).join('');
+  const totals=Object.keys(totA).map(c=>cur(c)+money(totA[c])).join(' + ')||'—';
+  const w=window.open('','_blank');
+  w.document.write(`<html><head><meta charset="utf-8"><title>Work report — ${esc(WR.name)}</title><style>
+    body{font-family:Arial,Helvetica,sans-serif;font-size:12pt;color:#15202B;padding:28px}
+    h1{font-size:16pt;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:14px}
+    th,td{border:1px solid #cbd3da;padding:7px 9px;text-align:left;font-size:10.5pt}th{background:#f2f5f8}.r{text-align:right}
+  </style></head><body>
+    <h1>${esc(COMPANY)}</h1>
+    <p><b>Work report — ${esc(WR.name)}</b><br>Period: ${esc(WR.from||'—')} … ${esc(WR.to||'—')}</p>
+    <table><tr><th>Project</th><th>Counterparty</th><th>Contract</th><th class="r">Hours</th><th class="r">Amount</th><th>Date</th></tr>
+    ${trs}
+    <tr><td colspan="3" style="text-align:right"><b>Total</b></td><td class="r"><b>${hrs(totH)}</b></td><td class="r"><b>${totals}</b></td><td></td></tr>
+    </table></body></html>`);
+  w.document.close(); w.focus(); setTimeout(()=>{ try{w.print();}catch(e){} },300);
+}
+
 // ── Counterparties ──
 function cpAccessToggle(){ $('c_reporting').classList.toggle('hidden', !$('c_access').checked); }
 function cpClear(){
@@ -423,7 +556,8 @@ async function loadCounterparties(){
         <td>${esc(c.Email||'—')}</td>
         <td>${access?'<span class="tag submitted">yes</span>':'<span class="muted">no</span>'}</td>
         <td class="num">${rate}</td>
-        <td><div class="acts"><button class="btn ghost sm" onclick="openCounterparty('${esc(c.CounterpartyID)}')">Files</button>
+        <td><div class="acts"><button class="btn ghost sm" onclick="openWorkReport('${esc(c.CounterpartyID)}')">Report</button>
+          <button class="btn ghost sm" onclick="openCounterparty('${esc(c.CounterpartyID)}')">Files</button>
           <button class="btn ghost sm" onclick="editCounterparty('${esc(c.CounterpartyID)}')">Edit</button>
           ${inviteBtn}
           <button class="btn warn sm" onclick="delCounterparty('${esc(c.CounterpartyID)}','${esc(c.Name||'')}',this)">Delete</button></div></td></tr>`;
@@ -533,6 +667,71 @@ async function deleteAttachment(id, parentType, parentId, elId){
   try{ await api('delete_attachment',{id}); await renderAttachments(elId, parentType, parentId); }
   catch(e){ alert(e.message); }
 }
+// ── Requisite sets (per counterparty) ──
+const RQ_FIELDS = ['label','legalName','jurisdiction','regNumber','address','bankName','bankAddress',
+                   'beneficiaryName','accountNumber','swift','corrBank','corrSwift','signatoryName','signatoryTitle'];
+let RQ_CP = '', RQ_EDIT = '', REQUISITES = [];
+
+async function loadRequisites(cpId){
+  RQ_CP = cpId;
+  const el = $('cpm_reqs'); el.innerHTML = '<div class="muted">Loading…</div>';
+  try{
+    const r = await api('list_requisites',{counterpartyId:cpId}); REQUISITES = r.requisites||[];
+    if(!REQUISITES.length){ el.innerHTML = '<div class="muted" style="padding:6px 0">No requisite sets yet.</div>'; return; }
+    el.innerHTML = REQUISITES.map(q=>{
+      const def = String(q.IsDefault).toLowerCase()==='yes';
+      const bank = [q.BankName, q.AccountNumber].filter(Boolean).join(' · ');
+      return `<div class="asg"><div class="top2">
+        <div><div class="nm">${esc(q.Label||'—')} ${def?'<span class="tag submitted">default</span>':''}</div>
+          <div class="em">${esc(q.LegalName||'')}${bank?' · '+esc(bank):''}${q.SignatoryName?' · '+esc(q.SignatoryName):''}</div></div>
+        <div class="acts">
+          ${def?'':`<button class="btn ghost sm" onclick="reqSetDefault('${esc(q.RequisiteID)}',this)">Make default</button>`}
+          <button class="btn ghost sm" onclick="reqEdit('${esc(q.RequisiteID)}')">Edit</button>
+          <button class="btn warn sm" onclick="reqDelete('${esc(q.RequisiteID)}',this)">Delete</button>
+        </div></div></div>`;
+    }).join('');
+  }catch(e){ el.innerHTML = '<div class="notice err">'+esc(e.message)+'</div>'; }
+}
+function reqClearForm(){
+  RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); if(el) el.value=''; });
+  $('rq_isDefault').checked = false; RQ_EDIT='';
+}
+function reqNew(){ reqClearForm(); $('rq_form').classList.remove('hidden'); $('rq_save').textContent='Save requisite set'; notice('rq_err','',''); }
+function reqCancel(){ $('rq_form').classList.add('hidden'); reqClearForm(); notice('rq_err','',''); }
+function reqEdit(id){
+  const q = REQUISITES.find(x=>String(x.RequisiteID)===String(id)); if(!q) return;
+  RQ_EDIT = id;
+  const map = {label:'Label',legalName:'LegalName',jurisdiction:'Jurisdiction',regNumber:'RegNumber',address:'Address',
+    bankName:'BankName',bankAddress:'BankAddress',beneficiaryName:'BeneficiaryName',accountNumber:'AccountNumber',
+    swift:'Swift',corrBank:'CorrBank',corrSwift:'CorrSwift',signatoryName:'SignatoryName',signatoryTitle:'SignatoryTitle'};
+  RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); if(el) el.value = q[map[f]]||''; });
+  $('rq_isDefault').checked = String(q.IsDefault).toLowerCase()==='yes';
+  $('rq_form').classList.remove('hidden'); $('rq_save').textContent='Update requisite set';
+  notice('rq_err','ok','Editing "'+esc(q.Label||'')+'".');
+}
+async function reqSave(){
+  notice('rq_err','','');
+  const b=$('rq_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const payload = { id:RQ_EDIT, counterpartyId:RQ_CP, isDefault:$('rq_isDefault').checked };
+  RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); payload[f] = el?el.value.trim():''; });
+  try{
+    await api('save_requisite', payload);
+    reqCancel(); await loadRequisites(RQ_CP); notice('rq_err','ok','Requisite set saved.');
+  }catch(e){ notice('rq_err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent = RQ_EDIT?'Update requisite set':'Save requisite set'; }
+}
+async function reqDelete(id, btn){
+  if(!confirm('Delete this requisite set?')) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('delete_requisite',{id}); await loadRequisites(RQ_CP); }
+  catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Delete'; }
+}
+async function reqSetDefault(id, btn){
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('set_default_requisite',{id}); await loadRequisites(RQ_CP); }
+  catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Make default'; }
+}
+
 function openCounterparty(id){
   const c = COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id));
   if(!c) return;
@@ -545,6 +744,8 @@ function openCounterparty(id){
     ['Reporting access', String(c.HasReportingAccess).toLowerCase()==='yes'?'yes':'no']
   ];
   $('cpm_body').innerHTML = rows.map(r=>`<div style="display:flex;justify-content:space-between;padding:4px 0;gap:12px"><span class="muted">${r[0]}</span><span style="text-align:right">${r[1]}</span></div>`).join('');
+  reqCancel();
+  loadRequisites(id);
   renderAttachments('cpm_attach','counterparty',id);
   $('cpModal').classList.remove('hidden');
 }

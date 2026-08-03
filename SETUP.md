@@ -109,3 +109,6 @@ Open a contract (Contracts → Open) or an invoice (Invoices → Open) and use t
 
 ## Projects: contract & counterparty
 A project now has a **counterparty** (required) and an optional **contract**, instead of a free-text customer. Pick a contract and the counterparty is set from it automatically; if you change the counterparty to someone else, the contract link clears. In work reports/PDF the customer is taken from the linked contract's counterparty, or from the project's counterparty when there is no contract.
+
+## Work report per counterparty
+Counterparties → **Report** opens a summary of completed (submitted) work performed by that counterparty for a date range (defaults to the previous month): project, counterparty (project's customer), contract, hours and amount, with totals and a Print/PDF button.

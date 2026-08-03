@@ -19,13 +19,16 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-05.8';
+const BUILD = '2026-07-19.1';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { counterparties: 'Counterparties', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'CreatedAt'],
+  requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
+                'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
+                'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
   employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt'],
   contracts:   ['ContractID', 'Number', 'Description', 'CounterpartyID', 'Direction', 'SignDate', 'StartDate', 'EndDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'ParentContractID', 'CreatedAt'],
@@ -65,6 +68,11 @@ function route_(action, d) {
     case 'list_counterparties': requireAdmin_(d); ensureCounterparties_(); return { ok: true, counterparties: readAll_(SHEETS.counterparties) };
     case 'delete_counterparty': return adminDeleteCounterparty_(d);
     case 'invite_counterparty': return adminInviteCounterparty_(d);
+    // Requisites (bank details + signatory sets per counterparty)
+    case 'list_requisites':    requireAdmin_(d); return { ok: true, requisites: adminListRequisites_(d) };
+    case 'save_requisite':     return adminSaveRequisite_(d);
+    case 'delete_requisite':   return adminDeleteRequisite_(d);
+    case 'set_default_requisite': return adminSetDefaultRequisite_(d);
     // Contracts
     case 'create_contract':    return adminCreateContract_(d);
     case 'list_contracts':     requireAdmin_(d); return { ok: true, contracts: readAll_(SHEETS.contracts) };
@@ -176,6 +184,9 @@ function adminSaveCounterparty_(d) {
 function adminDeleteCounterparty_(d) {
   requireAdmin_(d);
   ensureCounterparties_();
+  adminListRequisites_({ counterpartyId: trim_(d.id) }).forEach(function (r) {
+    deleteRowsWhere_(SHEETS.requisites, 'RequisiteID', r.RequisiteID);
+  });
   deleteRowsWhere_(SHEETS.counterparties, 'CounterpartyID', trim_(d.id));
   return { ok: true };
 }
@@ -231,6 +242,75 @@ function deleteAttachmentsFor_(parentType, parentId) {
       deleteRowsWhere_(SHEETS.attachments, 'AttachmentID', a.AttachmentID);
     }
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Requisites — several sets per counterparty, one marked as default
+// ─────────────────────────────────────────────────────────────────────────────
+var REQ_FIELDS = ['Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address', 'BankName', 'BankAddress',
+                  'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift', 'SignatoryName', 'SignatoryTitle'];
+
+function adminListRequisites_(d) {
+  var cpId = trim_(d.counterpartyId);
+  var all = readAll_(SHEETS.requisites);
+  return cpId ? all.filter(function (r) { return String(r.CounterpartyID) === cpId; }) : all;
+}
+function clearDefaults_(cpId, keepId) {
+  readAll_(SHEETS.requisites).forEach(function (r) {
+    if (String(r.CounterpartyID) === String(cpId) && String(r.RequisiteID) !== String(keepId) && truthy_(r.IsDefault)) {
+      updateRow_(SHEETS.requisites, 'RequisiteID', r.RequisiteID, { IsDefault: 'no' });
+    }
+  });
+}
+function adminSaveRequisite_(d) {
+  requireAdmin_(d);
+  var cpId = trim_(d.counterpartyId);
+  if (!cpId) return { ok: false, error: 'Counterparty is required' };
+  var id = trim_(d.id);
+  var vals = {};
+  REQ_FIELDS.forEach(function (f) { vals[f] = trim_(d[f.charAt(0).toLowerCase() + f.slice(1)]); });
+  if (!vals.Label) vals.Label = vals.BankName || 'Main';
+  var existing = adminListRequisites_({ counterpartyId: cpId });
+  var makeDefault = truthy_(d.isDefault) || existing.length === 0;   // first set is default automatically
+
+  if (id) {
+    var rec = findRow_(SHEETS.requisites, 'RequisiteID', id);
+    if (!rec) return { ok: false, error: 'Requisite set not found' };
+    vals.IsDefault = makeDefault ? 'yes' : (truthy_(rec.IsDefault) && !truthy_(d.isDefault) ? 'yes' : 'no');
+    updateRow_(SHEETS.requisites, 'RequisiteID', id, vals);
+    if (truthy_(vals.IsDefault)) clearDefaults_(cpId, id);
+    return { ok: true, updated: true };
+  }
+  var row = { RequisiteID: Utilities.getUuid(), CounterpartyID: cpId, IsDefault: makeDefault ? 'yes' : 'no', CreatedAt: new Date().toISOString() };
+  REQ_FIELDS.forEach(function (f) { row[f] = vals[f]; });
+  appendRow_(SHEETS.requisites, row);
+  if (makeDefault) clearDefaults_(cpId, row.RequisiteID);
+  return { ok: true, requisite: row };
+}
+function adminDeleteRequisite_(d) {
+  requireAdmin_(d);
+  var rec = findRow_(SHEETS.requisites, 'RequisiteID', trim_(d.id));
+  if (!rec) return { ok: false, error: 'Requisite set not found' };
+  deleteRowsWhere_(SHEETS.requisites, 'RequisiteID', trim_(d.id));
+  // if the default was removed, promote the first remaining set
+  if (truthy_(rec.IsDefault)) {
+    var rest = adminListRequisites_({ counterpartyId: rec.CounterpartyID });
+    if (rest.length) updateRow_(SHEETS.requisites, 'RequisiteID', rest[0].RequisiteID, { IsDefault: 'yes' });
+  }
+  return { ok: true };
+}
+function adminSetDefaultRequisite_(d) {
+  requireAdmin_(d);
+  var rec = findRow_(SHEETS.requisites, 'RequisiteID', trim_(d.id));
+  if (!rec) return { ok: false, error: 'Requisite set not found' };
+  updateRow_(SHEETS.requisites, 'RequisiteID', rec.RequisiteID, { IsDefault: 'yes' });
+  clearDefaults_(rec.CounterpartyID, rec.RequisiteID);
+  return { ok: true };
+}
+function defaultRequisite_(cpId) {
+  var list = adminListRequisites_({ counterpartyId: cpId });
+  for (var i = 0; i < list.length; i++) if (truthy_(list[i].IsDefault)) return list[i];
+  return list.length ? list[0] : null;
 }
 
 function addOneYear_(dateStr) {
@@ -850,7 +930,7 @@ function testFx() {
 }
 
 function setup() {
-  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
+  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
   ensureCounterparties_();
   SpreadsheetApp.getActive().toast('Sheets created.');
 }
