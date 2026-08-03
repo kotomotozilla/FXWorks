@@ -196,7 +196,7 @@
     <section id="view-counterparties" class="hidden">
       <div class="panel">
         <h2>Add counterparty</h2>
-        <p class="muted">Businesses or individuals. Tick "reporting access" for people who submit reports — they'll sign in with email + password and can be added to projects.</p>
+        <p class="muted">Create a counterparty here; open its card in the list below to edit details, requisites and files.</p>
         <div id="cpErr"></div>
         <div class="row">
           <div style="flex:2"><label>Name *</label><input id="c_name" placeholder="John A. Smith / Acme Ltd"></div>
@@ -292,7 +292,37 @@
 
 <div id="cpModal" class="modal hidden"><div class="box">
   <h2><span id="cpm_title">Counterparty</span><button class="x" onclick="closeModal('cpModal')">×</button></h2>
-  <div id="cpm_body"></div>
+  <div id="cm_err"></div>
+  <div class="row">
+    <div style="flex:2"><label>Name *</label><input id="cm_name"></div>
+    <div style="max-width:170px"><label>Type</label>
+      <select id="cm_type"><option value="individual">Individual</option><option value="business">Business</option></select></div>
+  </div>
+  <div style="height:8px"></div>
+  <div class="row">
+    <div style="flex:2"><label>Email</label><input id="cm_email" type="email"></div>
+    <div><label>Phone</label><input id="cm_phone"></div>
+  </div>
+  <div style="height:8px"></div>
+  <div><label>Address</label><textarea id="cm_address"></textarea></div>
+  <div style="height:10px"></div>
+  <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)">
+    <input type="checkbox" id="cm_access" style="width:auto" onchange="cmAccessToggle()"> Has access to the reporting system</label>
+  <div id="cm_reporting" class="hidden">
+    <div style="height:8px"></div>
+    <div class="row">
+      <div><label>Rate per hour</label><input id="cm_rate" type="number" min="0" step="0.01"></div>
+      <div style="max-width:150px"><label>Currency</label>
+        <select id="cm_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
+      <div><label>Password</label><input id="cm_pass" type="text" placeholder="leave blank to keep current"></div>
+    </div>
+  </div>
+  <div style="height:12px"></div>
+  <div class="acts">
+    <button class="btn sm" id="cm_save" onclick="saveCounterpartyCard()">Save counterparty</button>
+    <button class="btn ghost sm" id="cm_invite" onclick="inviteFromCard(this)">Send invite</button>
+    <button class="btn warn sm" onclick="deleteFromCard()">Delete counterparty</button>
+  </div>
   <div class="sep"></div>
   <h2 style="font-size:15px">Requisite sets</h2>
   <p class="muted">Legal details, bank account and signatory used in generated contracts. The set marked <b>default</b> is pre-selected when a contract is created.</p>
@@ -342,7 +372,8 @@
     </div>
   </div>
   <div class="sep"></div>
-  <h2 style="font-size:15px">Files</h2>
+  <h2 style="font-size:15px">Company files</h2>
+  <p class="muted">Documents related to this counterparty — registration papers, licences, certificates.</p>
   <div id="cpm_attach"></div>
 </div></div>
 
@@ -392,7 +423,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-19.1';
+const BUILD = '2026-07-19.3';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -557,8 +588,7 @@ async function loadCounterparties(){
         <td>${access?'<span class="tag submitted">yes</span>':'<span class="muted">no</span>'}</td>
         <td class="num">${rate}</td>
         <td><div class="acts"><button class="btn ghost sm" onclick="openWorkReport('${esc(c.CounterpartyID)}')">Report</button>
-          <button class="btn ghost sm" onclick="openCounterparty('${esc(c.CounterpartyID)}')">Files</button>
-          <button class="btn ghost sm" onclick="editCounterparty('${esc(c.CounterpartyID)}')">Edit</button>
+          <button class="btn ghost sm" onclick="openCounterparty('${esc(c.CounterpartyID)}')">Open</button>
           ${inviteBtn}
           <button class="btn warn sm" onclick="delCounterparty('${esc(c.CounterpartyID)}','${esc(c.Name||'')}',this)">Delete</button></div></td></tr>`;
     }).join('');
@@ -590,23 +620,6 @@ async function inviteCounterparty(email, btn){
   try{ await api('invite_counterparty',{email}); notice('cpErr','ok','Invite sent to '+esc(email)+'.'); btn.textContent='Invite'; }
   catch(e){ notice('cpErr','err', esc(e.message)); btn.textContent='Invite'; }
   finally{ btn.disabled=false; }
-}
-function editCounterparty(id){
-  const c = COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id));
-  if(!c) return;
-  EDIT_CP = c.CounterpartyID;
-  $('c_name').value = c.Name||'';
-  $('c_type').value = (c.Type==='business')?'business':'individual';
-  $('c_email').value = c.Email||'';
-  $('c_phone').value = c.Phone||'';
-  $('c_address').value = c.Address||'';
-  $('c_access').checked = String(c.HasReportingAccess).toLowerCase()==='yes';
-  $('c_rate').value = (c.Rate===''||c.Rate==null)?'':c.Rate;
-  $('c_currency').value = (['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0)?c.Currency:'USD';
-  $('c_pass').value=''; $('c_pass').placeholder='leave blank to keep current';
-  cpAccessToggle(); $('c_btn').textContent='Update counterparty';
-  notice('cpErr','ok','Editing '+esc(c.Name||c.Email||'')+' — change any field and Save. Leave password blank to keep it.');
-  window.scrollTo(0,0);
 }
 
 // ── FX recalculation ──
@@ -732,23 +745,60 @@ async function reqSetDefault(id, btn){
   catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Make default'; }
 }
 
+let CARD_CP = '';
+function cmAccessToggle(){ $('cm_reporting').classList.toggle('hidden', !$('cm_access').checked); }
 function openCounterparty(id){
   const c = COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id));
   if(!c) return;
+  CARD_CP = id;
   $('cpm_title').textContent = c.Name||c.Email||'Counterparty';
-  const rows = [
-    ['Type', c.Type==='business'?'Business':'Individual'],
-    ['Email', c.Email?esc(c.Email):'—'],
-    ['Phone', c.Phone?esc(c.Phone):'—'],
-    ['Address', c.Address?esc(c.Address):'—'],
-    ['Reporting access', String(c.HasReportingAccess).toLowerCase()==='yes'?'yes':'no']
-  ];
-  $('cpm_body').innerHTML = rows.map(r=>`<div style="display:flex;justify-content:space-between;padding:4px 0;gap:12px"><span class="muted">${r[0]}</span><span style="text-align:right">${r[1]}</span></div>`).join('');
+  $('cm_name').value = c.Name||'';
+  $('cm_type').value = (c.Type==='business')?'business':'individual';
+  $('cm_email').value = c.Email||'';
+  $('cm_phone').value = c.Phone||'';
+  $('cm_address').value = c.Address||'';
+  const access = String(c.HasReportingAccess).toLowerCase()==='yes';
+  $('cm_access').checked = access;
+  $('cm_rate').value = (c.Rate===''||c.Rate==null)?'':c.Rate;
+  $('cm_currency').value = (['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0)?c.Currency:'USD';
+  $('cm_pass').value='';
+  $('cm_invite').style.display = access ? '' : 'none';
+  cmAccessToggle(); notice('cm_err','','');
   reqCancel();
   loadRequisites(id);
   renderAttachments('cpm_attach','counterparty',id);
   $('cpModal').classList.remove('hidden');
 }
+async function saveCounterpartyCard(){
+  notice('cm_err','','');
+  const name=$('cm_name').value.trim();
+  if(!name){ notice('cm_err','err','Name is required.'); return; }
+  const access=$('cm_access').checked, email=$('cm_email').value.trim();
+  if(access && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('cm_err','err','Reporting access requires a valid email.'); return; }
+  const b=$('cm_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  try{
+    await api('save_counterparty', { id:CARD_CP, name, type:$('cm_type').value, email, phone:$('cm_phone').value.trim(),
+      address:$('cm_address').value.trim(), hasAccess:access, password:$('cm_pass').value, rate:$('cm_rate').value, currency:$('cm_currency').value });
+    await loadCounterparties();
+    $('cpm_title').textContent = name;
+    $('cm_pass').value=''; $('cm_invite').style.display = access ? '' : 'none';
+    notice('cm_err','ok','Saved.');
+  }catch(e){ notice('cm_err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Save counterparty'; }
+}
+async function inviteFromCard(btn){
+  const email=$('cm_email').value.trim();
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('invite_counterparty',{email}); notice('cm_err','ok','Invite sent to '+esc(email)+'.'); }
+  catch(e){ notice('cm_err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Send invite'; }
+}
+async function deleteFromCard(){
+  if(!confirm('Delete this counterparty? Requisite sets and files are removed; existing reports remain.')) return;
+  try{ await api('delete_counterparty',{id:CARD_CP}); closeModal('cpModal'); await loadCounterparties(); }
+  catch(e){ notice('cm_err','err', esc(e.message)); }
+}
+
 function openInvoice(id){
   const v = INVOICES.find(x=>String(x.InvoiceID)===String(id));
   if(!v) return;
