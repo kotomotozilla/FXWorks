@@ -122,36 +122,14 @@
     <!-- CONTRACTS -->
     <section id="view-contracts" class="hidden">
       <div class="panel">
-        <h2 id="ct_formTitle">New contract</h2>
-        <p class="muted">Number can be left blank — it is generated as <code>agr/YYYY/MM/DD-N</code> from the signing date. A sub-contract points to its general contract.</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2>Contracts</h2>
+          <div class="acts">
+            <button class="btn sm" onclick="newContract()">+ New contract</button>
+            <button class="btn ghost sm" onclick="recalcAllFx(this)">↻ Recalculate missing USD</button>
+          </div>
+        </div>
         <div id="ctErr"></div>
-        <div class="row">
-          <div><label>Number</label><input id="ct_number" placeholder="auto: agr/YYYY/MM/DD-N"></div>
-          <div style="flex:2"><label>Counterparty</label><select id="ct_cp"></select></div>
-          <div style="max-width:210px"><label>Direction</label>
-            <select id="ct_dir"><option value="incoming">Incoming (we receive)</option><option value="outgoing">Outgoing (we pay)</option></select></div>
-        </div>
-        <div style="height:10px"></div>
-        <div class="row">
-          <div><label>Sign date</label><input id="ct_sign" type="date"></div>
-          <div><label>Start date</label><input id="ct_start" type="date"></div>
-          <div><label>End date</label><input id="ct_end" type="date"></div>
-        </div>
-        <div style="height:10px"></div>
-        <div class="row">
-          <div><label>Amount</label><input id="ct_amount" type="number" min="0" step="0.01" placeholder="0"></div>
-          <div style="max-width:150px"><label>Currency</label>
-            <select id="ct_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
-          <div style="flex:2"><label>General (parent) contract — leave empty for a general contract</label><select id="ct_parent"></select></div>
-        </div>
-        <div style="height:10px"></div>
-        <div><label>Description</label><textarea id="ct_desc" placeholder="Subject / scope"></textarea></div>
-        <div style="height:14px"></div>
-        <button class="btn" id="ct_btn" onclick="saveContract()">Create contract</button>
-        <button class="btn ghost" id="ct_cancel" onclick="ctClear()" style="display:none">Cancel edit</button>
-      </div>
-      <div class="panel">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2>Contracts</h2><button class="btn ghost sm" onclick="recalcAllFx(this)">↻ Recalculate missing USD</button></div>
         <div class="scroll"><table id="ctTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
@@ -387,6 +365,37 @@
 
 <div id="ctModal" class="modal hidden"><div class="box">
   <h2><span id="ctm_title">Contract</span><button class="x" onclick="closeModal('ctModal')">×</button></h2>
+  <div id="ctm_err"></div>
+  <div class="row">
+    <div><label>Number</label><input id="ct_number" placeholder="auto: agr/YYYY/MM/DD-N"></div>
+    <div style="flex:2"><label>Counterparty</label><select id="ct_cp"></select></div>
+    <div style="max-width:210px"><label>Direction</label>
+      <select id="ct_dir"><option value="incoming">Incoming (we receive)</option><option value="outgoing">Outgoing (we pay)</option></select></div>
+  </div>
+  <div style="height:8px"></div>
+  <div class="row">
+    <div><label>Sign date</label><input id="ct_sign" type="date"></div>
+    <div><label>Start date</label><input id="ct_start" type="date"></div>
+    <div><label>End date</label><input id="ct_end" type="date"></div>
+  </div>
+  <div style="height:8px"></div>
+  <div class="row">
+    <div><label>Amount</label><input id="ct_amount" type="number" min="0" step="0.01" placeholder="0"></div>
+    <div style="max-width:150px"><label>Currency</label>
+      <select id="ct_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
+    <div style="flex:2"><label>General (parent) contract — empty for a general contract</label><select id="ct_parent"></select></div>
+  </div>
+  <div style="height:8px"></div>
+  <div><label>Description</label><textarea id="ct_desc" placeholder="Subject / scope"></textarea></div>
+  <div style="height:12px"></div>
+  <div class="acts">
+    <button class="btn sm" id="ct_btn" onclick="saveContract()">Save contract</button>
+    <button class="btn ghost sm" id="ct_fx" onclick="recalcContractFx(EDIT_CT,this)">↻ Recalculate USD</button>
+    <button class="btn warn sm" id="ct_del" onclick="deleteContractFromCard()">Delete contract</button>
+  </div>
+  <div id="ctm_usd" class="muted" style="margin-top:8px"></div>
+  <div id="ctm_sections">
+  <div class="sep"></div>
   <div id="ctm_body"></div>
   <div class="sep"></div>
   <h2 style="font-size:15px">Document settings</h2>
@@ -491,6 +500,7 @@
   </div>
   <div style="height:12px"></div>
   <button class="btn sm" id="dc_save" onclick="saveContractDoc()">Save document settings</button>
+  </div>
 </div></div>
 
 <div id="repModal" class="modal hidden"><div class="box">
@@ -526,7 +536,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-19.5';
+const BUILD = '2026-07-19.6';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -728,8 +738,10 @@ async function inviteCounterparty(email, btn){
 // ── FX recalculation ──
 async function recalcContractFx(id, btn){
   const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('recalc_contract_fx',{id}); await loadContracts(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent=t; }
+  try{ await api('recalc_contract_fx',{id}); await loadContracts();
+    if(!$('ctModal').classList.contains('hidden') && String(EDIT_CT)===String(id)) openContract(id, true);
+  }catch(e){ alert(e.message); }
+  finally{ btn.disabled=false; btn.textContent=t; }
 }
 async function recalcInvoiceFx(id, btn){
   const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
@@ -1057,14 +1069,35 @@ function ctParentOptions(sel, excludeId){
 }
 function contractOptions(sel){ return '<option value="">— none —</option>'+CONTRACTS.map(c=>`<option value="${esc(c.ContractID)}" ${String(sel)===String(c.ContractID)?'selected':''}>${esc(c.Number)} — ${esc(cpName(c.CounterpartyID))}</option>`).join(''); }
 function todayISO(){ const d=new Date(), off=d.getTimezoneOffset(); return new Date(d.getTime()-off*60000).toISOString().slice(0,10); }
-function ctClear(){
-  EDIT_CT='';
-  ['ct_number','ct_amount','ct_desc','ct_end'].forEach(id=>$(id).value='');
-  $('ct_sign').value=todayISO(); $('ct_start').value=todayISO();
-  $('ct_dir').value='incoming'; $('ct_currency').value='USD';
-  $('ct_cp').innerHTML=ctCpOptions(''); $('ct_parent').innerHTML=ctParentOptions('','');
-  $('ct_formTitle').textContent='New contract'; $('ct_btn').textContent='Create contract'; $('ct_cancel').style.display='none';
-  notice('ctErr','','');
+function ctFillForm(c){
+  $('ct_number').value = c ? (c.Number||'') : '';
+  $('ct_cp').innerHTML = ctCpOptions(c ? c.CounterpartyID : '');
+  $('ct_dir').value = (c && c.Direction==='outgoing') ? 'outgoing' : 'incoming';
+  $('ct_sign').value  = c && c.SignDate  ? fmtDate(c.SignDate)  : todayISO();
+  $('ct_start').value = c && c.StartDate ? fmtDate(c.StartDate) : todayISO();
+  $('ct_end').value   = c && c.EndDate   ? fmtDate(c.EndDate)   : '';
+  $('ct_amount').value = (c && c.Amount!==''&&c.Amount!=null) ? c.Amount : '';
+  $('ct_currency').value = (c && ['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0) ? c.Currency : 'USD';
+  $('ct_parent').innerHTML = ctParentOptions(c ? c.ParentContractID : '', c ? c.ContractID : '');
+  $('ct_desc').value = c ? (c.Description||'') : '';
+  notice('ctm_err','','');
+}
+function newContract(){
+  EDIT_CT = '';
+  $('ctm_title').textContent = 'New contract';
+  ctFillForm(null);
+  $('ct_btn').textContent = 'Create contract';
+  $('ct_fx').style.display = 'none';
+  $('ct_del').style.display = 'none';
+  $('ctm_usd').textContent = '';
+  $('ctm_sections').classList.add('hidden');
+  $('ctModal').classList.remove('hidden');
+}
+async function deleteContractFromCard(){
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(EDIT_CT));
+  if(!confirm('Delete contract "'+((c&&c.Number)||'')+'"? Links to projects and sub-contracts will be cleared, and its attachments removed.')) return;
+  try{ await api('delete_contract',{id:EDIT_CT}); closeModal('ctModal'); await loadContracts(); await loadProjects(); }
+  catch(e){ notice('ctm_err','err', esc(e.message)); }
 }
 async function loadContracts(){
   try{
@@ -1088,125 +1121,37 @@ async function loadContracts(){
       <td class="muted">${esc(c.SignDate?fmtDate(c.SignDate):'—')}</td>
       <td class="muted">${esc(c.StartDate?fmtDate(c.StartDate):'—')}${c.EndDate?' → '+esc(fmtDate(c.EndDate)):''}</td>
       <td class="muted">${c.ParentContractID?esc(ctNumber(c.ParentContractID)):'—'}</td>
-      <td><div class="acts"><button class="btn ghost sm" onclick="openContract('${esc(c.ContractID)}')">Open</button>
-        <button class="btn ghost sm" onclick="recalcContractFx('${esc(c.ContractID)}',this)" title="Recalculate USD">↻ USD</button>
-        <button class="btn ghost sm" onclick="editContract('${esc(c.ContractID)}')">Edit</button>
-        <button class="btn warn sm" onclick="delContract('${esc(c.ContractID)}','${esc(c.Number)}',this)">Delete</button></div></td></tr>`;}).join('');
+      <td><button class="btn ghost sm" onclick="openContract('${esc(c.ContractID)}')">Open</button></td></tr>`;}).join('');
   }catch(e){ notice('ctErr','err', esc(e.message)); }
 }
 async function saveContract(){
-  notice('ctErr','','');
+  notice('ctm_err','','');
   const b=$('ct_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   const payload = { id:EDIT_CT, number:$('ct_number').value.trim(), counterpartyId:$('ct_cp').value, direction:$('ct_dir').value,
     signDate:$('ct_sign').value, startDate:$('ct_start').value, endDate:$('ct_end').value,
     amount:$('ct_amount').value, currency:$('ct_currency').value, parentContractId:$('ct_parent').value, description:$('ct_desc').value.trim() };
   try{
-    await api(EDIT_CT?'update_contract':'create_contract', payload);
-    ctClear(); await loadContracts(); notice('ctErr','ok','Contract saved.');
-  }catch(e){ notice('ctErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent = EDIT_CT?'Update contract':'Create contract'; }
-}
-async function delContract(id, number, btn){
-  if(!confirm('Delete contract "'+(number||'')+'"? Links to projects and sub-contracts will be cleared.')) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('delete_contract',{id}); await loadContracts(); await loadProjects(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
-}
-// ── Document settings on a contract ──
-const DC_TEXT = ['templateType','ourRole','ourRequisiteId','theirRequisiteId','subject','paymentOption','paymentDays',
-  'advancePercent','advanceDays','governingLaw','jurisdictionPlace','arbitrationBody','arbitrationSeat','remarksDays',
-  'acceptanceDays','evaluationDays','disputeDays','cureDays','noticeDays','termYears','warrantyPeriod',
-  'penaltyDelayPercent','penaltyFailurePercent','penaltyCapPercent','insuranceAmount','restrictedTerritories',
-  'rateAmount','rateBasis','invoiceTrigger','paymentBasis','reportFrequency','completionDate','pMName','sowScope'];
-const DC_FLAGS = ['optAcceptanceAct','optPenalties','optUsageRights','optInsurance','optDataSecurity','optWarranty'];
-const DC_KEY = f => f.charAt(0).toUpperCase()+f.slice(1);
-const DC_DEFAULTS = {
-  b2b: { remarksDays:15, acceptanceDays:30, cureDays:15, paymentDays:30, paymentOption:'postpay',
-         penaltyDelayPercent:0.1, penaltyFailurePercent:10, penaltyCapPercent:20,
-         governingLaw:'Switzerland', jurisdictionPlace:'Geneva, Switzerland', warrantyPeriod:'1.5 (one and a half) months' },
-  ica: { paymentDays:30, disputeDays:20, evaluationDays:10, noticeDays:60, termYears:2, paymentOption:'postpay',
-         invoiceTrigger:'on_completion', paymentBasis:'hourly', reportFrequency:'on_completion', rateBasis:'per hour',
-         governingLaw:'Hong Kong SAR', arbitrationBody:'Hong Kong International Arbitration Centre (HKIAC)',
-         arbitrationSeat:'Hong Kong', restrictedTerritories:'the Russian Federation and the Republic of Belarus' }
-};
-let DC_ID = '';
-
-function reqOptions(cpId, sel){
-  const list = (DC_REQS[cpId]||[]);
-  if(!list.length) return '<option value="">— no requisite sets —</option>';
-  return '<option value="">— select —</option>'+list.map(q=>{
-    const def = String(q.IsDefault).toLowerCase()==='yes';
-    return `<option value="${esc(q.RequisiteID)}" ${String(sel)===String(q.RequisiteID)?'selected':''}>${esc(q.Label||'—')}${def?' (default)':''}</option>`;
-  }).join('');
-}
-let DC_REQS = {};
-async function loadReqsFor(cpIds){
-  for(const id of cpIds){ if(!id || DC_REQS[id]) continue;
-    try{ const r = await api('list_requisites',{counterpartyId:id}); DC_REQS[id] = r.requisites||[]; }catch(e){ DC_REQS[id]=[]; }
-  }
-}
-function dcTemplateChange(){
-  const ica = $('dc_templateType').value==='ica';
-  $('dc_icaPay').classList.toggle('hidden', !ica);
-  $('dc_b2bProc').classList.toggle('hidden', ica);
-  $('dc_arbWrap').classList.toggle('hidden', !ica);
-  $('dc_seatWrap').classList.toggle('hidden', !ica);
-  $('dc_jurWrap').classList.toggle('hidden', ica);
-}
-function dcPayChange(){
-  const needWarranty = $('dc_paymentOption').value==='after_warranty';
-  if(needWarranty && !$('dc_optWarranty').checked){
-    $('dc_optWarranty').checked = true;
-    notice('dc_err','info','Warranty enabled automatically — payment is tied to the warranty period.');
-  }
-  $('dc_warrantyWrap').style.display = '';
-}
-async function openContractDoc(c){
-  DC_ID = c.ContractID;
-  const our = OUR_CP_ID(), theirs = c.CounterpartyID;
-  await loadReqsFor([our, theirs]);
-  const tpl = c.TemplateType || 'b2b';
-  $('dc_templateType').value = tpl;
-  const def = DC_DEFAULTS[tpl] || {};
-  DC_TEXT.forEach(f=>{
-    const el = $('dc_'+f); if(!el) return;
-    let v = c[DC_KEY(f)];
-    if((v===''||v==null) && def[f]!==undefined) v = def[f];
-    el.value = (v==null?'':v);
-  });
-  $('dc_ourRole').value = c.OurRole || 'supplier';
-  $('dc_ourRequisiteId').innerHTML = reqOptions(our, c.OurRequisiteID);
-  $('dc_theirRequisiteId').innerHTML = reqOptions(theirs, c.TheirRequisiteID);
-  const isNew = !c.TemplateType;
-  DC_FLAGS.forEach(f=>{
-    const el=$('dc_'+f); if(!el) return;
-    const raw = c[DC_KEY(f)];
-    el.checked = (raw==='' || raw==null) ? (isNew && f!=='optWarranty') : String(raw).toLowerCase()==='yes';
-  });
-  dcTemplateChange(); dcPayChange(); notice('dc_err','','');
-}
-function OUR_CP_ID(){
-  const me = COUNTERPARTIES.find(c=>/fraktalex/i.test(c.Name||''));
-  return me ? me.CounterpartyID : '';
-}
-async function saveContractDoc(){
-  notice('dc_err','','');
-  const b=$('dc_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  const payload = { id:DC_ID };
-  DC_TEXT.forEach(f=>{ const el=$('dc_'+f); if(el) payload[f]=el.value; });
-  DC_FLAGS.forEach(f=>{ const el=$('dc_'+f); if(el) payload[f]=el.checked; });
-  try{
-    await api('save_contract_doc', payload);
+    const r = await api(EDIT_CT?'update_contract':'create_contract', payload);
     await loadContracts();
-    notice('dc_err','ok','Document settings saved.');
-  }catch(e){ notice('dc_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Save document settings'; }
+    const id = EDIT_CT || (r.contract && r.contract.ContractID);
+    if(id) openContract(id, true);
+    notice('ctm_err','ok','Contract saved.');
+  }catch(e){ notice('ctm_err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
 }
-
-function openContract(id){
+function openContract(id, keepOpen){
   const c = CONTRACTS.find(x=>String(x.ContractID)===String(id));
   if(!c) return;
-  const s=cur(c.Currency);
+  EDIT_CT = c.ContractID;
+  $('ctm_title').textContent = c.Number;
+  ctFillForm(c);
+  $('ct_btn').textContent = 'Save contract';
+  $('ct_fx').style.display = ''; $('ct_del').style.display = '';
+  $('ctm_usd').innerHTML = (c.AmountUSD!==''&&c.AmountUSD!=null)
+    ? `USD equivalent: <b>$${money(c.AmountUSD)}</b>${c.FxAsOf?` <span class="muted">@${esc(c.FxAsOf)}</span>`:''}`
+    : '<span class="muted">USD equivalent not calculated yet.</span>';
+  $('ctm_sections').classList.remove('hidden');
+const s=cur(c.Currency);
   const subs = CONTRACTS.filter(x=>String(x.ParentContractID)===String(id));
   const invs = INVOICES.filter(x=>String(x.ContractID)===String(id));
   const projs = PROJECTS.filter(x=>String(x.ContractID)===String(id));
@@ -1242,7 +1187,7 @@ function openContract(id){
 
   html += '<div class="sep"></div><h2 style="font-size:15px">Attachments</h2><div id="ctm_attach"></div>';
 
-  $('ctm_body').innerHTML = html;
+    $('ctm_body').innerHTML = html;
   renderAttachments('ctm_attach','contract',id);
   openContractDoc(c);
   $('ctModal').classList.remove('hidden');
@@ -1250,24 +1195,6 @@ function openContract(id){
 function openInvoiceFromContract(id){ closeModal('ctModal'); editInvoice(id); }
 function openProjectFromContract(pid){ closeModal('ctModal'); openProject(pid); }
 
-function editContract(id){
-  const c = CONTRACTS.find(x=>String(x.ContractID)===String(id));
-  if(!c) return;
-  EDIT_CT = c.ContractID;
-  $('ct_number').value = c.Number||'';
-  $('ct_cp').innerHTML = ctCpOptions(c.CounterpartyID);
-  $('ct_dir').value = (c.Direction==='outgoing')?'outgoing':'incoming';
-  $('ct_sign').value = c.SignDate?fmtDate(c.SignDate):'';
-  $('ct_start').value = c.StartDate?fmtDate(c.StartDate):'';
-  $('ct_end').value = c.EndDate?fmtDate(c.EndDate):'';
-  $('ct_amount').value = (c.Amount===''||c.Amount==null)?'':c.Amount;
-  $('ct_currency').value = (['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0)?c.Currency:'USD';
-  $('ct_parent').innerHTML = ctParentOptions(c.ParentContractID, c.ContractID);
-  $('ct_desc').value = c.Description||'';
-  $('ct_formTitle').textContent='Edit contract'; $('ct_btn').textContent='Update contract'; $('ct_cancel').style.display='';
-  notice('ctErr','ok','Editing '+esc(c.Number)+'.');
-  switchTab('contracts'); window.scrollTo(0,0);
-}
 
 // ── Projects list ──
 async function loadProjects(){
