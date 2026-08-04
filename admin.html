@@ -33,6 +33,9 @@
   .btn.ghost{background:#fff;color:var(--accent);border:1px solid var(--line)} .btn.ghost:hover{border-color:var(--accent)}
   .btn.warn{background:#fff;color:var(--warn);border:1px solid #e6c3ba} .btn.warn:hover{border-color:var(--warn)}
   .btn.sm{padding:6px 11px;font-size:13px;border-radius:8px}
+  th.srt{cursor:pointer;user-select:none;white-space:nowrap}
+  th.srt:hover{color:var(--brand)}
+  .fbadge{background:var(--brand);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:6px}
   .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1 1 150px;min-width:0}
   .panel{border:1px solid var(--line);border-radius:14px;padding:18px;background:#fff;margin:0 0 18px}
   .tabs{display:flex;gap:4px;margin:0 0 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -99,7 +102,7 @@
       <div class="panel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Projects</h2>
-          <button class="btn sm" onclick="newProject()">+ New project</button>
+          <div class="acts"><span id="projTools"></span><button class="btn sm" onclick="newProject()">+ New project</button></div>
         </div>
         <div id="projErr"></div>
         <div class="scroll"><table id="projTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
@@ -112,6 +115,7 @@
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Contracts</h2>
           <div class="acts">
+            <span id="ctTools"></span>
             <button class="btn sm" onclick="newContract()">+ New contract</button>
             <button class="btn ghost sm" onclick="recalcAllFx(this)">↻ Recalculate missing USD</button>
           </div>
@@ -127,6 +131,7 @@
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Invoices</h2>
           <div class="acts">
+            <span id="invTools"></span>
             <button class="btn sm" onclick="newInvoice()">+ New invoice</button>
             <button class="btn ghost sm" onclick="recalcAllFx(this)">↻ Recalculate missing USD</button>
           </div>
@@ -141,7 +146,7 @@
       <div class="panel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Counterparties</h2>
-          <button class="btn sm" onclick="newCounterparty()">+ New counterparty</button>
+          <div class="acts"><span id="cpTools"></span><button class="btn sm" onclick="newCounterparty()">+ New counterparty</button></div>
         </div>
         <div id="cpErr"></div>
         <div class="scroll"><table id="cpTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
@@ -328,6 +333,16 @@
   </div>
 </div></div>
 
+<div id="fltModal" class="modal hidden"><div class="box">
+  <h2><span id="flt_title">Filter</span><button class="x" onclick="closeModal('fltModal')">×</button></h2>
+  <div id="flt_body"></div>
+  <div style="height:12px"></div>
+  <div class="acts">
+    <button class="btn sm" onclick="applyFilter()">Apply</button>
+    <button class="btn ghost sm" onclick="clearFilter()">Clear all</button>
+  </div>
+</div></div>
+
 <div id="ctModal" class="modal hidden"><div class="box">
   <h2><span id="ctm_title">Contract</span><button class="x" onclick="closeModal('ctModal')">×</button></h2>
   <div id="ctm_err"></div>
@@ -501,7 +516,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-19.8';
+const BUILD = '2026-07-19.9';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -644,197 +659,21 @@ function printWorkReport(){
 async function loadCounterparties(){
   try{
     const r = await api('list_counterparties'); COUNTERPARTIES = r.counterparties||[];
-    const tb = $('cpTable').querySelector('tbody');
-    if(!COUNTERPARTIES.length){ tb.innerHTML='<tr><td class="empty">No counterparties yet.</td></tr>'; }
-    else{
-      tb.innerHTML='<tr><th>Name</th><th>Type</th><th></th></tr>'+
-      COUNTERPARTIES.map(c=>`<tr>
-        <td>${esc(c.Name||'—')}${String(c.HasReportingAccess).toLowerCase()==='yes'?' <span class="tag submitted">reporting</span>':''}</td>
-        <td class="muted">${c.Type==='business'?'Business':'Individual'}</td>
-        <td><button class="btn ghost sm" onclick="openCounterparty('${esc(c.CounterpartyID)}')">Open</button></td></tr>`).join('');
-    }
+    renderCounterpartiesList();
   }catch(e){ notice('cpErr','err', esc(e.message)); }
   if($('p_cp')) $('p_cp').innerHTML = ctCpOptions($('p_cp').value);
 }
-
-// ── FX recalculation ──
-async function recalcContractFx(id, btn){
-  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('recalc_contract_fx',{id}); await loadContracts();
-    if(!$('ctModal').classList.contains('hidden') && String(EDIT_CT)===String(id)) openContract(id, true);
-  }catch(e){ alert(e.message); }
-  finally{ btn.disabled=false; btn.textContent=t; }
-}
-async function recalcInvoiceFx(id, btn){
-  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('recalc_invoice_fx',{id}); await loadInvoices();
-    if(!$('invModal').classList.contains('hidden') && String(EDIT_INV)===String(id)) openInvoice(id, true);
-  }catch(e){ alert(e.message); }
-  finally{ btn.disabled=false; btn.textContent=t; }
-}
-async function recalcAllFx(btn){
-  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{
-    const r = await api('recalc_all_fx',{});
-    await loadContracts(); await loadInvoices();
-    alert(`Recalculated ${r.done}. ${r.remaining? r.remaining+' still without USD — click again (rates may be temporarily unavailable).':'All amounts converted.'}`);
-  }catch(e){ alert(e.message); }
-  finally{ btn.disabled=false; btn.textContent=t; }
-}
-
-// ── Attachments (private files in owner's Google Drive) ──
-function fileToBase64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(file); }); }
-const DOC_TYPE_LABEL = { signed:'Signed original', draft:'Draft', annex:'Annex / SOW', amendment:'Amendment', other:'Other' };
-function docTypeOptions(sel){
-  return Object.keys(DOC_TYPE_LABEL).map(k=>`<option value="${k}" ${String(sel)===k?'selected':''}>${DOC_TYPE_LABEL[k]}</option>`).join('');
-}
-async function renderAttachments(elId, parentType, parentId){
-  const el=$(elId); el.innerHTML='<div class="muted">Loading…</div>';
-  try{
-    const r = await api('list_attachments',{parentType, parentId});
-    let items = r.attachments||[];
-    const order = { signed:0, amendment:1, annex:2, draft:3, other:4 };
-    items.sort((a,b)=>{
-      const ca = String(a.IsCurrent).toLowerCase()==='yes'?0:1, cb = String(b.IsCurrent).toLowerCase()==='yes'?0:1;
-      if(ca!==cb) return ca-cb;
-      const oa = order[a.DocType]??9, ob = order[b.DocType]??9;
-      if(oa!==ob) return oa-ob;
-      return String(b.DocDate||'').localeCompare(String(a.DocDate||''));
-    });
-    const list = items.length ? items.map(a=>{
-      const cur = String(a.IsCurrent).toLowerCase()==='yes';
-      const type = a.DocType||'other';
-      return `<div style="padding:8px 0;border-top:1px solid var(--line)">
-        <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">
-          <span><a href="${esc(a.Url)}" target="_blank" rel="noopener">📎 ${esc(a.FileName)}</a>
-            ${cur?'<span class="tag submitted">current</span>':''}
-            <div class="muted" style="font-size:12px">${esc(DOC_TYPE_LABEL[type]||'Other')}${a.DocDate?' · '+esc(fmtDate(a.DocDate)):''}${a.Description?' · '+esc(a.Description):''}</div></span>
-          <span class="acts">
-            ${cur?'':`<button class="btn ghost sm" onclick="setCurrentAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Make current</button>`}
-            <button class="btn ghost sm" onclick="toggleAttEdit('${esc(a.AttachmentID)}')">Edit</button>
-            <button class="btn warn sm" onclick="deleteAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Delete</button>
-          </span>
-        </div>
-        <div id="ae_${esc(a.AttachmentID)}" class="hidden" style="margin-top:8px">
-          <div class="row">
-            <div><label>Type</label><select id="aet_${esc(a.AttachmentID)}">${docTypeOptions(type)}</select></div>
-            <div><label>Document date</label><input id="aed_${esc(a.AttachmentID)}" type="date" value="${esc(a.DocDate?fmtDate(a.DocDate):'')}"></div>
-            <div style="flex:2"><label>Description</label><input id="aex_${esc(a.AttachmentID)}" value="${esc(a.Description||'')}"></div>
-            <div style="flex:0 0 auto;align-self:end"><button class="btn sm" onclick="saveAttMeta('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}',this)">Save</button></div>
-          </div>
-        </div>
-      </div>`;
-    }).join('') : '<div class="muted" style="padding:7px 0">No files.</div>';
-    el.innerHTML = `<div class="row" style="align-items:end">
-        <div style="flex:2 1 190px"><label>File</label><input type="file" id="${elId}_file" accept="application/pdf,image/*"></div>
-        <div><label>Type</label><select id="${elId}_type">${docTypeOptions(parentType==='contract'?'signed':'other')}</select></div>
-        <div><label>Document date</label><input type="date" id="${elId}_date" value="${todayISO()}"></div>
-        <div style="flex:2 1 180px"><label>Description</label><input type="text" id="${elId}_desc" placeholder="optional"></div>
-      </div>
-      <div style="height:6px"></div>
-      <label style="display:flex;align-items:center;gap:6px;font-size:14px"><input type="checkbox" id="${elId}_cur" style="width:auto" checked> Mark as current for its type</label>
-      <div style="height:8px"></div>
-      <button class="btn sm" id="${elId}_btn" onclick="uploadAttachment('${parentType}','${parentId}','${elId}')">Upload</button>
-      <div style="height:6px"></div>${list}
-      <p class="muted" style="font-size:11px">Stored privately in your Google Drive (folder "FXWorks Attachments") — only you, the Drive owner, can open them. Files are never removed automatically. Max ~20 MB per file.</p>`;
-  }catch(e){ el.innerHTML='<div class="notice err">'+esc(e.message)+'</div>'; }
-}
-function toggleAttEdit(id){ const el=$('ae_'+id); if(el) el.classList.toggle('hidden'); }
-async function saveAttMeta(id, parentType, parentId, elId, btn){
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
-  try{
-    await api('update_attachment',{ id, docType:$('aet_'+id).value, docDate:$('aed_'+id).value, description:$('aex_'+id).value.trim() });
-    await renderAttachments(elId, parentType, parentId);
-  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Save'; }
-}
-async function setCurrentAttachment(id, parentType, parentId, elId){
-  try{ await api('set_current_attachment',{id, isCurrent:true}); await renderAttachments(elId, parentType, parentId); }
-  catch(e){ alert(e.message); }
-}
-async function uploadAttachment(parentType, parentId, elId){
-  const input=$(elId+'_file'); const file=input.files[0];
-  if(!file){ alert('Choose a file first.'); return; }
-  if(file.size > 20*1024*1024){ alert('File too large (max ~20 MB).'); return; }
-  const btn=$(elId+'_btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
-  try{
-    const b64 = await fileToBase64(file);
-    await api('add_attachment',{parentType, parentId, fileName:file.name,
-      description:($(elId+'_desc')?$(elId+'_desc').value.trim():''),
-      docType:($(elId+'_type')?$(elId+'_type').value:'other'),
-      docDate:($(elId+'_date')?$(elId+'_date').value:''),
-      isCurrent:($(elId+'_cur')?$(elId+'_cur').checked:false),
-      mimeType:file.type||'application/octet-stream', dataBase64:b64});
-    await renderAttachments(elId, parentType, parentId);
-  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Upload'; }
-}
-async function deleteAttachment(id, parentType, parentId, elId){
-  if(!confirm('Delete this file? It will be moved to Trash in your Google Drive.')) return;
-  try{ await api('delete_attachment',{id}); await renderAttachments(elId, parentType, parentId); }
-  catch(e){ alert(e.message); }
-}
-// ── Requisite sets (per counterparty) ──
-const RQ_FIELDS = ['label','legalName','jurisdiction','regNumber','address','bankName','bankAddress',
-                   'beneficiaryName','accountNumber','swift','corrBank','corrSwift','signatoryName','signatoryTitle'];
-let RQ_CP = '', RQ_EDIT = '', REQUISITES = [];
-
-async function loadRequisites(cpId){
-  RQ_CP = cpId;
-  const el = $('cpm_reqs'); el.innerHTML = '<div class="muted">Loading…</div>';
-  try{
-    const r = await api('list_requisites',{counterpartyId:cpId}); REQUISITES = r.requisites||[];
-    if(!REQUISITES.length){ el.innerHTML = '<div class="muted" style="padding:6px 0">No requisite sets yet.</div>'; return; }
-    el.innerHTML = REQUISITES.map(q=>{
-      const def = String(q.IsDefault).toLowerCase()==='yes';
-      const bank = [q.BankName, q.AccountNumber].filter(Boolean).join(' · ');
-      return `<div class="asg"><div class="top2">
-        <div><div class="nm">${esc(q.Label||'—')} ${def?'<span class="tag submitted">default</span>':''}</div>
-          <div class="em">${esc(q.LegalName||'')}${bank?' · '+esc(bank):''}${q.SignatoryName?' · '+esc(q.SignatoryName):''}</div></div>
-        <div class="acts">
-          ${def?'':`<button class="btn ghost sm" onclick="reqSetDefault('${esc(q.RequisiteID)}',this)">Make default</button>`}
-          <button class="btn ghost sm" onclick="reqEdit('${esc(q.RequisiteID)}')">Edit</button>
-          <button class="btn warn sm" onclick="reqDelete('${esc(q.RequisiteID)}',this)">Delete</button>
-        </div></div></div>`;
-    }).join('');
-  }catch(e){ el.innerHTML = '<div class="notice err">'+esc(e.message)+'</div>'; }
-}
-function reqClearForm(){
-  RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); if(el) el.value=''; });
-  $('rq_isDefault').checked = false; RQ_EDIT='';
-}
-function reqNew(){ reqClearForm(); $('rq_form').classList.remove('hidden'); $('rq_save').textContent='Save requisite set'; notice('rq_err','',''); }
-function reqCancel(){ $('rq_form').classList.add('hidden'); reqClearForm(); notice('rq_err','',''); }
-function reqEdit(id){
-  const q = REQUISITES.find(x=>String(x.RequisiteID)===String(id)); if(!q) return;
-  RQ_EDIT = id;
-  const map = {label:'Label',legalName:'LegalName',jurisdiction:'Jurisdiction',regNumber:'RegNumber',address:'Address',
-    bankName:'BankName',bankAddress:'BankAddress',beneficiaryName:'BeneficiaryName',accountNumber:'AccountNumber',
-    swift:'Swift',corrBank:'CorrBank',corrSwift:'CorrSwift',signatoryName:'SignatoryName',signatoryTitle:'SignatoryTitle'};
-  RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); if(el) el.value = q[map[f]]||''; });
-  $('rq_isDefault').checked = String(q.IsDefault).toLowerCase()==='yes';
-  $('rq_form').classList.remove('hidden'); $('rq_save').textContent='Update requisite set';
-  notice('rq_err','ok','Editing "'+esc(q.Label||'')+'".');
-}
-async function reqSave(){
-  notice('rq_err','','');
-  const b=$('rq_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  const payload = { id:RQ_EDIT, counterpartyId:RQ_CP, isDefault:$('rq_isDefault').checked };
-  RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); payload[f] = el?el.value.trim():''; });
-  try{
-    await api('save_requisite', payload);
-    reqCancel(); await loadRequisites(RQ_CP); notice('rq_err','ok','Requisite set saved.');
-  }catch(e){ notice('rq_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent = RQ_EDIT?'Update requisite set':'Save requisite set'; }
-}
-async function reqDelete(id, btn){
-  if(!confirm('Delete this requisite set?')) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('delete_requisite',{id}); await loadRequisites(RQ_CP); }
-  catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Delete'; }
-}
-async function reqSetDefault(id, btn){
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('set_default_requisite',{id}); await loadRequisites(RQ_CP); }
-  catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Make default'; }
+function renderCounterpartiesList(){
+  $('cpTools').innerHTML = filterBtn('counterparties');
+  const tb = $('cpTable').querySelector('tbody');
+  const rows = rowsFor('counterparties', COUNTERPARTIES);
+  if(!COUNTERPARTIES.length){ tb.innerHTML='<tr><td class="empty">No counterparties yet.</td></tr>'; return; }
+  const head = '<tr>'+thSort('counterparties','Name','Name')+thSort('counterparties','Type','Type')+'<th></th></tr>';
+  if(!rows.length){ tb.innerHTML = head+'<tr><td class="empty" colspan="3">Nothing matches the filter.</td></tr>'; return; }
+  tb.innerHTML = head + rows.map(c=>`<tr>
+      <td>${esc(c.Name||'—')}${String(c.HasReportingAccess).toLowerCase()==='yes'?' <span class="tag submitted">reporting</span>':''}</td>
+      <td class="muted">${c.Type==='business'?'Business':'Individual'}</td>
+      <td><button class="btn ghost sm" onclick="openCounterparty('${esc(c.CounterpartyID)}')">Open</button></td></tr>`).join('');
 }
 
 let CARD_CP = '';
@@ -908,26 +747,7 @@ async function deleteFromCard(){
   catch(e){ notice('cm_err','err', esc(e.message)); }
 }
 
-function openInvoice(id){
-  const v = INVOICES.find(x=>String(x.InvoiceID)===String(id));
-  if(!v) return;
-  const s=cur(v.Currency);
-  $('invm_title').textContent = v.Number;
-  const rows = [
-    ['Counterparty', esc(cpName(v.CounterpartyID))],
-    ['Contract', v.ContractID?esc(ctNumber(v.ContractID))+' · '+(ctDirection(v.ContractID)||''):'—'],
-    ['Amount', (v.Amount!==''&&v.Amount!=null)?s+money(v.Amount):'—'],
-    ['USD', (v.AmountUSD!==''&&v.AmountUSD!=null)?'$'+money(v.AmountUSD)+(v.FxAsOf?' @'+esc(v.FxAsOf):''):'—'],
-    ['Invoice date', v.InvoiceDate?esc(fmtDate(v.InvoiceDate)):'—'],
-    ['Due date', v.DueDate?esc(fmtDate(v.DueDate)):'—']
-  ];
-  $('invm_body').innerHTML = rows.map(r=>`<div style="display:flex;justify-content:space-between;padding:4px 0"><span class="muted">${r[0]}</span><span>${r[1]}</span></div>`).join('');
-  renderAttachments('invm_attach','invoice',id);
-  $('invModal').classList.remove('hidden');
-}
-
-// ── Invoices ──
-function ctDirection(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?dirEn(c.Direction):''; }
+function ctDirection(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?dirEn(c.Direction):""; }
 function invFillForm(v){
   $('inv_number').value = v ? (v.Number||'') : '';
   $('inv_contract').innerHTML = contractOptions(v ? (v.ContractID||'') : '');
@@ -971,16 +791,23 @@ function invContractChange(){
 async function loadInvoices(){
   try{
     const r = await api('list_invoices'); INVOICES = r.invoices||[];
-    const tb = $('invTable').querySelector('tbody');
-    if(!INVOICES.length){ tb.innerHTML='<tr><td class="empty">No invoices yet.</td></tr>'; return; }
-    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th class="num">Amount</th><th>Invoice date</th><th></th></tr>'+
-    INVOICES.map(v=>{const s=cur(v.Currency);return `<tr>
+    renderInvoicesList();
+  }catch(e){ notice('invErr','err', esc(e.message)); }
+}
+function renderInvoicesList(){
+  $('invTools').innerHTML = filterBtn('invoices');
+  const tb = $('invTable').querySelector('tbody');
+  const rows = rowsFor('invoices', INVOICES);
+  if(!INVOICES.length){ tb.innerHTML='<tr><td class="empty">No invoices yet.</td></tr>'; return; }
+  const head = '<tr>'+thSort('invoices','Number','Number')+thSort('invoices','Counterparty','Counterparty')+
+    thSort('invoices','Amount','Amount','num')+thSort('invoices','InvoiceDate','Invoice date')+'<th></th></tr>';
+  if(!rows.length){ tb.innerHTML = head+'<tr><td class="empty" colspan="5">Nothing matches the filter.</td></tr>'; return; }
+  tb.innerHTML = head + rows.map(v=>{const s=cur(v.Currency);return `<tr>
       <td>${esc(v.Number)}</td>
       <td>${esc(cpName(v.CounterpartyID))}</td>
       <td class="num">${(v.Amount!==''&&v.Amount!=null)?s+money(v.Amount):'—'}</td>
       <td class="muted">${esc(v.InvoiceDate?fmtDate(v.InvoiceDate):'—')}</td>
       <td><button class="btn ghost sm" onclick="openInvoice('${esc(v.InvoiceID)}')">Open</button></td></tr>`;}).join('');
-  }catch(e){ notice('invErr','err', esc(e.message)); }
 }
 async function saveInvoice(){
   notice('invm_err','','');
@@ -1004,6 +831,336 @@ async function deleteInvoiceFromCard(){
   try{ await api('delete_invoice',{id:EDIT_INV}); closeModal('invModal'); await loadInvoices(); }
   catch(e){ notice('invm_err','err', esc(e.message)); }
 }
+
+
+// ── Attachments (private files in owner's Google Drive) ──
+function fileToBase64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(file); }); }
+const DOC_TYPE_LABEL = { signed:'Signed original', draft:'Draft', annex:'Annex / SOW', amendment:'Amendment', other:'Other' };
+function docTypeOptions(sel){
+  return Object.keys(DOC_TYPE_LABEL).map(k=>`<option value="${k}" ${String(sel)===k?'selected':''}>${DOC_TYPE_LABEL[k]}</option>`).join('');
+}
+async function renderAttachments(elId, parentType, parentId){
+  const el=$(elId); el.innerHTML='<div class="muted">Loading…</div>';
+  try{
+    const r = await api('list_attachments',{parentType, parentId});
+    let items = r.attachments||[];
+    const order = { signed:0, amendment:1, annex:2, draft:3, other:4 };
+    items.sort((a,b)=>{
+      const ca = String(a.IsCurrent).toLowerCase()==='yes'?0:1, cb = String(b.IsCurrent).toLowerCase()==='yes'?0:1;
+      if(ca!==cb) return ca-cb;
+      const oa = order[a.DocType]??9, ob = order[b.DocType]??9;
+      if(oa!==ob) return oa-ob;
+      return String(b.DocDate||'').localeCompare(String(a.DocDate||''));
+    });
+    const list = items.length ? items.map(a=>{
+      const cur2 = String(a.IsCurrent).toLowerCase()==='yes';
+      const type = a.DocType||'other';
+      return `<div style="padding:8px 0;border-top:1px solid var(--line)">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">
+          <span><a href="${esc(a.Url)}" target="_blank" rel="noopener">📎 ${esc(a.FileName)}</a>
+            ${cur2?'<span class="tag submitted">current</span>':''}
+            <div class="muted" style="font-size:12px">${esc(DOC_TYPE_LABEL[type]||'Other')}${a.DocDate?' · '+esc(fmtDate(a.DocDate)):''}${a.Description?' · '+esc(a.Description):''}</div></span>
+          <span class="acts">
+            ${cur2?'':`<button class="btn ghost sm" onclick="setCurrentAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Make current</button>`}
+            <button class="btn ghost sm" onclick="toggleAttEdit('${esc(a.AttachmentID)}')">Edit</button>
+            <button class="btn warn sm" onclick="deleteAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Delete</button>
+          </span>
+        </div>
+        <div id="ae_${esc(a.AttachmentID)}" class="hidden" style="margin-top:8px">
+          <div class="row">
+            <div><label>Type</label><select id="aet_${esc(a.AttachmentID)}">${docTypeOptions(type)}</select></div>
+            <div><label>Document date</label><input id="aed_${esc(a.AttachmentID)}" type="date" value="${esc(a.DocDate?fmtDate(a.DocDate):'')}"></div>
+            <div style="flex:2"><label>Description</label><input id="aex_${esc(a.AttachmentID)}" value="${esc(a.Description||'')}"></div>
+            <div style="flex:0 0 auto;align-self:end"><button class="btn sm" onclick="saveAttMeta('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}',this)">Save</button></div>
+          </div>
+        </div>
+      </div>`;
+    }).join('') : '<div class="muted" style="padding:7px 0">No files.</div>';
+    el.innerHTML = `<div class="row" style="align-items:end">
+        <div style="flex:2 1 190px"><label>File</label><input type="file" id="${elId}_file" accept="application/pdf,image/*"></div>
+        <div><label>Type</label><select id="${elId}_type">${docTypeOptions(parentType==='contract'?'signed':'other')}</select></div>
+        <div><label>Document date</label><input type="date" id="${elId}_date" value="${todayISO()}"></div>
+        <div style="flex:2 1 180px"><label>Description</label><input type="text" id="${elId}_desc" placeholder="optional"></div>
+      </div>
+      <div style="height:6px"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px"><input type="checkbox" id="${elId}_cur" style="width:auto" checked> Mark as current for its type</label>
+      <div style="height:8px"></div>
+      <button class="btn sm" id="${elId}_btn" onclick="uploadAttachment('${parentType}','${parentId}','${elId}')">Upload</button>
+      <div style="height:6px"></div>${list}
+      <p class="muted" style="font-size:11px">Stored privately in your Google Drive (folder "FXWorks Attachments") — only you, the Drive owner, can open them. Files are never removed automatically. Max ~20 MB per file.</p>`;
+  }catch(e){ el.innerHTML='<div class="notice err">'+esc(e.message)+'</div>'; }
+}
+function toggleAttEdit(id){ const el=$('ae_'+id); if(el) el.classList.toggle('hidden'); }
+async function saveAttMeta(id, parentType, parentId, elId, btn){
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    await api('update_attachment',{ id, docType:$('aet_'+id).value, docDate:$('aed_'+id).value, description:$('aex_'+id).value.trim() });
+    await renderAttachments(elId, parentType, parentId);
+  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Save'; }
+}
+async function setCurrentAttachment(id, parentType, parentId, elId){
+  try{ await api('set_current_attachment',{id, isCurrent:true}); await renderAttachments(elId, parentType, parentId); }
+  catch(e){ alert(e.message); }
+}
+async function uploadAttachment(parentType, parentId, elId){
+  const input=$(elId+'_file'); const file=input.files[0];
+  if(!file){ alert('Choose a file first.'); return; }
+  if(file.size > 20*1024*1024){ alert('File too large (max ~20 MB).'); return; }
+  const btn=$(elId+'_btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    const b64 = await fileToBase64(file);
+    await api('add_attachment',{parentType, parentId, fileName:file.name,
+      description:($(elId+'_desc')?$(elId+'_desc').value.trim():''),
+      docType:($(elId+'_type')?$(elId+'_type').value:'other'),
+      docDate:($(elId+'_date')?$(elId+'_date').value:''),
+      isCurrent:($(elId+'_cur')?$(elId+'_cur').checked:false),
+      mimeType:file.type||'application/octet-stream', dataBase64:b64});
+    await renderAttachments(elId, parentType, parentId);
+  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Upload'; }
+}
+async function deleteAttachment(id, parentType, parentId, elId){
+  if(!confirm('Delete this file? It will be moved to Trash in your Google Drive.')) return;
+  try{ await api('delete_attachment',{id}); await renderAttachments(elId, parentType, parentId); }
+  catch(e){ alert(e.message); }
+}
+
+// ── FX recalculation ──
+async function recalcContractFx(id, btn){
+  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('recalc_contract_fx',{id}); await loadContracts();
+    if(!$('ctModal').classList.contains('hidden') && String(EDIT_CT)===String(id)) openContract(id, true);
+  }catch(e){ alert(e.message); }
+  finally{ btn.disabled=false; btn.textContent=t; }
+}
+async function recalcInvoiceFx(id, btn){
+  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('recalc_invoice_fx',{id}); await loadInvoices();
+    if(!$('invModal').classList.contains('hidden') && String(EDIT_INV)===String(id)) openInvoice(id, true);
+  }catch(e){ alert(e.message); }
+  finally{ btn.disabled=false; btn.textContent=t; }
+}
+async function recalcAllFx(btn){
+  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{
+    const r = await api('recalc_all_fx',{});
+    await loadContracts(); await loadInvoices();
+    alert(`Recalculated ${r.done}. ${r.remaining? r.remaining+' still without USD — click again (rates may be temporarily unavailable).':'All amounts converted.'}`);
+  }catch(e){ alert(e.message); }
+  finally{ btn.disabled=false; btn.textContent=t; }
+}
+
+// ── Requisite sets (per counterparty) ──
+const RQ_FIELDS = ['label','legalName','jurisdiction','regNumber','address','bankName','bankAddress',
+                   'beneficiaryName','accountNumber','swift','corrBank','corrSwift','signatoryName','signatoryTitle'];
+let RQ_CP = '', RQ_EDIT = '', REQUISITES = [];
+async function loadRequisites(cpId){
+  RQ_CP = cpId;
+  const el = $('cpm_reqs'); el.innerHTML = '<div class="muted">Loading…</div>';
+  try{
+    const r = await api('list_requisites',{counterpartyId:cpId}); REQUISITES = r.requisites||[];
+    if(!REQUISITES.length){ el.innerHTML = '<div class="muted" style="padding:6px 0">No requisite sets yet.</div>'; return; }
+    el.innerHTML = REQUISITES.map(q=>{
+      const def = String(q.IsDefault).toLowerCase()==='yes';
+      const bank = [q.BankName, q.AccountNumber].filter(Boolean).join(' · ');
+      return `<div class="asg"><div class="top2">
+        <div><div class="nm">${esc(q.Label||'—')} ${def?'<span class="tag submitted">default</span>':''}</div>
+          <div class="em">${esc(q.LegalName||'')}${bank?' · '+esc(bank):''}${q.SignatoryName?' · '+esc(q.SignatoryName):''}</div></div>
+        <div class="acts">
+          ${def?'':`<button class="btn ghost sm" onclick="reqSetDefault('${esc(q.RequisiteID)}',this)">Make default</button>`}
+          <button class="btn ghost sm" onclick="reqEdit('${esc(q.RequisiteID)}')">Edit</button>
+          <button class="btn warn sm" onclick="reqDelete('${esc(q.RequisiteID)}',this)">Delete</button>
+        </div></div></div>`;
+    }).join('');
+  }catch(e){ el.innerHTML = '<div class="notice err">'+esc(e.message)+'</div>'; }
+}
+function reqClearForm(){
+  RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); if(el) el.value=''; });
+  $('rq_isDefault').checked = false; RQ_EDIT='';
+}
+function reqNew(){ reqClearForm(); $('rq_form').classList.remove('hidden'); $('rq_save').textContent='Save requisite set'; notice('rq_err','',''); }
+function reqCancel(){ $('rq_form').classList.add('hidden'); reqClearForm(); notice('rq_err','',''); }
+function reqEdit(id){
+  const q = REQUISITES.find(x=>String(x.RequisiteID)===String(id)); if(!q) return;
+  RQ_EDIT = id;
+  const map = {label:'Label',legalName:'LegalName',jurisdiction:'Jurisdiction',regNumber:'RegNumber',address:'Address',
+    bankName:'BankName',bankAddress:'BankAddress',beneficiaryName:'BeneficiaryName',accountNumber:'AccountNumber',
+    swift:'Swift',corrBank:'CorrBank',corrSwift:'CorrSwift',signatoryName:'SignatoryName',signatoryTitle:'SignatoryTitle'};
+  RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); if(el) el.value = q[map[f]]||''; });
+  $('rq_isDefault').checked = String(q.IsDefault).toLowerCase()==='yes';
+  $('rq_form').classList.remove('hidden'); $('rq_save').textContent='Update requisite set';
+  notice('rq_err','ok','Editing "'+esc(q.Label||'')+'".');
+}
+async function reqSave(){
+  notice('rq_err','','');
+  const b=$('rq_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const payload = { id:RQ_EDIT, counterpartyId:RQ_CP, isDefault:$('rq_isDefault').checked };
+  RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); payload[f] = el?el.value.trim():''; });
+  try{
+    await api('save_requisite', payload);
+    reqCancel(); await loadRequisites(RQ_CP); notice('rq_err','ok','Requisite set saved.');
+  }catch(e){ notice('rq_err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent = RQ_EDIT?'Update requisite set':'Save requisite set'; }
+}
+async function reqDelete(id, btn){
+  if(!confirm('Delete this requisite set?')) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('delete_requisite',{id}); await loadRequisites(RQ_CP); }
+  catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Delete'; }
+}
+async function reqSetDefault(id, btn){
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{ await api('set_default_requisite',{id}); await loadRequisites(RQ_CP); }
+  catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Make default'; }
+}
+
+// ── Sorting & filtering engine (shared by all lists) ──
+const SORT = { contracts:{key:'',dir:1}, invoices:{key:'',dir:1}, projects:{key:'',dir:1}, counterparties:{key:'',dir:1} };
+const FILTERS = { contracts:{}, invoices:{}, projects:{}, counterparties:{} };
+let FLT_LIST = '';
+
+const SORT_VALS = {
+  contracts: { Number:c=>String(c.Number||''), Counterparty:c=>cpName(c.CounterpartyID),
+               Amount:c=>+c.Amount||0, SignDate:c=>String(c.SignDate||'') },
+  invoices:  { Number:v=>String(v.Number||''), Counterparty:v=>cpName(v.CounterpartyID),
+               Amount:v=>+v.Amount||0, InvoiceDate:v=>String(v.InvoiceDate||'') },
+  projects:  { Name:p=>String(p.Name||''), Counterparty:p=>p.CounterpartyID?cpName(p.CounterpartyID):(p.Customer||''),
+               Reports:p=>ASSIGNMENTS.filter(a=>a.ProjectID===p.ProjectID).length },
+  counterparties: { Name:c=>String(c.Name||''), Type:c=>String(c.Type||'') }
+};
+const RENDERERS = { contracts:()=>renderContractsList(), invoices:()=>renderInvoicesList(),
+                    projects:()=>renderProjectsList(), counterparties:()=>renderCounterpartiesList() };
+
+function thSort(list, key, label, cls){
+  const st = SORT[list], arr = st.key===key ? (st.dir===1?' ↑':' ↓') : '';
+  return `<th class="srt ${cls||''}" onclick="toggleSort('${list}','${key}')">${label}${arr}</th>`;
+}
+function toggleSort(list, key){
+  const st = SORT[list];
+  if(st.key===key) st.dir = -st.dir; else { st.key = key; st.dir = 1; }
+  RENDERERS[list]();
+}
+function applySort(list, rows){
+  const st = SORT[list]; if(!st.key) return rows;
+  const get = (SORT_VALS[list]||{})[st.key]; if(!get) return rows;
+  return rows.slice().sort((a,b)=>{
+    const x=get(a), y=get(b);
+    if(typeof x==='number' && typeof y==='number') return (x-y)*st.dir;
+    return String(x).localeCompare(String(y), undefined, {numeric:true})*st.dir;
+  });
+}
+
+// filter definitions: text | select | daterange | numrange
+const FILTER_DEFS = {
+  contracts: [
+    {k:'Number', label:'Number contains', type:'text'},
+    {k:'CounterpartyID', label:'Counterparty', type:'select', opts:()=>COUNTERPARTIES.map(c=>[c.CounterpartyID, c.Name||c.Email||'—'])},
+    {k:'Direction', label:'Direction', type:'select', opts:()=>[['incoming','Incoming (we receive)'],['outgoing','Outgoing (we pay)']]},
+    {k:'Currency', label:'Currency', type:'select', opts:()=>['USD','EUR','AED','SGD'].map(c=>[c,c])},
+    {k:'ParentContractID', label:'Kind', type:'select', opts:()=>[['__gen','General contracts only'],['__sub','Sub-contracts only']]},
+    {k:'Amount', label:'Amount', type:'numrange'},
+    {k:'SignDate', label:'Sign date', type:'daterange'},
+    {k:'EndDate', label:'End date', type:'daterange'}
+  ],
+  invoices: [
+    {k:'Number', label:'Number contains', type:'text'},
+    {k:'CounterpartyID', label:'Counterparty', type:'select', opts:()=>COUNTERPARTIES.map(c=>[c.CounterpartyID, c.Name||c.Email||'—'])},
+    {k:'ContractID', label:'Contract', type:'select', opts:()=>CONTRACTS.map(c=>[c.ContractID, c.Number])},
+    {k:'Currency', label:'Currency', type:'select', opts:()=>['USD','EUR','AED','SGD'].map(c=>[c,c])},
+    {k:'Amount', label:'Amount', type:'numrange'},
+    {k:'InvoiceDate', label:'Invoice date', type:'daterange'},
+    {k:'DueDate', label:'Due date', type:'daterange'}
+  ],
+  projects: [
+    {k:'Name', label:'Project contains', type:'text'},
+    {k:'CounterpartyID', label:'Counterparty', type:'select', opts:()=>COUNTERPARTIES.map(c=>[c.CounterpartyID, c.Name||c.Email||'—'])},
+    {k:'ContractID', label:'Contract', type:'select', opts:()=>CONTRACTS.map(c=>[c.ContractID, c.Number])},
+    {k:'__status', label:'Has reports with status', type:'select', opts:()=>[['released','New'],['draft','In progress'],['submitted','Submitted'],['recalled','Recalled'],['__none','No reports']]}
+  ],
+  counterparties: [
+    {k:'Name', label:'Name contains', type:'text'},
+    {k:'Type', label:'Type', type:'select', opts:()=>[['business','Business'],['individual','Individual']]},
+    {k:'HasReportingAccess', label:'Reporting access', type:'select', opts:()=>[['yes','Yes'],['no','No']]}
+  ]
+};
+
+function filterCount(list){ return Object.keys(FILTERS[list]||{}).filter(k=>{
+  const v = FILTERS[list][k];
+  return v && (typeof v==='string' ? v!=='' : (v.from||v.to||v.min||v.max));
+}).length; }
+
+function applyFilters(list, rows){
+  const f = FILTERS[list]||{};
+  return rows.filter(r=>{
+    for(const key in f){
+      const v = f[key]; if(!v) continue;
+      if(key==='__status'){
+        const rs = ASSIGNMENTS.filter(a=>String(a.ProjectID)===String(r.ProjectID));
+        if(v==='__none'){ if(rs.length) return false; }
+        else if(!rs.some(a=>a.Status===v)) return false;
+        continue;
+      }
+      if(key==='ParentContractID' && (v==='__gen'||v==='__sub')){
+        const isSub = !!String(r.ParentContractID||'').trim();
+        if(v==='__gen' && isSub) return false;
+        if(v==='__sub' && !isSub) return false;
+        continue;
+      }
+      if(typeof v==='string'){
+        const rv = String(r[key]==null?'':r[key]).toLowerCase();
+        const def = (FILTER_DEFS[list]||[]).find(d=>d.k===key);
+        if(def && def.type==='select'){ if(rv!==String(v).toLowerCase()) return false; }
+        else if(!rv.includes(String(v).toLowerCase())) return false;
+        continue;
+      }
+      if(v.from || v.to){
+        const rv = String(r[key]||'').slice(0,10);
+        if(!rv) return false;
+        if(v.from && rv < v.from) return false;
+        if(v.to && rv > v.to) return false;
+        continue;
+      }
+      if(v.min!=null || v.max!=null){
+        const rv = +r[key]||0;
+        if(v.min!=='' && v.min!=null && rv < +v.min) return false;
+        if(v.max!=='' && v.max!=null && rv > +v.max) return false;
+      }
+    }
+    return true;
+  });
+}
+function rowsFor(list, all){ return applySort(list, applyFilters(list, all)); }
+function filterBtn(list){
+  const n = filterCount(list);
+  return `<button class="btn ghost sm" onclick="openFilter('${list}')">Filter${n?`<span class="fbadge">${n}</span>`:''}</button>`;
+}
+function openFilter(list){
+  FLT_LIST = list;
+  $('flt_title').textContent = 'Filter — ' + list.charAt(0).toUpperCase()+list.slice(1);
+  const f = FILTERS[list]||{};
+  $('flt_body').innerHTML = (FILTER_DEFS[list]||[]).map(d=>{
+    const v = f[d.k];
+    if(d.type==='text') return `<div style="margin-bottom:10px"><label>${d.label}</label><input id="flt_${d.k}" value="${esc(v||'')}"></div>`;
+    if(d.type==='select'){
+      const opts = d.opts().map(o=>`<option value="${esc(o[0])}" ${String(v)===String(o[0])?'selected':''}>${esc(o[1])}</option>`).join('');
+      return `<div style="margin-bottom:10px"><label>${d.label}</label><select id="flt_${d.k}"><option value="">— any —</option>${opts}</select></div>`;
+    }
+    if(d.type==='daterange') return `<div class="row" style="margin-bottom:10px"><div><label>${d.label} from</label><input id="flt_${d.k}_from" type="date" value="${esc((v&&v.from)||'')}"></div><div><label>to</label><input id="flt_${d.k}_to" type="date" value="${esc((v&&v.to)||'')}"></div></div>`;
+    return `<div class="row" style="margin-bottom:10px"><div><label>${d.label} min</label><input id="flt_${d.k}_min" type="number" step="0.01" value="${esc((v&&v.min)||'')}"></div><div><label>max</label><input id="flt_${d.k}_max" type="number" step="0.01" value="${esc((v&&v.max)||'')}"></div></div>`;
+  }).join('');
+  $('fltModal').classList.remove('hidden');
+}
+function applyFilter(){
+  const list = FLT_LIST, out = {};
+  (FILTER_DEFS[list]||[]).forEach(d=>{
+    if(d.type==='text' || d.type==='select'){ const el=$('flt_'+d.k); if(el && el.value.trim()) out[d.k]=el.value.trim(); }
+    else if(d.type==='daterange'){ const a=$('flt_'+d.k+'_from').value, b=$('flt_'+d.k+'_to').value; if(a||b) out[d.k]={from:a,to:b}; }
+    else { const a=$('flt_'+d.k+'_min').value, b=$('flt_'+d.k+'_max').value; if(a!==''||b!=='') out[d.k]={min:a,max:b}; }
+  });
+  FILTERS[list] = out;
+  closeModal('fltModal');
+  RENDERERS[list]();
+}
+function clearFilter(){ FILTERS[FLT_LIST] = {}; closeModal('fltModal'); RENDERERS[FLT_LIST](); }
 
 // ── Contracts ──
 function ctCpOptions(sel){ return '<option value="">— none —</option>'+COUNTERPARTIES.map(c=>`<option value="${esc(c.CounterpartyID)}" ${String(sel)===String(c.CounterpartyID)?'selected':''}>${esc(c.Name||c.Email||'—')}</option>`).join(''); }
@@ -1046,23 +1203,27 @@ async function deleteContractFromCard(){
 async function loadContracts(){
   try{
     const r = await api('list_contracts'); CONTRACTS = r.contracts||[];
-    if(!EDIT_CT){ if(!$('ct_sign').value) $('ct_sign').value=todayISO(); if(!$('ct_start').value) $('ct_start').value=todayISO(); }
-    // dropdowns
     $('ct_cp').innerHTML = ctCpOptions($('ct_cp').value);
     $('ct_parent').innerHTML = ctParentOptions($('ct_parent').value, EDIT_CT);
     if($('p_contract')) $('p_contract').innerHTML = contractOptions($('p_contract').value);
     if($('inv_contract')) $('inv_contract').innerHTML = contractOptions($('inv_contract').value);
-    // table
-    const tb = $('ctTable').querySelector('tbody');
-    if(!CONTRACTS.length){ tb.innerHTML='<tr><td class="empty">No contracts yet.</td></tr>'; return; }
-    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th class="num">Amount</th><th>Signed</th><th></th></tr>'+
-    CONTRACTS.map(c=>{const s=cur(c.Currency);return `<tr>
+    renderContractsList();
+  }catch(e){ notice('ctErr','err', esc(e.message)); }
+}
+function renderContractsList(){
+  $('ctTools').innerHTML = filterBtn('contracts');
+  const tb = $('ctTable').querySelector('tbody');
+  const rows = rowsFor('contracts', CONTRACTS);
+  if(!CONTRACTS.length){ tb.innerHTML='<tr><td class="empty">No contracts yet.</td></tr>'; return; }
+  const head = '<tr>'+thSort('contracts','Number','Number')+thSort('contracts','Counterparty','Counterparty')+
+    thSort('contracts','Amount','Amount','num')+thSort('contracts','SignDate','Signed')+'<th></th></tr>';
+  if(!rows.length){ tb.innerHTML = head+'<tr><td class="empty" colspan="5">Nothing matches the filter.</td></tr>'; return; }
+  tb.innerHTML = head + rows.map(c=>{const s=cur(c.Currency);return `<tr>
       <td>${esc(c.Number)}${c.ParentContractID?` <span class="muted">· sub of ${esc(ctNumber(c.ParentContractID))}</span>`:''}</td>
       <td>${esc(cpName(c.CounterpartyID))}</td>
       <td class="num">${(c.Amount!==''&&c.Amount!=null)?s+money(c.Amount):'—'}</td>
       <td class="muted">${esc(c.SignDate?fmtDate(c.SignDate):'—')}</td>
       <td><button class="btn ghost sm" onclick="openContract('${esc(c.ContractID)}')">Open</button></td></tr>`;}).join('');
-  }catch(e){ notice('ctErr','err', esc(e.message)); }
 }
 async function saveContract(){
   notice('ctm_err','','');
@@ -1231,10 +1392,14 @@ async function loadProjects(){
   }catch(e){ notice('projErr','err', esc(e.message)); }
 }
 function renderProjectsList(){
+  $('projTools').innerHTML = filterBtn('projects');
   const tb = $('projTable').querySelector('tbody');
+  const rows = rowsFor('projects', PROJECTS);
   if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">No projects yet.</td></tr>'; return; }
-  tb.innerHTML = '<tr><th>Project</th><th>Counterparty</th><th class="num">Reports</th><th></th></tr>'+
-  PROJECTS.map(p=>{
+  const head = '<tr>'+thSort('projects','Name','Project')+thSort('projects','Counterparty','Counterparty')+
+    thSort('projects','Reports','Reports','num')+'<th></th></tr>';
+  if(!rows.length){ tb.innerHTML = head+'<tr><td class="empty" colspan="4">Nothing matches the filter.</td></tr>'; return; }
+  tb.innerHTML = head + rows.map(p=>{
     const list = ASSIGNMENTS.filter(a=>a.ProjectID===p.ProjectID);
     const cpn = p.CounterpartyID ? cpName(p.CounterpartyID) : (p.Customer||'—');
     return `<tr>
