@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-19.9';
+const BUILD = '2026-07-26.1';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -39,7 +39,8 @@ const HEADERS = {
                 'WarrantyPeriod', 'PenaltyDelayPercent', 'PenaltyFailurePercent', 'PenaltyCapPercent',
                 'InsuranceAmount', 'RestrictedTerritories', 'RateAmount', 'RateBasis',
                 'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope',
-                'OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty'],
+                'OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty',
+                'ExternalForm', 'ExtractedAt'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
   attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt'],
@@ -87,6 +88,7 @@ function route_(action, d) {
     case 'update_contract':    return adminUpdateContract_(d);
     case 'delete_contract':    return adminDeleteContract_(d);
     case 'save_contract_doc':  return adminSaveContractDoc_(d);
+    case 'extract_contract':   return adminExtractContract_(d);
     // Invoices
     case 'create_invoice':     return adminCreateInvoice_(d);
     case 'list_invoices':      requireAdmin_(d); return { ok: true, invoices: readAll_(SHEETS.invoices) };
@@ -429,13 +431,102 @@ function adminUpdateContract_(d) {
   });
   return { ok: true };
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// OCR extraction from an attached scan — uses Google Drive's built-in OCR
+// (the file is copied to a temporary Google Doc inside the owner's Drive, read,
+// then the temporary copy is deleted). Nothing leaves the Google account.
+// ─────────────────────────────────────────────────────────────────────────────
+function ocrText_(driveFileId) {
+  var token = ScriptApp.getOAuthToken();
+  var copyUrl = 'https://www.googleapis.com/drive/v3/files/' + driveFileId + '/copy?ocrLanguage=en&supportsAllDrives=true';
+  var resp = UrlFetchApp.fetch(copyUrl, {
+    method: 'post', contentType: 'application/json',
+    payload: JSON.stringify({ name: 'FXWorks OCR temp', mimeType: 'application/vnd.google-apps.document' }),
+    headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true
+  });
+  if (resp.getResponseCode() !== 200) return { ok: false, error: 'OCR copy failed: ' + resp.getContentText().slice(0, 200) };
+  var docId = JSON.parse(resp.getContentText()).id;
+  try {
+    var ex = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + docId + '/export?mimeType=text/plain',
+      { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+    var text = (ex.getResponseCode() === 200) ? ex.getContentText() : '';
+    return { ok: true, text: text };
+  } finally {
+    try { DriveApp.getFileById(docId).setTrashed(true); } catch (e) {}
+  }
+}
+
+function normNum_(str) { return Number(String(str).replace(/[  ,](?=\d{3}\b)/g, '').replace(/\s/g, '').replace(/,(?=\d{2}$)/, '.')) || 0; }
+
+var MONTHS = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
+function parseDates_(text) {
+  var out = [];
+  var re1 = /(\d{4})-(\d{2})-(\d{2})/g, m;
+  while ((m = re1.exec(text))) out.push({ iso: m[0], at: m.index });
+  var re2 = /(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/g;
+  while ((m = re2.exec(text))) out.push({ iso: m[3] + '-' + pad2_(m[2]) + '-' + pad2_(m[1]), at: m.index });
+  var re3 = /(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})/g;
+  while ((m = re3.exec(text))) { var mo = MONTHS[m[2].toLowerCase()]; if (mo) out.push({ iso: m[3] + '-' + pad2_(mo) + '-' + pad2_(m[1]), at: m.index }); }
+  var re4 = /([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/g;
+  while ((m = re4.exec(text))) { var mo2 = MONTHS[m[1].toLowerCase()]; if (mo2) out.push({ iso: m[3] + '-' + pad2_(mo2) + '-' + pad2_(m[2]), at: m.index }); }
+  return out;
+}
+function pad2_(n) { n = String(n); return n.length < 2 ? '0' + n : n; }
+function nearestDate_(dates, text, words) {
+  var best = null, bestDist = 1e9;
+  words.forEach(function (w) {
+    var re = new RegExp(w, 'ig'), m;
+    while ((m = re.exec(text))) {
+      dates.forEach(function (d) {
+        var dist = Math.abs(d.at - m.index);
+        if (dist < bestDist && dist < 300) { bestDist = dist; best = d.iso; }
+      });
+    }
+  });
+  return best;
+}
+function parseContractText_(text) {
+  var f = {};
+  var num = text.match(/(?:agreement|contract)\s*(?:no\.?|number|#|\u2116)\s*([A-Za-z0-9\/\-\._]{3,40})/i);
+  if (num) f.number = num[1].replace(/[.,;]$/, '');
+
+  var cur = null, amount = 0;
+  var reA = /(?:(USD|EUR|AED|SGD)\s*([\d][\d ,.]{2,})|([\d][\d ,.]{2,})\s*(USD|EUR|AED|SGD))/gi, m;
+  while ((m = reA.exec(text))) {
+    var c = (m[1] || m[4] || '').toUpperCase(), v = normNum_(m[2] || m[3]);
+    if (v > amount) { amount = v; cur = c; }
+  }
+  if (amount) { f.amount = amount; f.currency = cur; }
+
+  var dates = parseDates_(text);
+  if (dates.length) {
+    f.signDate  = nearestDate_(dates, text, ['dated', 'date of signature', 'signed on', 'signature']) || dates[0].iso;
+    f.startDate = nearestDate_(dates, text, ['commencing', 'start date', 'effective date', 'comes into effect']) || f.signDate;
+    f.endDate   = nearestDate_(dates, text, ['no later than', 'until', 'expiry', 'end date', 'valid till', 'in force till']);
+  }
+  return f;
+}
+function adminExtractContract_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.attachments, 'AttachmentID', trim_(d.attachmentId));
+  if (!a) return { ok: false, error: 'Attachment not found' };
+  if (!a.DriveFileID) return { ok: false, error: 'Attachment has no stored file' };
+  var r = ocrText_(a.DriveFileID);
+  if (!r.ok) return { ok: false, error: r.error };
+  var text = String(r.text || '');
+  if (text.replace(/\s/g, '').length < 40) return { ok: false, error: 'No readable text found in this file (a low-quality scan?)' };
+  var fields = parseContractText_(text);
+  if (!fields.number && !fields.amount && !fields.signDate) return { ok: false, error: 'Text was read, but no contract details were recognised' };
+  return { ok: true, fields: fields, preview: text.slice(0, 600) };
+}
+
 var DOC_TEXT_FIELDS = ['TemplateType', 'OurRole', 'OurRequisiteID', 'TheirRequisiteID', 'Subject',
   'PaymentOption', 'PaymentDays', 'AdvancePercent', 'AdvanceDays', 'GoverningLaw', 'JurisdictionPlace',
   'ArbitrationBody', 'ArbitrationSeat', 'RemarksDays', 'AcceptanceDays', 'EvaluationDays', 'DisputeDays',
   'CureDays', 'NoticeDays', 'TermYears', 'WarrantyPeriod', 'PenaltyDelayPercent', 'PenaltyFailurePercent',
   'PenaltyCapPercent', 'InsuranceAmount', 'RestrictedTerritories', 'RateAmount', 'RateBasis',
-  'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope'];
-var DOC_FLAGS = ['OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty'];
+  'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope', 'ExtractedAt'];
+var DOC_FLAGS = ['OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty', 'ExternalForm'];
 
 function adminSaveContractDoc_(d) {
   requireAdmin_(d);

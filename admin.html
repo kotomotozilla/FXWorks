@@ -374,9 +374,24 @@
     <button class="btn warn sm" id="ct_del" onclick="deleteContractFromCard()">Delete contract</button>
   </div>
   <div id="ctm_usd" class="muted" style="margin-top:8px"></div>
+  <div id="ctm_ext" class="hidden" style="margin-top:10px">
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)">
+      <input type="checkbox" id="ct_externalForm" style="width:auto" onchange="extFormToggle()">
+      External contract form (signed PDF from the counterparty / an already-signed paper contract)</label>
+    <div id="ext_panel" class="hidden" style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:10px">
+      <p class="muted">No document is generated for this contract. Attach the signed file below, then read the details straight from it — recognition runs inside your own Google Drive, the file is not sent anywhere.</p>
+      <div class="row" style="align-items:end">
+        <div style="flex:2"><label>Source document</label><select id="ext_src"></select></div>
+        <div style="flex:0 0 auto"><button class="btn sm" id="ext_btn" onclick="extractFromDoc()">Read data from document</button></div>
+        <div style="flex:0 0 auto"><button class="btn ghost sm" id="ext_unlock" onclick="extUnlock()" style="display:none">Unlock for editing</button></div>
+      </div>
+      <div id="ext_msg"></div>
+    </div>
+  </div>
   <div id="ctm_sections">
   <div class="sep"></div>
   <div id="ctm_body"></div>
+  <div id="ctm_docwrap">
   <div class="sep"></div>
   <h2 style="font-size:15px">Document settings</h2>
   <p class="muted">Values and optional blocks used when generating the contract and its SOW.</p>
@@ -481,6 +496,7 @@
   <div style="height:12px"></div>
   <button class="btn sm" id="dc_save" onclick="saveContractDoc()">Save document settings</button>
   </div>
+  </div>
 </div></div>
 
 <div id="repModal" class="modal hidden"><div class="box">
@@ -516,7 +532,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-19.9';
+const BUILD = '2026-07-26.1';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -878,18 +894,19 @@ async function renderAttachments(elId, parentType, parentId){
     }).join('') : '<div class="muted" style="padding:7px 0">No files.</div>';
     el.innerHTML = `<div class="row" style="align-items:end">
         <div style="flex:2 1 190px"><label>File</label><input type="file" id="${elId}_file" accept="application/pdf,image/*"></div>
-        <div><label>Type</label><select id="${elId}_type">${docTypeOptions(parentType==='contract'?'signed':'other')}</select></div>
+        <div><label>Type</label><select id="${elId}_type" onchange="curByType('${elId}')">${docTypeOptions(parentType==='contract'?'signed':'other')}</select></div>
         <div><label>Document date</label><input type="date" id="${elId}_date" value="${todayISO()}"></div>
         <div style="flex:2 1 180px"><label>Description</label><input type="text" id="${elId}_desc" placeholder="optional"></div>
       </div>
       <div style="height:6px"></div>
-      <label style="display:flex;align-items:center;gap:6px;font-size:14px"><input type="checkbox" id="${elId}_cur" style="width:auto" checked> Mark as current for its type</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px"><input type="checkbox" id="${elId}_cur" style="width:auto" ${parentType==='contract'?'checked':''}> Mark as current for its type</label>
       <div style="height:8px"></div>
       <button class="btn sm" id="${elId}_btn" onclick="uploadAttachment('${parentType}','${parentId}','${elId}')">Upload</button>
       <div style="height:6px"></div>${list}
       <p class="muted" style="font-size:11px">Stored privately in your Google Drive (folder "FXWorks Attachments") — only you, the Drive owner, can open them. Files are never removed automatically. Max ~20 MB per file.</p>`;
   }catch(e){ el.innerHTML='<div class="notice err">'+esc(e.message)+'</div>'; }
 }
+function curByType(elId){ const t=$(elId+'_type').value, c=$(elId+'_cur'); if(c) c.checked = (t==='signed'); }
 function toggleAttEdit(id){ const el=$('ae_'+id); if(el) el.classList.toggle('hidden'); }
 async function saveAttMeta(id, parentType, parentId, elId, btn){
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
@@ -916,6 +933,7 @@ async function uploadAttachment(parentType, parentId, elId){
       isCurrent:($(elId+'_cur')?$(elId+'_cur').checked:false),
       mimeType:file.type||'application/octet-stream', dataBase64:b64});
     await renderAttachments(elId, parentType, parentId);
+    if(parentType==='contract' && $('ext_src')) extLoadSources(parentId);
   }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Upload'; }
 }
 async function deleteAttachment(id, parentType, parentId, elId){
@@ -1192,6 +1210,8 @@ function newContract(){
   $('ct_del').style.display = 'none';
   $('ctm_usd').textContent = '';
   $('ctm_sections').classList.add('hidden');
+  $('ctm_ext').classList.add('hidden');
+  $('ct_externalForm').checked=false; CT_EXTRACTED=''; ctLockCore(false);
   $('ctModal').classList.remove('hidden');
 }
 async function deleteContractFromCard(){
@@ -1233,6 +1253,12 @@ async function saveContract(){
     amount:$('ct_amount').value, currency:$('ct_currency').value, parentContractId:$('ct_parent').value, description:$('ct_desc').value.trim() };
   try{
     const r = await api(EDIT_CT?'update_contract':'create_contract', payload);
+    const savedId = EDIT_CT || (r.contract && r.contract.ContractID);
+    if(savedId && $('ct_externalForm')){
+      const ext = $('ct_externalForm').checked;
+      const stamp = (ext && !CT_EXTRACTED && $('ext_msg').textContent.indexOf('Recognised')>=0) ? todayISO() : CT_EXTRACTED;
+      await api('save_contract_doc',{ id:savedId, externalForm:ext, extractedAt:stamp||'' });
+    }
     await loadContracts();
     const id = EDIT_CT || (r.contract && r.contract.ContractID);
     if(id) openContract(id, true);
@@ -1240,6 +1266,54 @@ async function saveContract(){
   }catch(e){ notice('ctm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
 }
+// ── External contract form + OCR extraction ──
+const CT_CORE_FIELDS = ['ct_number','ct_cp','ct_dir','ct_sign','ct_start','ct_end','ct_amount','ct_currency','ct_parent','ct_desc'];
+let CT_EXTRACTED = '';
+function ctLockCore(lock){
+  CT_CORE_FIELDS.forEach(id=>{ const el=$(id); if(!el) return;
+    if(el.tagName==='SELECT') el.disabled = lock; else el.readOnly = lock;
+    el.style.background = lock ? '#F6F8FA' : '';
+  });
+  $('ct_btn').disabled = lock;
+  $('ext_unlock').style.display = lock ? '' : 'none';
+}
+function extFormToggle(){
+  const on = $('ct_externalForm').checked;
+  $('ext_panel').classList.toggle('hidden', !on);
+  $('ctm_docwrap').classList.toggle('hidden', on);
+  if(!on) ctLockCore(false);
+  else ctLockCore(!!CT_EXTRACTED);
+}
+function extUnlock(){ CT_EXTRACTED=''; ctLockCore(false); notice('ext_msg','info','Fields unlocked — correct them and press Save contract.'); }
+async function extLoadSources(contractId){
+  const sel = $('ext_src');
+  try{
+    const r = await api('list_attachments',{parentType:'contract', parentId:contractId});
+    const items = (r.attachments||[]);
+    sel.innerHTML = items.length
+      ? items.map(a=>`<option value="${esc(a.AttachmentID)}">${esc(a.FileName)}${a.DocType?' · '+esc(DOC_TYPE_LABEL[a.DocType]||''):''}</option>`).join('')
+      : '<option value="">— attach a file below first —</option>';
+  }catch(e){ sel.innerHTML='<option value="">— could not load files —</option>'; }
+}
+async function extractFromDoc(){
+  const attId = $('ext_src').value;
+  if(!attId){ notice('ext_msg','err','Attach the signed document first (section Attachments below).'); return; }
+  const b=$('ext_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  notice('ext_msg','info','Reading the document — this can take up to a minute…');
+  try{
+    const r = await api('extract_contract',{attachmentId:attId});
+    const f = r.fields||{}; const got=[];
+    if(f.number){ $('ct_number').value=f.number; got.push('number'); }
+    if(f.amount){ $('ct_amount').value=f.amount; got.push('amount'); }
+    if(f.currency){ $('ct_currency').value=f.currency; got.push('currency'); }
+    if(f.signDate){ $('ct_sign').value=f.signDate; got.push('sign date'); }
+    if(f.startDate){ $('ct_start').value=f.startDate; got.push('start date'); }
+    if(f.endDate){ $('ct_end').value=f.endDate; got.push('end date'); }
+    notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values above, correct anything wrong, then press <b>Save contract</b> — after saving the fields are locked.');
+  }catch(e){ notice('ext_msg','err', esc(e.message)+' — you can still type the details in by hand.'); }
+  finally{ b.disabled=false; b.textContent='Read data from document'; }
+}
+
 // ── Document settings on a contract ──
 const DC_TEXT = ['templateType','ourRole','ourRequisiteId','theirRequisiteId','subject','paymentOption','paymentDays',
   'advancePercent','advanceDays','governingLaw','jurisdictionPlace','arbitrationBody','arbitrationSeat','remarksDays',
@@ -1339,6 +1413,11 @@ function openContract(id, keepOpen){
     ? `USD equivalent: <b>$${money(c.AmountUSD)}</b>${c.FxAsOf?` <span class="muted">@${esc(c.FxAsOf)}</span>`:''}`
     : '<span class="muted">USD equivalent not calculated yet.</span>';
   $('ctm_sections').classList.remove('hidden');
+  $('ctm_ext').classList.remove('hidden');
+  $('ct_externalForm').checked = String(c.ExternalForm||'').toLowerCase()==='yes';
+  CT_EXTRACTED = c.ExtractedAt||'';
+  extLoadSources(id);
+  extFormToggle();
 const s=cur(c.Currency);
   const subs = CONTRACTS.filter(x=>String(x.ParentContractID)===String(id));
   const invs = INVOICES.filter(x=>String(x.ContractID)===String(id));

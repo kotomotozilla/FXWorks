@@ -112,3 +112,8 @@ A project now has a **counterparty** (required) and an optional **contract**, in
 
 ## Work report per counterparty
 Counterparties → **Report** opens a summary of completed (submitted) work performed by that counterparty for a date range (defaults to the previous month): project, counterparty (project's customer), contract, hours and amount, with totals and a Print/PDF button.
+
+## External contracts and reading data from a scan
+Tick **External contract form** in a contract card when the contract exists only as a signed PDF (the counterparty's form or an already-signed paper contract). Document settings and generation are then hidden. Attach the signed file, pick it in **Source document** and press **Read data from document**: the file is copied to a temporary Google Doc in your own Drive with OCR, the text is parsed for number, amount, currency and dates, and the fields are pre-filled for you to check. Nothing is sent outside your Google account. After you press **Save contract** the fields are locked; use **Unlock for editing** to change them.
+
+This uses the same Drive permission as attachments, so no extra authorization is needed.
