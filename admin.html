@@ -97,24 +97,11 @@
     <!-- PROJECTS -->
     <section id="view-projects">
       <div class="panel">
-        <h2>New project</h2>
-        <p class="muted">Create a project, then open it to add the team members who must report.</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2>Projects</h2>
+          <button class="btn sm" onclick="newProject()">+ New project</button>
+        </div>
         <div id="projErr"></div>
-        <div class="row">
-          <div style="flex:2"><label>Project name *</label><input id="p_name" placeholder="VHF upgrade, Almaty"></div>
-        </div>
-        <div style="height:10px"></div>
-        <div class="row">
-          <div style="flex:2"><label>Contract (optional)</label><select id="p_contract" onchange="projContractChange('p')"><option value="">— none —</option></select></div>
-          <div style="flex:2"><label>Counterparty *</label><select id="p_cp" onchange="projCpChange('p')"></select></div>
-        </div>
-        <div style="height:10px"></div>
-        <div><label>Description</label><textarea id="p_desc" placeholder="Project scope / context (visible to team members)"></textarea></div>
-        <div style="height:14px"></div>
-        <button class="btn" id="p_btn" onclick="createProject()">Create project</button>
-      </div>
-      <div class="panel">
-        <h2>Projects</h2>
         <div class="scroll"><table id="projTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
@@ -137,35 +124,14 @@
     <!-- INVOICES -->
     <section id="view-invoices" class="hidden">
       <div class="panel">
-        <h2 id="inv_formTitle">New invoice</h2>
-        <p class="muted">Number can be left blank — it is generated as <code>inv/YYYY/MM/DD-N</code> from the invoice date. Direction is inherited from the linked contract.</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2>Invoices</h2>
+          <div class="acts">
+            <button class="btn sm" onclick="newInvoice()">+ New invoice</button>
+            <button class="btn ghost sm" onclick="recalcAllFx(this)">↻ Recalculate missing USD</button>
+          </div>
+        </div>
         <div id="invErr"></div>
-        <div class="row">
-          <div><label>Number</label><input id="inv_number" placeholder="auto: inv/YYYY/MM/DD-N"></div>
-          <div style="flex:2"><label>Contract (optional)</label><select id="inv_contract" onchange="invContractChange()"></select></div>
-        </div>
-        <div style="height:10px"></div>
-        <div class="row">
-          <div style="flex:2"><label>Counterparty</label><select id="inv_cp"></select></div>
-          <div id="inv_dirWrap" style="max-width:230px"><label>Direction (from contract)</label><input id="inv_dir" disabled></div>
-        </div>
-        <div style="height:10px"></div>
-        <div class="row">
-          <div><label>Invoice date</label><input id="inv_date" type="date"></div>
-          <div><label>Due date</label><input id="inv_due" type="date"></div>
-        </div>
-        <div style="height:10px"></div>
-        <div class="row">
-          <div><label>Amount</label><input id="inv_amount" type="number" min="0" step="0.01" placeholder="0"></div>
-          <div style="max-width:180px"><label>Currency</label>
-            <select id="inv_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
-        </div>
-        <div style="height:14px"></div>
-        <button class="btn" id="inv_btn" onclick="saveInvoice()">Create invoice</button>
-        <button class="btn ghost" id="inv_cancel" onclick="invClear()" style="display:none">Cancel edit</button>
-      </div>
-      <div class="panel">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h2>Invoices</h2><button class="btn ghost sm" onclick="recalcAllFx(this)">↻ Recalculate missing USD</button></div>
         <div class="scroll"><table id="invTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
@@ -173,38 +139,11 @@
     <!-- COUNTERPARTIES -->
     <section id="view-counterparties" class="hidden">
       <div class="panel">
-        <h2>Add counterparty</h2>
-        <p class="muted">Create a counterparty here; open its card in the list below to edit details, requisites and files.</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2>Counterparties</h2>
+          <button class="btn sm" onclick="newCounterparty()">+ New counterparty</button>
+        </div>
         <div id="cpErr"></div>
-        <div class="row">
-          <div style="flex:2"><label>Name *</label><input id="c_name" placeholder="John A. Smith / Acme Ltd"></div>
-          <div style="max-width:170px"><label>Type</label>
-            <select id="c_type"><option value="individual">Individual</option><option value="business">Business</option></select></div>
-        </div>
-        <div style="height:10px"></div>
-        <div class="row">
-          <div style="flex:2"><label>Email</label><input id="c_email" type="email" placeholder="name@company.com"></div>
-          <div><label>Phone</label><input id="c_phone" placeholder="+971…"></div>
-        </div>
-        <div style="height:10px"></div>
-        <div><label>Address</label><textarea id="c_address" placeholder="Optional"></textarea></div>
-        <div style="height:10px"></div>
-        <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)">
-          <input type="checkbox" id="c_access" style="width:auto" onchange="cpAccessToggle()"> Has access to the reporting system</label>
-        <div id="c_reporting" class="hidden">
-          <div style="height:10px"></div>
-          <div class="row">
-            <div><label>Rate per hour</label><input id="c_rate" type="number" min="0" step="0.01" placeholder="0"></div>
-            <div style="max-width:150px"><label>Currency</label>
-              <select id="c_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
-            <div><label>Password</label><input id="c_pass" type="text" placeholder="set a password"></div>
-          </div>
-        </div>
-        <div style="height:14px"></div>
-        <button class="btn" id="c_btn" onclick="saveCounterparty()">Save counterparty</button>
-      </div>
-      <div class="panel">
-        <h2>Counterparties</h2>
         <div class="scroll"><table id="cpTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
       </div>
     </section>
@@ -238,21 +177,21 @@
   <div style="height:12px"></div>
   <div class="acts">
     <button class="btn sm" id="pm_save" onclick="saveProject()">Save project</button>
-    <button class="btn warn sm" onclick="deleteProject()">Delete project</button>
+    <button class="btn warn sm pj-only" onclick="deleteProject()">Delete project</button>
   </div>
-  <div class="sep"></div>
-  <h2 style="font-size:15px">Assigned team members</h2>
-  <div id="pm_asgs"></div>
-  <div class="sep"></div>
-  <h2 style="font-size:15px">Add team member</h2>
-  <div class="row" style="align-items:end">
+  <div class="sep pj-only"></div>
+  <h2 style="font-size:15px" class="pj-only">Assigned team members</h2>
+  <div id="pm_asgs" class="pj-only"></div>
+  <div class="sep pj-only"></div>
+  <h2 style="font-size:15px" class="pj-only">Add team member</h2>
+  <div class="row pj-only" style="align-items:end">
     <div style="flex:2"><label>Team member</label><select id="pm_addEmp"></select></div>
     <div style="flex:2"><label>Report title (optional)</label><input id="pm_addTitle" placeholder="e.g. May 2026 / Phase 1"></div>
   </div>
-  <div style="height:8px"></div>
-  <div><label>Comment</label><textarea id="pm_addComment" placeholder="What this team member must cover"></textarea></div>
-  <div style="height:10px"></div>
-  <button class="btn sm" id="pm_addBtn" onclick="addAssignment()">Add &amp; notify</button>
+  <div style="height:8px" class="pj-only"></div>
+  <div class="pj-only"><label>Comment</label><textarea id="pm_addComment" placeholder="What this team member must cover"></textarea></div>
+  <div style="height:10px" class="pj-only"></div>
+  <button class="btn sm pj-only" id="pm_addBtn" onclick="addAssignment()">Add &amp; notify</button>
 </div></div>
 
 <!-- Report editor modal -->
@@ -299,16 +238,16 @@
   <div class="acts">
     <button class="btn sm" id="cm_save" onclick="saveCounterpartyCard()">Save counterparty</button>
     <button class="btn ghost sm" id="cm_invite" onclick="inviteFromCard(this)">Send invite</button>
-    <button class="btn warn sm" onclick="deleteFromCard()">Delete counterparty</button>
+    <button class="btn warn sm cp-only" onclick="deleteFromCard()">Delete counterparty</button>
   </div>
-  <div class="sep"></div>
-  <h2 style="font-size:15px">Requisite sets</h2>
-  <p class="muted">Legal details, bank account and signatory used in generated contracts. The set marked <b>default</b> is pre-selected when a contract is created.</p>
-  <div id="rq_err"></div>
-  <div id="cpm_reqs"></div>
-  <div style="height:10px"></div>
-  <button class="btn ghost sm" onclick="reqNew()">+ Add requisite set</button>
-  <div id="rq_form" class="hidden" style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px">
+  <div class="sep cp-only"></div>
+  <h2 style="font-size:15px" class="cp-only">Requisite sets</h2>
+  <p class="muted cp-only">Legal details, bank account and signatory used in generated contracts. The set marked <b>default</b> is pre-selected when a contract is created.</p>
+  <div id="rq_err" class="cp-only"></div>
+  <div id="cpm_reqs" class="cp-only"></div>
+  <div style="height:10px" class="cp-only"></div>
+  <button class="btn ghost sm cp-only" onclick="reqNew()">+ Add requisite set</button>
+  <div id="rq_form" class="hidden cp-only" style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px">
     <div class="row">
       <div><label>Label</label><input id="rq_label" placeholder="Main / HSBC"></div>
       <div style="flex:2"><label>Legal name</label><input id="rq_legalName" placeholder="Full legal name"></div>
@@ -357,10 +296,36 @@
 
 <div id="invModal" class="modal hidden"><div class="box">
   <h2><span id="invm_title">Invoice</span><button class="x" onclick="closeModal('invModal')">×</button></h2>
-  <div id="invm_body"></div>
-  <div class="sep"></div>
-  <h2 style="font-size:15px">Attachments</h2>
-  <div id="invm_attach"></div>
+  <div id="invm_err"></div>
+  <div class="row">
+    <div><label>Number</label><input id="inv_number" placeholder="auto: inv/YYYY/MM/DD-N"></div>
+    <div style="flex:2"><label>Contract (optional)</label><select id="inv_contract" onchange="invContractChange()"></select></div>
+  </div>
+  <div style="height:8px"></div>
+  <div class="row">
+    <div style="flex:2"><label>Counterparty</label><select id="inv_cp"></select></div>
+    <div style="max-width:230px"><label>Direction (from contract)</label><input id="inv_dir" disabled></div>
+  </div>
+  <div style="height:8px"></div>
+  <div class="row">
+    <div><label>Invoice date</label><input id="inv_date" type="date"></div>
+    <div><label>Due date</label><input id="inv_due" type="date"></div>
+    <div><label>Amount</label><input id="inv_amount" type="number" min="0" step="0.01" placeholder="0"></div>
+    <div style="max-width:150px"><label>Currency</label>
+      <select id="inv_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
+  </div>
+  <div style="height:12px"></div>
+  <div class="acts">
+    <button class="btn sm" id="inv_btn" onclick="saveInvoice()">Save invoice</button>
+    <button class="btn ghost sm" id="inv_fx" onclick="recalcInvoiceFx(EDIT_INV,this)">↻ Recalculate USD</button>
+    <button class="btn warn sm" id="inv_del" onclick="deleteInvoiceFromCard()">Delete invoice</button>
+  </div>
+  <div id="invm_usd" class="muted" style="margin-top:8px"></div>
+  <div id="invm_sections">
+    <div class="sep"></div>
+    <h2 style="font-size:15px">Attachments</h2>
+    <div id="invm_attach"></div>
+  </div>
 </div></div>
 
 <div id="ctModal" class="modal hidden"><div class="box">
@@ -536,7 +501,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-19.6';
+const BUILD = '2026-07-19.7';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -676,63 +641,20 @@ function printWorkReport(){
 }
 
 // ── Counterparties ──
-function cpAccessToggle(){ $('c_reporting').classList.toggle('hidden', !$('c_access').checked); }
-function cpClear(){
-  EDIT_CP='';
-  ['c_name','c_email','c_phone','c_address','c_rate','c_pass'].forEach(id=>$(id).value='');
-  $('c_type').value='individual'; $('c_currency').value='USD'; $('c_access').checked=false;
-  $('c_pass').placeholder='set a password'; cpAccessToggle(); $('c_btn').textContent='Save counterparty';
-}
 async function loadCounterparties(){
   try{
     const r = await api('list_counterparties'); COUNTERPARTIES = r.counterparties||[];
     const tb = $('cpTable').querySelector('tbody');
-    if(!COUNTERPARTIES.length){ tb.innerHTML='<tr><td class="empty">No counterparties yet.</td></tr>'; return; }
-    tb.innerHTML='<tr><th>Name</th><th>Type</th><th>Email</th><th>Reporting</th><th class="num">Rate</th><th></th></tr>'+
-    COUNTERPARTIES.map(c=>{
-      const access = String(c.HasReportingAccess).toLowerCase()==='yes';
-      const s=cur(c.Currency);
-      const rate = access && c.Rate!=='' && c.Rate!=null ? `${s}${money(c.Rate)}/h` : '—';
-      const inviteBtn = access ? `<button class="btn ghost sm" onclick="inviteCounterparty('${esc(c.Email)}',this)">Invite</button>` : '';
-      return `<tr>
-        <td>${esc(c.Name||'—')}</td>
+    if(!COUNTERPARTIES.length){ tb.innerHTML='<tr><td class="empty">No counterparties yet.</td></tr>'; }
+    else{
+      tb.innerHTML='<tr><th>Name</th><th>Type</th><th></th></tr>'+
+      COUNTERPARTIES.map(c=>`<tr>
+        <td>${esc(c.Name||'—')}${String(c.HasReportingAccess).toLowerCase()==='yes'?' <span class="tag submitted">reporting</span>':''}</td>
         <td class="muted">${c.Type==='business'?'Business':'Individual'}</td>
-        <td>${esc(c.Email||'—')}</td>
-        <td>${access?'<span class="tag submitted">yes</span>':'<span class="muted">no</span>'}</td>
-        <td class="num">${rate}</td>
-        <td><div class="acts"><button class="btn ghost sm" onclick="openWorkReport('${esc(c.CounterpartyID)}')">Report</button>
-          <button class="btn ghost sm" onclick="openCounterparty('${esc(c.CounterpartyID)}')">Open</button>
-          ${inviteBtn}
-          <button class="btn warn sm" onclick="delCounterparty('${esc(c.CounterpartyID)}','${esc(c.Name||'')}',this)">Delete</button></div></td></tr>`;
-    }).join('');
+        <td><button class="btn ghost sm" onclick="openCounterparty('${esc(c.CounterpartyID)}')">Open</button></td></tr>`).join('');
+    }
   }catch(e){ notice('cpErr','err', esc(e.message)); }
   if($('p_cp')) $('p_cp').innerHTML = ctCpOptions($('p_cp').value);
-}
-async function saveCounterparty(){
-  notice('cpErr','',''); const name=$('c_name').value.trim();
-  if(!name){ notice('cpErr','err','Name is required.'); return; }
-  const access=$('c_access').checked;
-  const email=$('c_email').value.trim();
-  if(access && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('cpErr','err','Reporting access requires a valid email.'); return; }
-  const b=$('c_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  try{
-    await api('save_counterparty', { id:EDIT_CP, name, type:$('c_type').value, email, phone:$('c_phone').value.trim(),
-      address:$('c_address').value.trim(), hasAccess:access, password:$('c_pass').value, rate:$('c_rate').value, currency:$('c_currency').value });
-    cpClear(); await loadCounterparties(); notice('cpErr','ok','Counterparty saved.');
-  }catch(e){ notice('cpErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Save counterparty'; }
-}
-async function delCounterparty(id, name, btn){
-  if(!confirm('Delete "'+(name||'this counterparty')+'" from the directory? Existing reports remain.')) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('delete_counterparty',{id}); await loadCounterparties(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
-}
-async function inviteCounterparty(email, btn){
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('invite_counterparty',{email}); notice('cpErr','ok','Invite sent to '+esc(email)+'.'); btn.textContent='Invite'; }
-  catch(e){ notice('cpErr','err', esc(e.message)); btn.textContent='Invite'; }
-  finally{ btn.disabled=false; }
 }
 
 // ── FX recalculation ──
@@ -745,8 +667,10 @@ async function recalcContractFx(id, btn){
 }
 async function recalcInvoiceFx(id, btn){
   const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('recalc_invoice_fx',{id}); await loadInvoices(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent=t; }
+  try{ await api('recalc_invoice_fx',{id}); await loadInvoices();
+    if(!$('invModal').classList.contains('hidden') && String(EDIT_INV)===String(id)) openInvoice(id, true);
+  }catch(e){ alert(e.message); }
+  finally{ btn.disabled=false; btn.textContent=t; }
 }
 async function recalcAllFx(btn){
   const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
@@ -914,6 +838,17 @@ async function reqSetDefault(id, btn){
 }
 
 let CARD_CP = '';
+function newCounterparty(){
+  CARD_CP = '';
+  $('cpm_title').textContent = 'New counterparty';
+  ['cm_name','cm_email','cm_phone','cm_address','cm_rate','cm_pass'].forEach(id=>$(id).value='');
+  $('cm_type').value='individual'; $('cm_currency').value='USD'; $('cm_access').checked=false;
+  $('cm_save').textContent='Create counterparty';
+  $('cm_invite').style.display='none';
+  document.querySelectorAll('#cpModal .cp-only').forEach(el=>el.classList.add('hidden'));
+  cmAccessToggle(); notice('cm_err','','');
+  $('cpModal').classList.remove('hidden');
+}
 function cmAccessToggle(){ $('cm_reporting').classList.toggle('hidden', !$('cm_access').checked); }
 function openCounterparty(id){
   const c = COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id));
@@ -932,6 +867,8 @@ function openCounterparty(id){
   $('cm_pass').value='';
   $('cm_invite').style.display = access ? '' : 'none';
   cmAccessToggle(); notice('cm_err','','');
+  document.querySelectorAll('#cpModal .cp-only').forEach(el=>el.classList.remove('hidden'));
+  $('cm_save').textContent='Save counterparty';
   reqCancel();
   loadRequisites(id);
   renderAttachments('cpm_attach','counterparty',id);
@@ -948,6 +885,10 @@ async function saveCounterpartyCard(){
     await api('save_counterparty', { id:CARD_CP, name, type:$('cm_type').value, email, phone:$('cm_phone').value.trim(),
       address:$('cm_address').value.trim(), hasAccess:access, password:$('cm_pass').value, rate:$('cm_rate').value, currency:$('cm_currency').value });
     await loadCounterparties();
+    if(!CARD_CP){
+      const created = COUNTERPARTIES.find(c=>(c.Name||'')===name);
+      if(created){ openCounterparty(created.CounterpartyID); }
+    }
     $('cpm_title').textContent = name;
     $('cm_pass').value=''; $('cm_invite').style.display = access ? '' : 'none';
     notice('cm_err','ok','Saved.');
@@ -987,78 +928,81 @@ function openInvoice(id){
 
 // ── Invoices ──
 function ctDirection(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?dirEn(c.Direction):''; }
-function invClear(){
-  EDIT_INV='';
-  ['inv_number','inv_amount','inv_date','inv_due'].forEach(id=>$(id).value='');
-  $('inv_currency').value='USD'; $('inv_dir').value='';
-  $('inv_contract').innerHTML = contractOptions('');
-  $('inv_cp').innerHTML = ctCpOptions('');
-  $('inv_formTitle').textContent='New invoice'; $('inv_btn').textContent='Create invoice'; $('inv_cancel').style.display='none';
-  notice('invErr','','');
+function invFillForm(v){
+  $('inv_number').value = v ? (v.Number||'') : '';
+  $('inv_contract').innerHTML = contractOptions(v ? (v.ContractID||'') : '');
+  $('inv_cp').innerHTML = ctCpOptions(v ? (v.CounterpartyID||'') : '');
+  $('inv_dir').value = (v && v.ContractID) ? ctDirection(v.ContractID) : '';
+  $('inv_date').value = v && v.InvoiceDate ? fmtDate(v.InvoiceDate) : todayISO();
+  $('inv_due').value  = v && v.DueDate ? fmtDate(v.DueDate) : '';
+  $('inv_amount').value = (v && v.Amount!==''&&v.Amount!=null) ? v.Amount : '';
+  $('inv_currency').value = (v && ['USD','EUR','AED','SGD'].indexOf(v.Currency)>=0) ? v.Currency : 'USD';
+  notice('invm_err','','');
+}
+function newInvoice(){
+  EDIT_INV = '';
+  $('invm_title').textContent = 'New invoice';
+  invFillForm(null);
+  $('inv_btn').textContent = 'Create invoice';
+  $('inv_fx').style.display='none'; $('inv_del').style.display='none';
+  $('invm_usd').textContent=''; $('invm_sections').classList.add('hidden');
+  $('invModal').classList.remove('hidden');
+}
+function openInvoice(id, keepOpen){
+  const v = INVOICES.find(x=>String(x.InvoiceID)===String(id));
+  if(!v) return;
+  EDIT_INV = v.InvoiceID;
+  $('invm_title').textContent = v.Number;
+  invFillForm(v);
+  $('inv_btn').textContent='Save invoice';
+  $('inv_fx').style.display=''; $('inv_del').style.display='';
+  $('invm_usd').innerHTML = (v.AmountUSD!==''&&v.AmountUSD!=null)
+    ? `USD equivalent: <b>$${money(v.AmountUSD)}</b>${v.FxAsOf?` <span class="muted">@${esc(v.FxAsOf)}</span>`:''}`
+    : '<span class="muted">USD equivalent not calculated yet.</span>';
+  $('invm_sections').classList.remove('hidden');
+  renderAttachments('invm_attach','invoice',id);
+  $('invModal').classList.remove('hidden');
 }
 function invContractChange(){
-  const cid = $('inv_contract').value;
-  const c = CONTRACTS.find(x=>String(x.ContractID)===String(cid));
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String($('inv_contract').value));
   $('inv_dir').value = c ? dirEn(c.Direction) : '';
-  if(c && c.CounterpartyID){ $('inv_cp').innerHTML = ctCpOptions(c.CounterpartyID); }   // default counterparty from contract
+  if(c && c.CounterpartyID){ $('inv_cp').innerHTML = ctCpOptions(c.CounterpartyID); }
 }
 async function loadInvoices(){
   try{
     const r = await api('list_invoices'); INVOICES = r.invoices||[];
-    $('inv_contract').innerHTML = contractOptions($('inv_contract').value);
-    $('inv_cp').innerHTML = ctCpOptions($('inv_cp').value);
     const tb = $('invTable').querySelector('tbody');
     if(!INVOICES.length){ tb.innerHTML='<tr><td class="empty">No invoices yet.</td></tr>'; return; }
-    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th>Contract</th><th>Direction</th><th class="num">Amount</th><th class="num">USD</th><th>Invoice date</th><th>Due</th><th></th></tr>'+
+    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th class="num">Amount</th><th>Invoice date</th><th></th></tr>'+
     INVOICES.map(v=>{const s=cur(v.Currency);return `<tr>
       <td>${esc(v.Number)}</td>
       <td>${esc(cpName(v.CounterpartyID))}</td>
-      <td class="muted">${v.ContractID?esc(ctNumber(v.ContractID)):'—'}</td>
-      <td class="muted">${v.ContractID?(ctDirection(v.ContractID)==='Outgoing (we pay)'?'Outgoing':'Incoming'):'—'}</td>
       <td class="num">${(v.Amount!==''&&v.Amount!=null)?s+money(v.Amount):'—'}</td>
-      <td class="num">${(v.AmountUSD!==''&&v.AmountUSD!=null)?'$'+money(v.AmountUSD):'—'}${v.FxAsOf?`<div class="muted" style="font-size:11px">@${esc(v.FxAsOf)}</div>`:''}</td>
       <td class="muted">${esc(v.InvoiceDate?fmtDate(v.InvoiceDate):'—')}</td>
-      <td class="muted">${esc(v.DueDate?fmtDate(v.DueDate):'—')}</td>
-      <td><div class="acts"><button class="btn ghost sm" onclick="openInvoice('${esc(v.InvoiceID)}')">Open</button>
-        <button class="btn ghost sm" onclick="recalcInvoiceFx('${esc(v.InvoiceID)}',this)" title="Recalculate USD">↻ USD</button>
-        <button class="btn ghost sm" onclick="editInvoice('${esc(v.InvoiceID)}')">Edit</button>
-        <button class="btn warn sm" onclick="delInvoice('${esc(v.InvoiceID)}','${esc(v.Number)}',this)">Delete</button></div></td></tr>`;}).join('');
+      <td><button class="btn ghost sm" onclick="openInvoice('${esc(v.InvoiceID)}')">Open</button></td></tr>`;}).join('');
   }catch(e){ notice('invErr','err', esc(e.message)); }
 }
 async function saveInvoice(){
-  notice('invErr','','');
+  notice('invm_err','','');
   const cpId=$('inv_cp').value;
-  if(!cpId){ notice('invErr','err','Select a counterparty.'); return; }
+  if(!cpId){ notice('invm_err','err','Select a counterparty.'); return; }
   const b=$('inv_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   const payload={ id:EDIT_INV, number:$('inv_number').value.trim(), contractId:$('inv_contract').value, counterpartyId:cpId,
     invoiceDate:$('inv_date').value, dueDate:$('inv_due').value, amount:$('inv_amount').value, currency:$('inv_currency').value };
   try{
-    await api(EDIT_INV?'update_invoice':'create_invoice', payload);
-    invClear(); await loadInvoices(); notice('invErr','ok','Invoice saved.');
-  }catch(e){ notice('invErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent = EDIT_INV?'Update invoice':'Create invoice'; }
+    const r = await api(EDIT_INV?'update_invoice':'create_invoice', payload);
+    await loadInvoices();
+    const id = EDIT_INV || (r.invoice && r.invoice.InvoiceID);
+    if(id) openInvoice(id, true);
+    notice('invm_err','ok','Invoice saved.');
+  }catch(e){ notice('invm_err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent = EDIT_INV?'Save invoice':'Create invoice'; }
 }
-async function delInvoice(id, number, btn){
-  if(!confirm('Delete invoice "'+(number||'')+'"?')) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
-  try{ await api('delete_invoice',{id}); await loadInvoices(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
-}
-function editInvoice(id){
-  const v = INVOICES.find(x=>String(x.InvoiceID)===String(id));
-  if(!v) return;
-  EDIT_INV = v.InvoiceID;
-  $('inv_number').value = v.Number||'';
-  $('inv_contract').innerHTML = contractOptions(v.ContractID||'');
-  $('inv_cp').innerHTML = ctCpOptions(v.CounterpartyID||'');
-  $('inv_dir').value = v.ContractID ? ctDirection(v.ContractID) : '';
-  $('inv_date').value = v.InvoiceDate?fmtDate(v.InvoiceDate):'';
-  $('inv_due').value = v.DueDate?fmtDate(v.DueDate):'';
-  $('inv_amount').value = (v.Amount===''||v.Amount==null)?'':v.Amount;
-  $('inv_currency').value = (['USD','EUR','AED','SGD'].indexOf(v.Currency)>=0)?v.Currency:'USD';
-  $('inv_formTitle').textContent='Edit invoice'; $('inv_btn').textContent='Update invoice'; $('inv_cancel').style.display='';
-  notice('invErr','ok','Editing '+esc(v.Number)+'.');
-  switchTab('invoices'); window.scrollTo(0,0);
+async function deleteInvoiceFromCard(){
+  const v = INVOICES.find(x=>String(x.InvoiceID)===String(EDIT_INV));
+  if(!confirm('Delete invoice "'+((v&&v.Number)||'')+'"? Its attachments will be removed too.')) return;
+  try{ await api('delete_invoice',{id:EDIT_INV}); closeModal('invModal'); await loadInvoices(); }
+  catch(e){ notice('invm_err','err', esc(e.message)); }
 }
 
 // ── Contracts ──
@@ -1192,7 +1136,7 @@ const s=cur(c.Currency);
   openContractDoc(c);
   $('ctModal').classList.remove('hidden');
 }
-function openInvoiceFromContract(id){ closeModal('ctModal'); editInvoice(id); }
+function openInvoiceFromContract(id){ closeModal('ctModal'); openInvoice(id); }
 function openProjectFromContract(pid){ closeModal('ctModal'); openProject(pid); }
 
 
@@ -1206,31 +1150,27 @@ async function loadProjects(){
 function renderProjectsList(){
   const tb = $('projTable').querySelector('tbody');
   if(!PROJECTS.length){ tb.innerHTML='<tr><td class="empty">No projects yet.</td></tr>'; return; }
-  tb.innerHTML = '<tr><th>Project</th><th>Contract / Counterparty</th><th>Team members</th><th></th></tr>'+
+  tb.innerHTML = '<tr><th>Project</th><th>Counterparty</th><th class="num">Reports</th><th></th></tr>'+
   PROJECTS.map(p=>{
     const list = ASSIGNMENTS.filter(a=>a.ProjectID===p.ProjectID);
-    const sub = list.length ? list.map(a=>statusEn(a.Status)).reduce((m,s)=>{m[s]=(m[s]||0)+1;return m;},{}) : null;
-    const subTxt = sub ? Object.keys(sub).map(k=>`${sub[k]} ${k.toLowerCase()}`).join(', ') : '—';
     const cpn = p.CounterpartyID ? cpName(p.CounterpartyID) : (p.Customer||'—');
-    const link = p.ContractID ? `${esc(ctNumber(p.ContractID))} <span class="muted">· ${esc(cpn)}</span>` : esc(cpn);
     return `<tr>
-      <td>${esc(p.Name)}</td><td>${link}</td>
-      <td>${list.length}${list.length?` <span class="muted">(${esc(subTxt)})</span>`:''}</td>
+      <td>${esc(p.Name)}${p.ContractID?` <span class="muted">· ${esc(ctNumber(p.ContractID))}</span>`:''}</td>
+      <td>${esc(cpn)}</td>
+      <td class="num">${list.length}</td>
       <td><button class="btn ghost sm" onclick="openProject('${p.ProjectID}')">Open</button></td></tr>`;
   }).join('');
 }
-async function createProject(){
-  notice('projErr','',''); const name=$('p_name').value.trim();
-  if(!name){ notice('projErr','err','Enter a project name.'); return; }
-  if(!$('p_cp').value){ notice('projErr','err','Select a counterparty.'); return; }
-  const b=$('p_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  try{
-    const r = await api('create_project', { name, counterpartyId:$('p_cp').value, contractId:$('p_contract').value, description:$('p_desc').value.trim() });
-    $('p_name').value=''; $('p_desc').value=''; $('p_contract').value=''; $('p_cp').value='';
-    await loadProjects(); notice('projErr','ok','Project created. Open it to add employees.');
-    openProject(r.project.ProjectID);
-  }catch(e){ notice('projErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Create project'; }
+function newProject(){
+  CURRENT = null;
+  $('pm_title').textContent = 'New project';
+  $('pm_name').value=''; $('pm_desc').value='';
+  $('pm_contract').innerHTML = contractOptions('');
+  $('pm_cp').innerHTML = ctCpOptions('');
+  $('pm_save').textContent = 'Create project';
+  document.querySelectorAll('#projModal .pj-only').forEach(el=>el.classList.add('hidden'));
+  notice('pm_err','','');
+  $('projModal').classList.remove('hidden');
 }
 // contract <-> counterparty binding on the project form
 function projContractChange(pfx){
@@ -1256,6 +1196,8 @@ function renderProjectModal(){
   $('pm_name').value = p.Name; $('pm_desc').value = p.Description||'';
   $('pm_contract').innerHTML = contractOptions(p.ContractID||'');
   $('pm_cp').innerHTML = ctCpOptions(p.CounterpartyID||'');
+  $('pm_save').textContent='Save project';
+  document.querySelectorAll('#projModal .pj-only').forEach(el=>el.classList.remove('hidden'));
   notice('pm_err','','');
   // assignments
   $('pm_asgs').innerHTML = asgs.length ? asgs.map(a=>{
@@ -1297,11 +1239,21 @@ async function refreshModal(){ const r = await api('get_project',{projectId:CURR
 async function saveProject(){
   notice('pm_err','',''); const name=$('pm_name').value.trim();
   if(!name){ notice('pm_err','err','Project name is required.'); return; }
+  if(!$('pm_cp').value){ notice('pm_err','err','Select a counterparty.'); return; }
   const b=$('pm_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  if(!$('pm_cp').value){ notice('pm_err','err','Select a counterparty.'); b.disabled=false; b.textContent='Save project'; return; }
-  try{ await api('update_project',{projectId:CURRENT.project.ProjectID, name, counterpartyId:$('pm_cp').value, contractId:$('pm_contract').value, description:$('pm_desc').value.trim()}); await refreshModal(); notice('pm_err','ok','Saved.'); }
-  catch(e){ notice('pm_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Save project'; }
+  const payload = { name, counterpartyId:$('pm_cp').value, contractId:$('pm_contract').value, description:$('pm_desc').value.trim() };
+  try{
+    if(CURRENT && CURRENT.project){
+      await api('update_project', Object.assign({projectId:CURRENT.project.ProjectID}, payload));
+      await refreshModal(); notice('pm_err','ok','Saved.');
+    }else{
+      const r = await api('create_project', payload);
+      await loadProjects();
+      openProject(r.project.ProjectID);
+      notice('pm_err','ok','Project created — add team members below.');
+    }
+  }catch(e){ notice('pm_err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent = (CURRENT&&CURRENT.project)?'Save project':'Create project'; }
 }
 async function deleteProject(){
   if(!confirm('Delete the whole project with all its reports and data? This cannot be undone.')) return;
