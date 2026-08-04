@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-19.4';
+const BUILD = '2026-07-19.5';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -42,7 +42,7 @@ const HEADERS = {
                 'OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
-  attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DriveFileID', 'Url', 'CreatedAt'],
+  attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt'],
   projects:    ['ProjectID', 'Name', 'Customer', 'CounterpartyID', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
@@ -96,6 +96,8 @@ function route_(action, d) {
     case 'add_attachment':     return adminAddAttachment_(d);
     case 'list_attachments':   return adminListAttachments_(d);
     case 'delete_attachment':  return adminDeleteAttachment_(d);
+    case 'update_attachment':  return adminUpdateAttachment_(d);
+    case 'set_current_attachment': return adminSetCurrentAttachment_(d);
     case 'recalc_contract_fx': return adminRecalcContractFx_(d);
     case 'recalc_invoice_fx':  return adminRecalcInvoiceFx_(d);
     case 'recalc_all_fx':      return adminRecalcAllFx_(d);
@@ -221,15 +223,52 @@ function adminAddAttachment_(d) {
   try {
     var blob = Utilities.newBlob(Utilities.base64Decode(b64), mime, fileName);
     var file = attachmentsFolder_().createFile(blob);   // private by default (owner-only)
+    var docType = attachDocType_(d.docType);
+    var docDate = trim_(d.docDate) || new Date().toISOString().slice(0, 10);
     var row = {
       AttachmentID: Utilities.getUuid(), ParentType: parentType, ParentID: parentId,
-      FileName: fileName, Description: trim_(d.description), DriveFileID: file.getId(), Url: file.getUrl(), CreatedAt: new Date().toISOString()
+      FileName: fileName, Description: trim_(d.description), DocType: docType, DocDate: docDate,
+      IsCurrent: truthy_(d.isCurrent) ? 'yes' : 'no',
+      DriveFileID: file.getId(), Url: file.getUrl(), CreatedAt: new Date().toISOString()
     };
     appendRow_(SHEETS.attachments, row);
+    if (truthy_(row.IsCurrent)) clearCurrentAttachments_(parentType, parentId, docType, row.AttachmentID);
     return { ok: true, attachment: row };
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
 }
 function attachType_(t) { t = trim_(t); return (t === 'invoice' || t === 'counterparty') ? t : 'contract'; }
+var DOC_TYPES = ['signed', 'draft', 'annex', 'amendment', 'other'];
+function attachDocType_(t) { t = trim_(t).toLowerCase(); return DOC_TYPES.indexOf(t) >= 0 ? t : 'other'; }
+function clearCurrentAttachments_(parentType, parentId, docType, keepId) {
+  readAll_(SHEETS.attachments).forEach(function (a) {
+    if (a.ParentType === parentType && String(a.ParentID) === String(parentId) &&
+        trim_(a.DocType) === docType && String(a.AttachmentID) !== String(keepId) && truthy_(a.IsCurrent)) {
+      updateRow_(SHEETS.attachments, 'AttachmentID', a.AttachmentID, { IsCurrent: 'no' });
+    }
+  });
+}
+function adminUpdateAttachment_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.attachments, 'AttachmentID', trim_(d.id));
+  if (!a) return { ok: false, error: 'Attachment not found' };
+  var upd = {};
+  if (d.description !== undefined) upd.Description = trim_(d.description);
+  if (d.docType !== undefined) upd.DocType = attachDocType_(d.docType);
+  if (d.docDate !== undefined) upd.DocDate = trim_(d.docDate);
+  updateRow_(SHEETS.attachments, 'AttachmentID', a.AttachmentID, upd);
+  // moving to another type must not leave two "current" files of the same type
+  if (upd.DocType && truthy_(a.IsCurrent)) clearCurrentAttachments_(a.ParentType, a.ParentID, upd.DocType, a.AttachmentID);
+  return { ok: true };
+}
+function adminSetCurrentAttachment_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.attachments, 'AttachmentID', trim_(d.id));
+  if (!a) return { ok: false, error: 'Attachment not found' };
+  var makeCurrent = (d.isCurrent === undefined) ? true : truthy_(d.isCurrent);
+  updateRow_(SHEETS.attachments, 'AttachmentID', a.AttachmentID, { IsCurrent: makeCurrent ? 'yes' : 'no' });
+  if (makeCurrent) clearCurrentAttachments_(a.ParentType, a.ParentID, trim_(a.DocType), a.AttachmentID);
+  return { ok: true };
+}
 function adminListAttachments_(d) {
   requireAdmin_(d);
   var pt = attachType_(d.parentType);

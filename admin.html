@@ -526,7 +526,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-19.4';
+const BUILD = '2026-07-19.5';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -748,23 +748,72 @@ async function recalcAllFx(btn){
 
 // ── Attachments (private files in owner's Google Drive) ──
 function fileToBase64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(file); }); }
+const DOC_TYPE_LABEL = { signed:'Signed original', draft:'Draft', annex:'Annex / SOW', amendment:'Amendment', other:'Other' };
+function docTypeOptions(sel){
+  return Object.keys(DOC_TYPE_LABEL).map(k=>`<option value="${k}" ${String(sel)===k?'selected':''}>${DOC_TYPE_LABEL[k]}</option>`).join('');
+}
 async function renderAttachments(elId, parentType, parentId){
   const el=$(elId); el.innerHTML='<div class="muted">Loading…</div>';
   try{
     const r = await api('list_attachments',{parentType, parentId});
-    const items = r.attachments||[];
-    const list = items.length ? items.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--line)">
-        <span><a href="${esc(a.Url)}" target="_blank" rel="noopener">📎 ${esc(a.FileName)}</a>${a.Description?`<div class="muted" style="font-size:12px">${esc(a.Description)}</div>`:''}</span>
-        <button class="btn warn sm" onclick="deleteAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Delete</button>
-      </div>`).join('') : '<div class="muted" style="padding:7px 0">No files.</div>';
+    let items = r.attachments||[];
+    const order = { signed:0, amendment:1, annex:2, draft:3, other:4 };
+    items.sort((a,b)=>{
+      const ca = String(a.IsCurrent).toLowerCase()==='yes'?0:1, cb = String(b.IsCurrent).toLowerCase()==='yes'?0:1;
+      if(ca!==cb) return ca-cb;
+      const oa = order[a.DocType]??9, ob = order[b.DocType]??9;
+      if(oa!==ob) return oa-ob;
+      return String(b.DocDate||'').localeCompare(String(a.DocDate||''));
+    });
+    const list = items.length ? items.map(a=>{
+      const cur = String(a.IsCurrent).toLowerCase()==='yes';
+      const type = a.DocType||'other';
+      return `<div style="padding:8px 0;border-top:1px solid var(--line)">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">
+          <span><a href="${esc(a.Url)}" target="_blank" rel="noopener">📎 ${esc(a.FileName)}</a>
+            ${cur?'<span class="tag submitted">current</span>':''}
+            <div class="muted" style="font-size:12px">${esc(DOC_TYPE_LABEL[type]||'Other')}${a.DocDate?' · '+esc(fmtDate(a.DocDate)):''}${a.Description?' · '+esc(a.Description):''}</div></span>
+          <span class="acts">
+            ${cur?'':`<button class="btn ghost sm" onclick="setCurrentAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Make current</button>`}
+            <button class="btn ghost sm" onclick="toggleAttEdit('${esc(a.AttachmentID)}')">Edit</button>
+            <button class="btn warn sm" onclick="deleteAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Delete</button>
+          </span>
+        </div>
+        <div id="ae_${esc(a.AttachmentID)}" class="hidden" style="margin-top:8px">
+          <div class="row">
+            <div><label>Type</label><select id="aet_${esc(a.AttachmentID)}">${docTypeOptions(type)}</select></div>
+            <div><label>Document date</label><input id="aed_${esc(a.AttachmentID)}" type="date" value="${esc(a.DocDate?fmtDate(a.DocDate):'')}"></div>
+            <div style="flex:2"><label>Description</label><input id="aex_${esc(a.AttachmentID)}" value="${esc(a.Description||'')}"></div>
+            <div style="flex:0 0 auto;align-self:end"><button class="btn sm" onclick="saveAttMeta('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}',this)">Save</button></div>
+          </div>
+        </div>
+      </div>`;
+    }).join('') : '<div class="muted" style="padding:7px 0">No files.</div>';
     el.innerHTML = `<div class="row" style="align-items:end">
-        <div style="flex:2 1 200px"><input type="file" id="${elId}_file" accept="application/pdf,image/*"></div>
-        <div style="flex:2 1 200px"><input type="text" id="${elId}_desc" placeholder="Description (optional)"></div>
-        <div style="flex:0 0 auto"><button class="btn sm" id="${elId}_btn" onclick="uploadAttachment('${parentType}','${parentId}','${elId}')">Upload</button></div>
+        <div style="flex:2 1 190px"><label>File</label><input type="file" id="${elId}_file" accept="application/pdf,image/*"></div>
+        <div><label>Type</label><select id="${elId}_type">${docTypeOptions(parentType==='contract'?'signed':'other')}</select></div>
+        <div><label>Document date</label><input type="date" id="${elId}_date" value="${todayISO()}"></div>
+        <div style="flex:2 1 180px"><label>Description</label><input type="text" id="${elId}_desc" placeholder="optional"></div>
       </div>
+      <div style="height:6px"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:14px"><input type="checkbox" id="${elId}_cur" style="width:auto" checked> Mark as current for its type</label>
+      <div style="height:8px"></div>
+      <button class="btn sm" id="${elId}_btn" onclick="uploadAttachment('${parentType}','${parentId}','${elId}')">Upload</button>
       <div style="height:6px"></div>${list}
-      <p class="muted" style="font-size:11px">Stored privately in your Google Drive (folder "FXWorks Attachments") — only you, the Drive owner, can open them. Max ~20 MB per file.</p>`;
+      <p class="muted" style="font-size:11px">Stored privately in your Google Drive (folder "FXWorks Attachments") — only you, the Drive owner, can open them. Files are never removed automatically. Max ~20 MB per file.</p>`;
   }catch(e){ el.innerHTML='<div class="notice err">'+esc(e.message)+'</div>'; }
+}
+function toggleAttEdit(id){ const el=$('ae_'+id); if(el) el.classList.toggle('hidden'); }
+async function saveAttMeta(id, parentType, parentId, elId, btn){
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    await api('update_attachment',{ id, docType:$('aet_'+id).value, docDate:$('aed_'+id).value, description:$('aex_'+id).value.trim() });
+    await renderAttachments(elId, parentType, parentId);
+  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Save'; }
+}
+async function setCurrentAttachment(id, parentType, parentId, elId){
+  try{ await api('set_current_attachment',{id, isCurrent:true}); await renderAttachments(elId, parentType, parentId); }
+  catch(e){ alert(e.message); }
 }
 async function uploadAttachment(parentType, parentId, elId){
   const input=$(elId+'_file'); const file=input.files[0];
@@ -773,8 +822,12 @@ async function uploadAttachment(parentType, parentId, elId){
   const btn=$(elId+'_btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
   try{
     const b64 = await fileToBase64(file);
-    const desc = $(elId+'_desc') ? $(elId+'_desc').value.trim() : '';
-    await api('add_attachment',{parentType, parentId, fileName:file.name, description:desc, mimeType:file.type||'application/octet-stream', dataBase64:b64});
+    await api('add_attachment',{parentType, parentId, fileName:file.name,
+      description:($(elId+'_desc')?$(elId+'_desc').value.trim():''),
+      docType:($(elId+'_type')?$(elId+'_type').value:'other'),
+      docDate:($(elId+'_date')?$(elId+'_date').value:''),
+      isCurrent:($(elId+'_cur')?$(elId+'_cur').checked:false),
+      mimeType:file.type||'application/octet-stream', dataBase64:b64});
     await renderAttachments(elId, parentType, parentId);
   }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Upload'; }
 }
