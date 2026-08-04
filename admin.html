@@ -501,7 +501,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-19.7';
+const BUILD = '2026-07-19.8';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1055,16 +1055,12 @@ async function loadContracts(){
     // table
     const tb = $('ctTable').querySelector('tbody');
     if(!CONTRACTS.length){ tb.innerHTML='<tr><td class="empty">No contracts yet.</td></tr>'; return; }
-    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th>Direction</th><th class="num">Amount</th><th class="num">USD</th><th>Signed</th><th>Term</th><th>Parent</th><th></th></tr>'+
+    tb.innerHTML='<tr><th>Number</th><th>Counterparty</th><th class="num">Amount</th><th>Signed</th><th></th></tr>'+
     CONTRACTS.map(c=>{const s=cur(c.Currency);return `<tr>
-      <td>${esc(c.Number)}${c.Description?`<div class="muted">${esc(String(c.Description).slice(0,60))}${String(c.Description).length>60?'…':''}</div>`:''}</td>
+      <td>${esc(c.Number)}${c.ParentContractID?` <span class="muted">· sub of ${esc(ctNumber(c.ParentContractID))}</span>`:''}</td>
       <td>${esc(cpName(c.CounterpartyID))}</td>
-      <td class="muted">${c.Direction==='outgoing'?'Outgoing':'Incoming'}</td>
       <td class="num">${(c.Amount!==''&&c.Amount!=null)?s+money(c.Amount):'—'}</td>
-      <td class="num">${(c.AmountUSD!==''&&c.AmountUSD!=null)?'$'+money(c.AmountUSD):'—'}${c.FxAsOf?`<div class="muted" style="font-size:11px">@${esc(c.FxAsOf)}</div>`:''}</td>
       <td class="muted">${esc(c.SignDate?fmtDate(c.SignDate):'—')}</td>
-      <td class="muted">${esc(c.StartDate?fmtDate(c.StartDate):'—')}${c.EndDate?' → '+esc(fmtDate(c.EndDate)):''}</td>
-      <td class="muted">${c.ParentContractID?esc(ctNumber(c.ParentContractID)):'—'}</td>
       <td><button class="btn ghost sm" onclick="openContract('${esc(c.ContractID)}')">Open</button></td></tr>`;}).join('');
   }catch(e){ notice('ctErr','err', esc(e.message)); }
 }
@@ -1083,6 +1079,93 @@ async function saveContract(){
   }catch(e){ notice('ctm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
 }
+// ── Document settings on a contract ──
+const DC_TEXT = ['templateType','ourRole','ourRequisiteId','theirRequisiteId','subject','paymentOption','paymentDays',
+  'advancePercent','advanceDays','governingLaw','jurisdictionPlace','arbitrationBody','arbitrationSeat','remarksDays',
+  'acceptanceDays','evaluationDays','disputeDays','cureDays','noticeDays','termYears','warrantyPeriod',
+  'penaltyDelayPercent','penaltyFailurePercent','penaltyCapPercent','insuranceAmount','restrictedTerritories',
+  'rateAmount','rateBasis','invoiceTrigger','paymentBasis','reportFrequency','completionDate','pMName','sowScope'];
+const DC_FLAGS = ['optAcceptanceAct','optPenalties','optUsageRights','optInsurance','optDataSecurity','optWarranty'];
+const DC_KEY = f => f.charAt(0).toUpperCase()+f.slice(1);
+const DC_DEFAULTS = {
+  b2b: { remarksDays:15, acceptanceDays:30, cureDays:15, paymentDays:30, paymentOption:'postpay',
+         penaltyDelayPercent:0.1, penaltyFailurePercent:10, penaltyCapPercent:20,
+         governingLaw:'Switzerland', jurisdictionPlace:'Geneva, Switzerland', warrantyPeriod:'1.5 (one and a half) months' },
+  ica: { paymentDays:30, disputeDays:20, evaluationDays:10, noticeDays:60, termYears:2, paymentOption:'postpay',
+         invoiceTrigger:'on_completion', paymentBasis:'hourly', reportFrequency:'on_completion', rateBasis:'per hour',
+         governingLaw:'Hong Kong SAR', arbitrationBody:'Hong Kong International Arbitration Centre (HKIAC)',
+         arbitrationSeat:'Hong Kong', restrictedTerritories:'the Russian Federation and the Republic of Belarus' }
+};
+let DC_ID = '', DC_REQS = {};
+function reqOptions(cpId, sel){
+  const list = (DC_REQS[cpId]||[]);
+  if(!list.length) return '<option value="">— no requisite sets —</option>';
+  return '<option value="">— select —</option>'+list.map(q=>{
+    const def = String(q.IsDefault).toLowerCase()==='yes';
+    return `<option value="${esc(q.RequisiteID)}" ${String(sel)===String(q.RequisiteID)?'selected':''}>${esc(q.Label||'—')}${def?' (default)':''}</option>`;
+  }).join('');
+}
+async function loadReqsFor(cpIds){
+  for(const id of cpIds){ if(!id || DC_REQS[id]) continue;
+    try{ const r = await api('list_requisites',{counterpartyId:id}); DC_REQS[id] = r.requisites||[]; }catch(e){ DC_REQS[id]=[]; }
+  }
+}
+function OUR_CP_ID(){
+  const me = COUNTERPARTIES.find(c=>/fraktalex/i.test(c.Name||''));
+  return me ? me.CounterpartyID : '';
+}
+function dcTemplateChange(){
+  const ica = $('dc_templateType').value==='ica';
+  $('dc_icaPay').classList.toggle('hidden', !ica);
+  $('dc_b2bProc').classList.toggle('hidden', ica);
+  $('dc_arbWrap').classList.toggle('hidden', !ica);
+  $('dc_seatWrap').classList.toggle('hidden', !ica);
+  $('dc_jurWrap').classList.toggle('hidden', ica);
+}
+function dcPayChange(){
+  if($('dc_paymentOption').value==='after_warranty' && !$('dc_optWarranty').checked){
+    $('dc_optWarranty').checked = true;
+    notice('dc_err','info','Warranty enabled automatically — payment is tied to the warranty period.');
+  }
+}
+async function openContractDoc(c){
+  DC_ID = c.ContractID;
+  const our = OUR_CP_ID(), theirs = c.CounterpartyID;
+  await loadReqsFor([our, theirs]);
+  const tpl = c.TemplateType || 'b2b';
+  $('dc_templateType').value = tpl;
+  const def = DC_DEFAULTS[tpl] || {};
+  DC_TEXT.forEach(f=>{
+    const el = $('dc_'+f); if(!el) return;
+    let v = c[DC_KEY(f)];
+    if((v===''||v==null) && def[f]!==undefined) v = def[f];
+    el.value = (v==null?'':v);
+  });
+  $('dc_ourRole').value = c.OurRole || 'supplier';
+  $('dc_ourRequisiteId').innerHTML = reqOptions(our, c.OurRequisiteID);
+  $('dc_theirRequisiteId').innerHTML = reqOptions(theirs, c.TheirRequisiteID);
+  const isNew = !c.TemplateType;
+  DC_FLAGS.forEach(f=>{
+    const el=$('dc_'+f); if(!el) return;
+    const raw = c[DC_KEY(f)];
+    el.checked = (raw==='' || raw==null) ? (isNew && f!=='optWarranty') : String(raw).toLowerCase()==='yes';
+  });
+  dcTemplateChange(); dcPayChange(); notice('dc_err','','');
+}
+async function saveContractDoc(){
+  notice('dc_err','','');
+  const b=$('dc_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const payload = { id:DC_ID };
+  DC_TEXT.forEach(f=>{ const el=$('dc_'+f); if(el) payload[f]=el.value; });
+  DC_FLAGS.forEach(f=>{ const el=$('dc_'+f); if(el) payload[f]=el.checked; });
+  try{
+    await api('save_contract_doc', payload);
+    await loadContracts();
+    notice('dc_err','ok','Document settings saved.');
+  }catch(e){ notice('dc_err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Save document settings'; }
+}
+
 function openContract(id, keepOpen){
   const c = CONTRACTS.find(x=>String(x.ContractID)===String(id));
   if(!c) return;
