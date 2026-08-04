@@ -381,12 +381,12 @@
     <div id="ext_panel" class="hidden" style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:10px">
       <p class="muted">No document is generated for this contract. Attach the signed file below, then read the details straight from it — recognition runs inside your own Google Drive, the file is not sent anywhere.</p>
       <div id="ext_existing" class="row" style="align-items:end">
-        <div style="flex:2"><label>Source document</label><select id="ext_src"></select></div>
+        <div style="flex:2"><label>Source documents (Ctrl/Cmd-click to select several — e.g. the agreement and its SOW)</label><select id="ext_src" multiple size="4"></select></div>
         <div style="flex:0 0 auto"><button class="btn sm" id="ext_btn" onclick="extractFromDoc()">Read data from document</button></div>
         <div style="flex:0 0 auto"><button class="btn ghost sm" id="ext_unlock" onclick="extUnlock()" style="display:none">Unlock for editing</button></div>
       </div>
       <div id="ext_new" class="row hidden" style="align-items:end">
-        <div style="flex:2"><label>Signed document (PDF or photo)</label><input type="file" id="ext_file" accept="application/pdf,image/*"></div>
+        <div style="flex:2"><label>Signed documents (PDF or photo — you can pick several: agreement, SOW, annexes)</label><input type="file" id="ext_file" accept="application/pdf,image/*" multiple></div>
         <div style="flex:0 0 auto"><button class="btn sm" id="ext_upbtn" onclick="extractFromUpload()">Upload &amp; read data</button></div>
       </div>
       <div id="ext_msg"></div>
@@ -536,7 +536,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-26.2';
+const BUILD = '2026-07-26.3';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1215,7 +1215,7 @@ function newContract(){
   $('ctm_usd').textContent = '';
   $('ctm_sections').classList.add('hidden');
   $('ctm_ext').classList.remove('hidden');
-  $('ct_externalForm').checked=false; CT_EXTRACTED=''; PENDING_DOC=null;
+  $('ct_externalForm').checked=false; CT_EXTRACTED=''; PENDING_DOCS=[];
   if($('ext_file')) $('ext_file').value='';
   notice('ext_msg','','');
   ctLockCore(false); extFormToggle();
@@ -1261,10 +1261,12 @@ async function saveContract(){
   try{
     const r = await api(EDIT_CT?'update_contract':'create_contract', payload);
     const savedId = EDIT_CT || (r.contract && r.contract.ContractID);
-    if(savedId && PENDING_DOC){
-      await api('attach_existing',{ parentType:'contract', parentId:savedId, driveFileId:PENDING_DOC.driveFileId,
-        url:PENDING_DOC.url, fileName:PENDING_DOC.fileName, docType:'signed', docDate:$('ct_sign').value, isCurrent:true });
-      PENDING_DOC = null;
+    if(savedId && PENDING_DOCS.length){
+      for(const p of PENDING_DOCS){
+        await api('attach_existing',{ parentType:'contract', parentId:savedId, driveFileId:p.driveFileId,
+          url:p.url, fileName:p.fileName, docType:p.docType, docDate:$('ct_sign').value, isCurrent:(p.docType==='signed') });
+      }
+      PENDING_DOCS = [];
     }
     if(savedId && $('ct_externalForm')){
       const ext = $('ct_externalForm').checked;
@@ -1289,7 +1291,7 @@ function ctLockCore(lock){
   $('ct_btn').disabled = lock;
   $('ext_unlock').style.display = lock ? '' : 'none';
 }
-let PENDING_DOC = null;   // file uploaded while creating a contract, linked to it on save
+let PENDING_DOCS = [];   // files uploaded while creating a contract, linked to it on save
 function extFormToggle(){
   const on = $('ct_externalForm').checked, creating = !EDIT_CT;
   $('ext_panel').classList.toggle('hidden', !on);
@@ -1309,22 +1311,6 @@ function extFillFields(f){
   if(f.endDate){ $('ct_end').value=f.endDate; got.push('end date'); }
   return got;
 }
-async function extractFromUpload(){
-  const file = $('ext_file').files[0];
-  if(!file){ notice('ext_msg','err','Choose a file first.'); return; }
-  if(file.size > 20*1024*1024){ notice('ext_msg','err','File too large (max ~20 MB).'); return; }
-  const b=$('ext_upbtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  notice('ext_msg','info','Uploading and reading the document - this can take up to a minute...');
-  try{
-    const b64 = await fileToBase64(file);
-    const r = await api('extract_upload',{fileName:file.name, mimeType:file.type||'application/octet-stream', dataBase64:b64});
-    PENDING_DOC = { driveFileId:r.driveFileId, url:r.url, fileName:r.fileName };
-    const got = extFillFields(r.fields||{});
-    if(got.length) notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values, then press Create contract - the file will be attached automatically.');
-    else notice('ext_msg','info', esc(r.warning||'Nothing recognised')+'. Fill the fields by hand - the file is uploaded and will be attached on save.');
-  }catch(e){ notice('ext_msg','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Upload & read data'; }
-}
 function extUnlock(){ CT_EXTRACTED=''; ctLockCore(false); notice('ext_msg','info','Fields unlocked — correct them and press Save contract.'); }
 async function extLoadSources(contractId){
   const sel = $('ext_src');
@@ -1332,21 +1318,56 @@ async function extLoadSources(contractId){
     const r = await api('list_attachments',{parentType:'contract', parentId:contractId});
     const items = (r.attachments||[]);
     sel.innerHTML = items.length
-      ? items.map(a=>`<option value="${esc(a.AttachmentID)}">${esc(a.FileName)}${a.DocType?' · '+esc(DOC_TYPE_LABEL[a.DocType]||''):''}</option>`).join('')
+      ? items.map(a=>`<option value="${esc(a.AttachmentID)}" ${(a.DocType==='signed'||a.DocType==='annex')?'selected':''}>${esc(a.FileName)}${a.DocType?' · '+esc(DOC_TYPE_LABEL[a.DocType]||''):''}</option>`).join('')
       : '<option value="">— attach a file below first —</option>';
   }catch(e){ sel.innerHTML='<option value="">— could not load files —</option>'; }
 }
 async function extractFromDoc(){
-  const attId = $('ext_src').value;
-  if(!attId){ notice('ext_msg','err','Attach the signed document first (section Attachments below).'); return; }
+  const ids = Array.from($('ext_src').selectedOptions).map(o=>o.value).filter(Boolean);
+  if(!ids.length){ notice('ext_msg','err','Select at least one attached document (hold Ctrl/Cmd to pick the agreement and its SOW).'); return; }
   const b=$('ext_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  notice('ext_msg','info','Reading the document — this can take up to a minute…');
+  notice('ext_msg','info','Reading '+ids.length+' document(s) — this can take a minute…');
   try{
-    const r = await api('extract_contract',{attachmentId:attId});
+    const r = await api('extract_contract',{attachmentIds:ids});
     const got = extFillFields(r.fields||{});
-    notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values above, correct anything wrong, then press <b>Save contract</b> — after saving the fields are locked.');
+    const notes = (r.notes||[]).map(n=>esc(n)).join('<br>');
+    notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values above, correct anything wrong, then press <b>Save contract</b> — after saving the fields are locked.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
   }catch(e){ notice('ext_msg','err', esc(e.message)+' — you can still type the details in by hand.'); }
   finally{ b.disabled=false; b.textContent='Read data from document'; }
+}
+function mergeFieldsClient(parts){
+  const main = parts.filter(p=>p.docType!=='annex' && p.docType!=='amendment').map(p=>p.fields||{});
+  const annex = parts.filter(p=>p.docType==='annex' || p.docType==='amendment').map(p=>p.fields||{});
+  const pick=(list,k)=>{ for(const f of list){ if(f[k]!==undefined && f[k]!=='' && f[k]!==null) return f[k]; } };
+  const out={};
+  ['number','signDate','startDate'].forEach(k=>{ const v = pick(main,k) ?? pick(annex,k); if(v!==undefined) out[k]=v; });
+  ['amount','currency','endDate'].forEach(k=>{ const v = pick(annex,k) ?? pick(main,k); if(v!==undefined) out[k]=v; });
+  return out;
+}
+async function extractFromUpload(){
+  const files = Array.from($('ext_file').files||[]);
+  if(!files.length){ notice('ext_msg','err','Choose at least one file.'); return; }
+  if(files.some(f=>f.size > 20*1024*1024)){ notice('ext_msg','err','Each file must be under ~20 MB.'); return; }
+  const b=$('ext_upbtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  notice('ext_msg','info','Uploading and reading '+files.length+' file(s) — this can take a minute…');
+  PENDING_DOCS = [];
+  const parts = [], notes = [];
+  try{
+    for(let i=0;i<files.length;i++){
+      const f = files[i];
+      const docType = (i===0) ? 'signed' : 'annex';       // first file = main contract, the rest = annexes/SOW
+      const b64 = await fileToBase64(f);
+      const r = await api('extract_upload',{fileName:f.name, mimeType:f.type||'application/octet-stream', dataBase64:b64, docType});
+      PENDING_DOCS.push({ driveFileId:r.driveFileId, url:r.url, fileName:r.fileName, docType });
+      parts.push({ docType, fields:r.fields||{} });
+      notes.push(f.name+' → '+(Object.keys(r.fields||{}).length?Object.keys(r.fields).join(', '):(r.warning||'nothing recognised')));
+    }
+    const got = extFillFields(mergeFieldsClient(parts));
+    const nHtml = '<div class="muted" style="font-size:12px;margin-top:6px">'+notes.map(n=>esc(n)).join('<br>')+'</div>';
+    if(got.length) notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values, then press <b>Create contract</b> — the files will be attached automatically.'+nHtml);
+    else notice('ext_msg','info','Nothing recognised. Fill the fields by hand — the files are uploaded and will be attached on save.'+nHtml);
+  }catch(e){ notice('ext_msg','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Upload & read data'; }
 }
 
 // ── Document settings on a contract ──

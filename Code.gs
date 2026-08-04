@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-26.2';
+const BUILD = '2026-07-26.3';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -508,18 +508,52 @@ function parseContractText_(text) {
   }
   return f;
 }
+// Merge fields recognised in several documents of one contract.
+// The main (signed) document wins for the number and the dates;
+// an annex / SOW wins for the price, because that is where it normally lives.
+function mergeContractFields_(parts) {
+  var main = [], annex = [];
+  parts.forEach(function (p) { (p.docType === 'annex' || p.docType === 'amendment' ? annex : main).push(p.fields || {}); });
+  function pick(list, key) {
+    for (var i = 0; i < list.length; i++) if (list[i][key] !== undefined && list[i][key] !== '' && list[i][key] !== null) return list[i][key];
+    return undefined;
+  }
+  var out = {};
+  ['number', 'signDate', 'startDate'].forEach(function (k) {
+    var v = pick(main, k); if (v === undefined) v = pick(annex, k);
+    if (v !== undefined) out[k] = v;
+  });
+  ['amount', 'currency', 'endDate'].forEach(function (k) {
+    var v = pick(annex, k); if (v === undefined) v = pick(main, k);
+    if (v !== undefined) out[k] = v;
+  });
+  return out;
+}
+
 function adminExtractContract_(d) {
   requireAdmin_(d);
-  var a = findRow_(SHEETS.attachments, 'AttachmentID', trim_(d.attachmentId));
-  if (!a) return { ok: false, error: 'Attachment not found' };
-  if (!a.DriveFileID) return { ok: false, error: 'Attachment has no stored file' };
-  var r = ocrText_(a.DriveFileID);
-  if (!r.ok) return { ok: false, error: r.error };
-  var text = String(r.text || '');
-  if (text.replace(/\s/g, '').length < 40) return { ok: false, error: 'No readable text found in this file (a low-quality scan?)' };
-  var fields = parseContractText_(text);
-  if (!fields.number && !fields.amount && !fields.signDate) return { ok: false, error: 'Text was read, but no contract details were recognised' };
-  return { ok: true, fields: fields, preview: text.slice(0, 600) };
+  var ids = d.attachmentIds;
+  if (typeof ids === 'string') ids = ids.split(',');
+  if (!ids || !ids.length) ids = [trim_(d.attachmentId)];
+  ids = ids.map(trim_).filter(String);
+  if (!ids.length) return { ok: false, error: 'Select at least one document' };
+
+  var parts = [], notes = [];
+  for (var i = 0; i < ids.length; i++) {
+    var a = findRow_(SHEETS.attachments, 'AttachmentID', ids[i]);
+    if (!a || !a.DriveFileID) { notes.push('File not found'); continue; }
+    var r = ocrText_(a.DriveFileID);
+    if (!r.ok) { notes.push(a.FileName + ': ' + r.error); continue; }
+    var text = String(r.text || '');
+    if (text.replace(/\s/g, '').length < 40) { notes.push(a.FileName + ': no readable text'); continue; }
+    var f = parseContractText_(text);
+    parts.push({ docType: trim_(a.DocType), fileName: a.FileName, fields: f });
+    notes.push(a.FileName + ': ' + (Object.keys(f).length ? Object.keys(f).join(', ') : 'nothing recognised'));
+  }
+  if (!parts.length) return { ok: false, error: notes.join('; ') || 'Nothing could be read' };
+  var merged = mergeContractFields_(parts);
+  if (!merged.number && !merged.amount && !merged.signDate) return { ok: false, error: 'Text was read, but no contract details were recognised' };
+  return { ok: true, fields: merged, notes: notes };
 }
 
 // Upload a file straight into Drive and OCR it before the contract record exists.
@@ -535,7 +569,7 @@ function adminExtractUpload_(d) {
     file = attachmentsFolder_().createFile(blob);
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
 
-  var res = { ok: true, driveFileId: file.getId(), url: file.getUrl(), fileName: fileName, fields: {} };
+  var res = { ok: true, driveFileId: file.getId(), url: file.getUrl(), fileName: fileName, docType: attachDocType_(d.docType), fields: {} };
   var r = ocrText_(file.getId());
   if (!r.ok) { res.warning = r.error; return res; }
   var text = String(r.text || '');
