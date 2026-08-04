@@ -388,6 +388,109 @@
 <div id="ctModal" class="modal hidden"><div class="box">
   <h2><span id="ctm_title">Contract</span><button class="x" onclick="closeModal('ctModal')">×</button></h2>
   <div id="ctm_body"></div>
+  <div class="sep"></div>
+  <h2 style="font-size:15px">Document settings</h2>
+  <p class="muted">Values and optional blocks used when generating the contract and its SOW.</p>
+  <div id="dc_err"></div>
+  <div class="row">
+    <div><label>Template</label>
+      <select id="dc_templateType" onchange="dcTemplateChange()">
+        <option value="b2b">B2B agreement (legal entity)</option>
+        <option value="ica">Independent Contractor Agreement</option>
+      </select></div>
+    <div><label>Our role</label>
+      <select id="dc_ourRole"><option value="supplier">Fraktalex is Supplier</option><option value="customer">Fraktalex is Customer</option></select></div>
+  </div>
+  <div style="height:8px"></div>
+  <div class="row">
+    <div style="flex:2"><label>Our requisites</label><select id="dc_ourRequisiteId"></select></div>
+    <div style="flex:2"><label>Counterparty requisites</label><select id="dc_theirRequisiteId"></select></div>
+  </div>
+  <div style="height:8px"></div>
+  <div><label>Subject / scope summary</label><textarea id="dc_subject" placeholder="Consulting and analytical services…"></textarea></div>
+  <div style="height:8px"></div>
+  <div><label>SOW scope (free text, one item per line)</label><textarea id="dc_sowScope" style="min-height:110px"></textarea></div>
+
+  <div style="height:12px"></div>
+  <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Payment</p>
+  <div class="row">
+    <div style="flex:2"><label>Payment term</label>
+      <select id="dc_paymentOption" onchange="dcPayChange()">
+        <option value="postpay">After acceptance</option>
+        <option value="after_warranty">After warranty period</option>
+        <option value="advance_split">Advance + balance</option>
+        <option value="prepay_100">100% advance</option>
+        <option value="milestone">By milestones</option>
+      </select></div>
+    <div><label>Payment days</label><input id="dc_paymentDays" type="number" min="0"></div>
+    <div><label>Advance %</label><input id="dc_advancePercent" type="number" min="0" max="100"></div>
+    <div><label>Advance days</label><input id="dc_advanceDays" type="number" min="0"></div>
+  </div>
+  <div id="dc_icaPay" class="hidden">
+    <div style="height:8px"></div>
+    <div class="row">
+      <div><label>Invoice trigger</label>
+        <select id="dc_invoiceTrigger"><option value="on_completion">On completion</option><option value="monthly">Monthly</option><option value="per_milestone">Per milestone</option></select></div>
+      <div><label>Payment basis</label>
+        <select id="dc_paymentBasis"><option value="hourly">Hourly</option><option value="fixed">Fixed fee</option><option value="milestone">Milestones</option></select></div>
+      <div><label>Report frequency</label>
+        <select id="dc_reportFrequency"><option value="on_completion">On completion</option><option value="monthly">Monthly</option></select></div>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <div><label>Rate</label><input id="dc_rateAmount" type="number" min="0" step="0.01"></div>
+      <div><label>Rate basis</label><input id="dc_rateBasis" placeholder="per hour"></div>
+      <div><label>Term (years)</label><input id="dc_termYears" type="number" min="0"></div>
+      <div><label>Notice days</label><input id="dc_noticeDays" type="number" min="0"></div>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <div><label>Dispute days</label><input id="dc_disputeDays" type="number" min="0"></div>
+      <div><label>Evaluation days</label><input id="dc_evaluationDays" type="number" min="0"></div>
+      <div style="flex:2"><label>Restricted territories</label><input id="dc_restrictedTerritories"></div>
+    </div>
+  </div>
+  <div id="dc_b2bProc">
+    <div style="height:12px"></div>
+    <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Procedure</p>
+    <div class="row">
+      <div><label>Remarks days</label><input id="dc_remarksDays" type="number" min="0"></div>
+      <div><label>Acceptance days</label><input id="dc_acceptanceDays" type="number" min="0"></div>
+      <div><label>Cure days</label><input id="dc_cureDays" type="number" min="0"></div>
+      <div style="flex:2"><label>Completion date</label><input id="dc_completionDate" type="date"></div>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <div style="flex:2"><label>Project manager</label><input id="dc_pMName"></div>
+      <div><label>Penalty delay %</label><input id="dc_penaltyDelayPercent" type="number" step="0.01" min="0"></div>
+      <div><label>Penalty failure %</label><input id="dc_penaltyFailurePercent" type="number" min="0"></div>
+      <div><label>Penalty cap %</label><input id="dc_penaltyCapPercent" type="number" min="0"></div>
+    </div>
+  </div>
+  <div style="height:12px"></div>
+  <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Law &amp; forum</p>
+  <div class="row">
+    <div><label>Governing law</label><input id="dc_governingLaw"></div>
+    <div id="dc_jurWrap"><label>Place of jurisdiction</label><input id="dc_jurisdictionPlace"></div>
+    <div id="dc_arbWrap" class="hidden" style="flex:2"><label>Arbitration body</label><input id="dc_arbitrationBody"></div>
+    <div id="dc_seatWrap" class="hidden"><label>Seat</label><input id="dc_arbitrationSeat"></div>
+  </div>
+  <div style="height:12px"></div>
+  <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Optional blocks</p>
+  <div id="dc_flags" style="display:flex;flex-wrap:wrap;gap:14px;font-size:14px">
+    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optAcceptanceAct" style="width:auto"> Acceptance Act</label>
+    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optPenalties" style="width:auto"> Penalties</label>
+    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optUsageRights" style="width:auto"> Usage rights</label>
+    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optInsurance" style="width:auto"> Insurance</label>
+    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optDataSecurity" style="width:auto"> Data security</label>
+    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optWarranty" style="width:auto" onchange="dcPayChange()"> Warranty</label>
+  </div>
+  <div class="row" id="dc_warrantyWrap" style="margin-top:8px">
+    <div><label>Warranty period</label><input id="dc_warrantyPeriod" placeholder="1.5 (one and a half) months"></div>
+    <div><label>Insurance amount</label><input id="dc_insuranceAmount" type="number" min="0"></div>
+  </div>
+  <div style="height:12px"></div>
+  <button class="btn sm" id="dc_save" onclick="saveContractDoc()">Save document settings</button>
 </div></div>
 
 <div id="repModal" class="modal hidden"><div class="box">
@@ -423,7 +526,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-19.3';
+const BUILD = '2026-07-19.4';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -956,6 +1059,97 @@ async function delContract(id, number, btn){
   try{ await api('delete_contract',{id}); await loadContracts(); await loadProjects(); }
   catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Delete'; }
 }
+// ── Document settings on a contract ──
+const DC_TEXT = ['templateType','ourRole','ourRequisiteId','theirRequisiteId','subject','paymentOption','paymentDays',
+  'advancePercent','advanceDays','governingLaw','jurisdictionPlace','arbitrationBody','arbitrationSeat','remarksDays',
+  'acceptanceDays','evaluationDays','disputeDays','cureDays','noticeDays','termYears','warrantyPeriod',
+  'penaltyDelayPercent','penaltyFailurePercent','penaltyCapPercent','insuranceAmount','restrictedTerritories',
+  'rateAmount','rateBasis','invoiceTrigger','paymentBasis','reportFrequency','completionDate','pMName','sowScope'];
+const DC_FLAGS = ['optAcceptanceAct','optPenalties','optUsageRights','optInsurance','optDataSecurity','optWarranty'];
+const DC_KEY = f => f.charAt(0).toUpperCase()+f.slice(1);
+const DC_DEFAULTS = {
+  b2b: { remarksDays:15, acceptanceDays:30, cureDays:15, paymentDays:30, paymentOption:'postpay',
+         penaltyDelayPercent:0.1, penaltyFailurePercent:10, penaltyCapPercent:20,
+         governingLaw:'Switzerland', jurisdictionPlace:'Geneva, Switzerland', warrantyPeriod:'1.5 (one and a half) months' },
+  ica: { paymentDays:30, disputeDays:20, evaluationDays:10, noticeDays:60, termYears:2, paymentOption:'postpay',
+         invoiceTrigger:'on_completion', paymentBasis:'hourly', reportFrequency:'on_completion', rateBasis:'per hour',
+         governingLaw:'Hong Kong SAR', arbitrationBody:'Hong Kong International Arbitration Centre (HKIAC)',
+         arbitrationSeat:'Hong Kong', restrictedTerritories:'the Russian Federation and the Republic of Belarus' }
+};
+let DC_ID = '';
+
+function reqOptions(cpId, sel){
+  const list = (DC_REQS[cpId]||[]);
+  if(!list.length) return '<option value="">— no requisite sets —</option>';
+  return '<option value="">— select —</option>'+list.map(q=>{
+    const def = String(q.IsDefault).toLowerCase()==='yes';
+    return `<option value="${esc(q.RequisiteID)}" ${String(sel)===String(q.RequisiteID)?'selected':''}>${esc(q.Label||'—')}${def?' (default)':''}</option>`;
+  }).join('');
+}
+let DC_REQS = {};
+async function loadReqsFor(cpIds){
+  for(const id of cpIds){ if(!id || DC_REQS[id]) continue;
+    try{ const r = await api('list_requisites',{counterpartyId:id}); DC_REQS[id] = r.requisites||[]; }catch(e){ DC_REQS[id]=[]; }
+  }
+}
+function dcTemplateChange(){
+  const ica = $('dc_templateType').value==='ica';
+  $('dc_icaPay').classList.toggle('hidden', !ica);
+  $('dc_b2bProc').classList.toggle('hidden', ica);
+  $('dc_arbWrap').classList.toggle('hidden', !ica);
+  $('dc_seatWrap').classList.toggle('hidden', !ica);
+  $('dc_jurWrap').classList.toggle('hidden', ica);
+}
+function dcPayChange(){
+  const needWarranty = $('dc_paymentOption').value==='after_warranty';
+  if(needWarranty && !$('dc_optWarranty').checked){
+    $('dc_optWarranty').checked = true;
+    notice('dc_err','info','Warranty enabled automatically — payment is tied to the warranty period.');
+  }
+  $('dc_warrantyWrap').style.display = '';
+}
+async function openContractDoc(c){
+  DC_ID = c.ContractID;
+  const our = OUR_CP_ID(), theirs = c.CounterpartyID;
+  await loadReqsFor([our, theirs]);
+  const tpl = c.TemplateType || 'b2b';
+  $('dc_templateType').value = tpl;
+  const def = DC_DEFAULTS[tpl] || {};
+  DC_TEXT.forEach(f=>{
+    const el = $('dc_'+f); if(!el) return;
+    let v = c[DC_KEY(f)];
+    if((v===''||v==null) && def[f]!==undefined) v = def[f];
+    el.value = (v==null?'':v);
+  });
+  $('dc_ourRole').value = c.OurRole || 'supplier';
+  $('dc_ourRequisiteId').innerHTML = reqOptions(our, c.OurRequisiteID);
+  $('dc_theirRequisiteId').innerHTML = reqOptions(theirs, c.TheirRequisiteID);
+  const isNew = !c.TemplateType;
+  DC_FLAGS.forEach(f=>{
+    const el=$('dc_'+f); if(!el) return;
+    const raw = c[DC_KEY(f)];
+    el.checked = (raw==='' || raw==null) ? (isNew && f!=='optWarranty') : String(raw).toLowerCase()==='yes';
+  });
+  dcTemplateChange(); dcPayChange(); notice('dc_err','','');
+}
+function OUR_CP_ID(){
+  const me = COUNTERPARTIES.find(c=>/fraktalex/i.test(c.Name||''));
+  return me ? me.CounterpartyID : '';
+}
+async function saveContractDoc(){
+  notice('dc_err','','');
+  const b=$('dc_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const payload = { id:DC_ID };
+  DC_TEXT.forEach(f=>{ const el=$('dc_'+f); if(el) payload[f]=el.value; });
+  DC_FLAGS.forEach(f=>{ const el=$('dc_'+f); if(el) payload[f]=el.checked; });
+  try{
+    await api('save_contract_doc', payload);
+    await loadContracts();
+    notice('dc_err','ok','Document settings saved.');
+  }catch(e){ notice('dc_err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Save document settings'; }
+}
+
 function openContract(id){
   const c = CONTRACTS.find(x=>String(x.ContractID)===String(id));
   if(!c) return;
@@ -997,6 +1191,7 @@ function openContract(id){
 
   $('ctm_body').innerHTML = html;
   renderAttachments('ctm_attach','contract',id);
+  openContractDoc(c);
   $('ctModal').classList.remove('hidden');
 }
 function openInvoiceFromContract(id){ closeModal('ctModal'); editInvoice(id); }

@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-19.3';
+const BUILD = '2026-07-19.4';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -31,7 +31,15 @@ const HEADERS = {
                 'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
   employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt'],
   contracts:   ['ContractID', 'Number', 'Description', 'CounterpartyID', 'Direction', 'SignDate', 'StartDate', 'EndDate',
-                'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'ParentContractID', 'CreatedAt'],
+                'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'ParentContractID', 'CreatedAt',
+                'TemplateType', 'OurRole', 'OurRequisiteID', 'TheirRequisiteID', 'Subject',
+                'PaymentOption', 'PaymentDays', 'AdvancePercent', 'AdvanceDays',
+                'GoverningLaw', 'JurisdictionPlace', 'ArbitrationBody', 'ArbitrationSeat',
+                'RemarksDays', 'AcceptanceDays', 'EvaluationDays', 'DisputeDays', 'CureDays', 'NoticeDays', 'TermYears',
+                'WarrantyPeriod', 'PenaltyDelayPercent', 'PenaltyFailurePercent', 'PenaltyCapPercent',
+                'InsuranceAmount', 'RestrictedTerritories', 'RateAmount', 'RateBasis',
+                'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope',
+                'OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
   attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DriveFileID', 'Url', 'CreatedAt'],
@@ -78,6 +86,7 @@ function route_(action, d) {
     case 'list_contracts':     requireAdmin_(d); return { ok: true, contracts: readAll_(SHEETS.contracts) };
     case 'update_contract':    return adminUpdateContract_(d);
     case 'delete_contract':    return adminDeleteContract_(d);
+    case 'save_contract_doc':  return adminSaveContractDoc_(d);
     // Invoices
     case 'create_invoice':     return adminCreateInvoice_(d);
     case 'list_invoices':      requireAdmin_(d); return { ok: true, invoices: readAll_(SHEETS.invoices) };
@@ -381,6 +390,36 @@ function adminUpdateContract_(d) {
   });
   return { ok: true };
 }
+var DOC_TEXT_FIELDS = ['TemplateType', 'OurRole', 'OurRequisiteID', 'TheirRequisiteID', 'Subject',
+  'PaymentOption', 'PaymentDays', 'AdvancePercent', 'AdvanceDays', 'GoverningLaw', 'JurisdictionPlace',
+  'ArbitrationBody', 'ArbitrationSeat', 'RemarksDays', 'AcceptanceDays', 'EvaluationDays', 'DisputeDays',
+  'CureDays', 'NoticeDays', 'TermYears', 'WarrantyPeriod', 'PenaltyDelayPercent', 'PenaltyFailurePercent',
+  'PenaltyCapPercent', 'InsuranceAmount', 'RestrictedTerritories', 'RateAmount', 'RateBasis',
+  'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope'];
+var DOC_FLAGS = ['OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty'];
+
+function adminSaveContractDoc_(d) {
+  requireAdmin_(d);
+  var c = findRow_(SHEETS.contracts, 'ContractID', trim_(d.id));
+  if (!c) return { ok: false, error: 'Contract not found' };
+  var upd = {};
+  DOC_TEXT_FIELDS.forEach(function (f) {
+    var key = f.charAt(0).toLowerCase() + f.slice(1);
+    if (d[key] !== undefined) upd[f] = trim_(d[key]);
+  });
+  DOC_FLAGS.forEach(function (f) {
+    var key = f.charAt(0).toLowerCase() + f.slice(1);
+    if (d[key] !== undefined) upd[f] = truthy_(d[key]) ? 'yes' : 'no';
+  });
+  // A payment term tied to the warranty period requires the warranty block to stay on.
+  if (trim_(upd.PaymentOption || c.PaymentOption) === 'after_warranty' &&
+      (upd.OptWarranty === 'no' || (upd.OptWarranty === undefined && !truthy_(c.OptWarranty)))) {
+    return { ok: false, error: 'Payment "after warranty period" requires the Warranty block to be enabled' };
+  }
+  updateRow_(SHEETS.contracts, 'ContractID', c.ContractID, upd);
+  return { ok: true };
+}
+
 function adminDeleteContract_(d) {
   requireAdmin_(d);
   var id = trim_(d.id);
