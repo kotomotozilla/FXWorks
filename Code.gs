@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-26.1';
+const BUILD = '2026-07-26.2';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -89,6 +89,8 @@ function route_(action, d) {
     case 'delete_contract':    return adminDeleteContract_(d);
     case 'save_contract_doc':  return adminSaveContractDoc_(d);
     case 'extract_contract':   return adminExtractContract_(d);
+    case 'extract_upload':     return adminExtractUpload_(d);
+    case 'attach_existing':    return adminAttachExisting_(d);
     // Invoices
     case 'create_invoice':     return adminCreateInvoice_(d);
     case 'list_invoices':      requireAdmin_(d); return { ok: true, invoices: readAll_(SHEETS.invoices) };
@@ -518,6 +520,48 @@ function adminExtractContract_(d) {
   var fields = parseContractText_(text);
   if (!fields.number && !fields.amount && !fields.signDate) return { ok: false, error: 'Text was read, but no contract details were recognised' };
   return { ok: true, fields: fields, preview: text.slice(0, 600) };
+}
+
+// Upload a file straight into Drive and OCR it before the contract record exists.
+// The file stays in the attachments folder and is linked to the contract on save.
+function adminExtractUpload_(d) {
+  requireAdmin_(d);
+  var fileName = trim_(d.fileName) || 'attachment';
+  var mime = trim_(d.mimeType) || 'application/octet-stream';
+  if (!d.dataBase64) return { ok: false, error: 'No file data' };
+  var file;
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), mime, fileName);
+    file = attachmentsFolder_().createFile(blob);
+  } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
+
+  var res = { ok: true, driveFileId: file.getId(), url: file.getUrl(), fileName: fileName, fields: {} };
+  var r = ocrText_(file.getId());
+  if (!r.ok) { res.warning = r.error; return res; }
+  var text = String(r.text || '');
+  if (text.replace(/\s/g, '').length < 40) { res.warning = 'No readable text found in this file (a low-quality scan?)'; return res; }
+  res.fields = parseContractText_(text);
+  if (!res.fields.number && !res.fields.amount && !res.fields.signDate) res.warning = 'Text was read, but no contract details were recognised';
+  return res;
+}
+
+// Link a file that is already in Drive (uploaded during contract creation) to a record.
+function adminAttachExisting_(d) {
+  requireAdmin_(d);
+  var parentType = attachType_(d.parentType), parentId = trim_(d.parentId);
+  var driveId = trim_(d.driveFileId);
+  if (!parentId || !driveId) return { ok: false, error: 'Missing record or file' };
+  var docType = attachDocType_(d.docType);
+  var row = {
+    AttachmentID: Utilities.getUuid(), ParentType: parentType, ParentID: parentId,
+    FileName: trim_(d.fileName) || 'attachment', Description: trim_(d.description),
+    DocType: docType, DocDate: trim_(d.docDate) || new Date().toISOString().slice(0, 10),
+    IsCurrent: truthy_(d.isCurrent) ? 'yes' : 'no',
+    DriveFileID: driveId, Url: trim_(d.url), CreatedAt: new Date().toISOString()
+  };
+  appendRow_(SHEETS.attachments, row);
+  if (truthy_(row.IsCurrent)) clearCurrentAttachments_(parentType, parentId, docType, row.AttachmentID);
+  return { ok: true, attachment: row };
 }
 
 var DOC_TEXT_FIELDS = ['TemplateType', 'OurRole', 'OurRequisiteID', 'TheirRequisiteID', 'Subject',

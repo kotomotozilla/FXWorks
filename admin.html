@@ -380,10 +380,14 @@
       External contract form (signed PDF from the counterparty / an already-signed paper contract)</label>
     <div id="ext_panel" class="hidden" style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:10px">
       <p class="muted">No document is generated for this contract. Attach the signed file below, then read the details straight from it — recognition runs inside your own Google Drive, the file is not sent anywhere.</p>
-      <div class="row" style="align-items:end">
+      <div id="ext_existing" class="row" style="align-items:end">
         <div style="flex:2"><label>Source document</label><select id="ext_src"></select></div>
         <div style="flex:0 0 auto"><button class="btn sm" id="ext_btn" onclick="extractFromDoc()">Read data from document</button></div>
         <div style="flex:0 0 auto"><button class="btn ghost sm" id="ext_unlock" onclick="extUnlock()" style="display:none">Unlock for editing</button></div>
+      </div>
+      <div id="ext_new" class="row hidden" style="align-items:end">
+        <div style="flex:2"><label>Signed document (PDF or photo)</label><input type="file" id="ext_file" accept="application/pdf,image/*"></div>
+        <div style="flex:0 0 auto"><button class="btn sm" id="ext_upbtn" onclick="extractFromUpload()">Upload &amp; read data</button></div>
       </div>
       <div id="ext_msg"></div>
     </div>
@@ -532,7 +536,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-26.1';
+const BUILD = '2026-07-26.2';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1210,8 +1214,11 @@ function newContract(){
   $('ct_del').style.display = 'none';
   $('ctm_usd').textContent = '';
   $('ctm_sections').classList.add('hidden');
-  $('ctm_ext').classList.add('hidden');
-  $('ct_externalForm').checked=false; CT_EXTRACTED=''; ctLockCore(false);
+  $('ctm_ext').classList.remove('hidden');
+  $('ct_externalForm').checked=false; CT_EXTRACTED=''; PENDING_DOC=null;
+  if($('ext_file')) $('ext_file').value='';
+  notice('ext_msg','','');
+  ctLockCore(false); extFormToggle();
   $('ctModal').classList.remove('hidden');
 }
 async function deleteContractFromCard(){
@@ -1254,6 +1261,11 @@ async function saveContract(){
   try{
     const r = await api(EDIT_CT?'update_contract':'create_contract', payload);
     const savedId = EDIT_CT || (r.contract && r.contract.ContractID);
+    if(savedId && PENDING_DOC){
+      await api('attach_existing',{ parentType:'contract', parentId:savedId, driveFileId:PENDING_DOC.driveFileId,
+        url:PENDING_DOC.url, fileName:PENDING_DOC.fileName, docType:'signed', docDate:$('ct_sign').value, isCurrent:true });
+      PENDING_DOC = null;
+    }
     if(savedId && $('ct_externalForm')){
       const ext = $('ct_externalForm').checked;
       const stamp = (ext && !CT_EXTRACTED && $('ext_msg').textContent.indexOf('Recognised')>=0) ? todayISO() : CT_EXTRACTED;
@@ -1277,12 +1289,41 @@ function ctLockCore(lock){
   $('ct_btn').disabled = lock;
   $('ext_unlock').style.display = lock ? '' : 'none';
 }
+let PENDING_DOC = null;   // file uploaded while creating a contract, linked to it on save
 function extFormToggle(){
-  const on = $('ct_externalForm').checked;
+  const on = $('ct_externalForm').checked, creating = !EDIT_CT;
   $('ext_panel').classList.toggle('hidden', !on);
-  $('ctm_docwrap').classList.toggle('hidden', on);
+  $('ctm_docwrap').classList.toggle('hidden', on || creating);
+  $('ext_existing').classList.toggle('hidden', creating);
+  $('ext_new').classList.toggle('hidden', !creating);
   if(!on) ctLockCore(false);
-  else ctLockCore(!!CT_EXTRACTED);
+  else ctLockCore(!creating && !!CT_EXTRACTED);
+}
+function extFillFields(f){
+  const got=[];
+  if(f.number){ $('ct_number').value=f.number; got.push('number'); }
+  if(f.amount){ $('ct_amount').value=f.amount; got.push('amount'); }
+  if(f.currency){ $('ct_currency').value=f.currency; got.push('currency'); }
+  if(f.signDate){ $('ct_sign').value=f.signDate; got.push('sign date'); }
+  if(f.startDate){ $('ct_start').value=f.startDate; got.push('start date'); }
+  if(f.endDate){ $('ct_end').value=f.endDate; got.push('end date'); }
+  return got;
+}
+async function extractFromUpload(){
+  const file = $('ext_file').files[0];
+  if(!file){ notice('ext_msg','err','Choose a file first.'); return; }
+  if(file.size > 20*1024*1024){ notice('ext_msg','err','File too large (max ~20 MB).'); return; }
+  const b=$('ext_upbtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  notice('ext_msg','info','Uploading and reading the document - this can take up to a minute...');
+  try{
+    const b64 = await fileToBase64(file);
+    const r = await api('extract_upload',{fileName:file.name, mimeType:file.type||'application/octet-stream', dataBase64:b64});
+    PENDING_DOC = { driveFileId:r.driveFileId, url:r.url, fileName:r.fileName };
+    const got = extFillFields(r.fields||{});
+    if(got.length) notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values, then press Create contract - the file will be attached automatically.');
+    else notice('ext_msg','info', esc(r.warning||'Nothing recognised')+'. Fill the fields by hand - the file is uploaded and will be attached on save.');
+  }catch(e){ notice('ext_msg','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Upload & read data'; }
 }
 function extUnlock(){ CT_EXTRACTED=''; ctLockCore(false); notice('ext_msg','info','Fields unlocked — correct them and press Save contract.'); }
 async function extLoadSources(contractId){
@@ -1302,13 +1343,7 @@ async function extractFromDoc(){
   notice('ext_msg','info','Reading the document — this can take up to a minute…');
   try{
     const r = await api('extract_contract',{attachmentId:attId});
-    const f = r.fields||{}; const got=[];
-    if(f.number){ $('ct_number').value=f.number; got.push('number'); }
-    if(f.amount){ $('ct_amount').value=f.amount; got.push('amount'); }
-    if(f.currency){ $('ct_currency').value=f.currency; got.push('currency'); }
-    if(f.signDate){ $('ct_sign').value=f.signDate; got.push('sign date'); }
-    if(f.startDate){ $('ct_start').value=f.startDate; got.push('start date'); }
-    if(f.endDate){ $('ct_end').value=f.endDate; got.push('end date'); }
+    const got = extFillFields(r.fields||{});
     notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values above, correct anything wrong, then press <b>Save contract</b> — after saving the fields are locked.');
   }catch(e){ notice('ext_msg','err', esc(e.message)+' — you can still type the details in by hand.'); }
   finally{ b.disabled=false; b.textContent='Read data from document'; }
