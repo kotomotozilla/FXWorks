@@ -66,7 +66,7 @@
   .ctmain{flex:1 1 520px;min-width:0}
   .ctgrid:not(:has(.ctside:not(.hidden))) .ctmain{flex:1 1 100%}
   .ctside{flex:1 1 460px;min-width:0;display:flex;flex-direction:column;align-self:stretch}
-  .ctside iframe{flex:1 1 auto;width:100%;border:1px solid var(--line);border-radius:10px;min-height:75vh}
+  .ctside object{flex:1 1 auto;width:100%;border:1px solid var(--line);border-radius:10px;min-height:75vh;background:#fff}
   .ctside .pv-head{position:sticky;top:0;background:#fff;z-index:1}
   @media(max-width:980px){ .ctgrid{flex-wrap:wrap} .ctside{position:static;max-height:none;flex:1 1 100%} }
   .modal h2{display:flex;justify-content:space-between;align-items:center;margin-top:0}
@@ -525,7 +525,7 @@
       <span class="acts"><a class="btn ghost sm" id="ext_open" href="#" target="_blank" rel="noopener">Open in Drive</a>
       <button class="btn ghost sm" onclick="togglePreview()">Hide</button></span>
     </div>
-    <iframe id="ext_frame" allow="autoplay"></iframe>
+    <object id="ext_frame" type="application/pdf" data=""></object>
     <p class="muted" style="font-size:11px" id="ext_pvmsg"></p>
   </aside>
   </div>
@@ -567,7 +567,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.17';
+const BUILD = '2026-08-08.18';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1347,7 +1347,18 @@ async function saveContract(){
       await api('save_contract_doc', doc);
     }
     await loadContracts();
-    if(savedId) openContract(savedId, true);
+    if(savedId){
+      openContract(savedId, true);
+      // On creation the Document settings section was still hidden, so its fields were empty.
+      // Once the card is open the recognised values are in place — persist them straight away.
+      if(EXTRACTED_EXTRAS && $('ct_template')){
+        const doc2 = { id:savedId, externalForm:$('ct_externalForm').checked, ourRole:role, templateType:$('ct_template').value };
+        DC_TEXT.forEach(f=>{ const el=$('dc_'+f); if(el) doc2[f]=el.value; });
+        DC_FLAGS.forEach(f=>{ const el=$('dc_'+f); if(el) doc2[f]=el.checked; });
+        await api('save_contract_doc', doc2);
+        await loadContracts();
+      }
+    }
     notice('ctm_err','ok','Contract and document settings saved.');
   }catch(e){ notice('ctm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
@@ -1408,7 +1419,7 @@ async function showPreview(driveFileId){
   wrap.classList.remove('hidden');
   const b=document.querySelector('#ctModal .box'); if(b) b.classList.add('wide');
   $('ext_open').href = 'https://drive.google.com/file/d/'+encodeURIComponent(driveFileId)+'/view';
-  $('ext_frame').removeAttribute('src');
+  $('ext_frame').data = '';
   $('ext_pvmsg').textContent = 'Loading the document…';
   try{
     const r = await api('attachment_data',{driveFileId});
@@ -1417,14 +1428,14 @@ async function showPreview(driveFileId){
     for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
     if(PREVIEW_URL) URL.revokeObjectURL(PREVIEW_URL);
     PREVIEW_URL = URL.createObjectURL(new Blob([arr], {type:r.mimeType||'application/pdf'}));
-    $('ext_frame').src = PREVIEW_URL;
-    $('ext_pvmsg').textContent = r.name || '';
+    $('ext_frame').data = PREVIEW_URL;
+    $('ext_pvmsg').textContent = (r.name||'')+' — scroll inside the panel to see all pages; if it stays blank, use Open in Drive.';
   }catch(e){
     $('ext_pvmsg').innerHTML = esc(e.message)+' — use <b>Open in Drive</b> above.';
   }
 }
 function togglePreview(){
-  $('ext_preview').classList.add('hidden'); $('ext_frame').removeAttribute('src');
+  $('ext_preview').classList.add('hidden'); if($('ext_frame')) $('ext_frame').data='';
   if(PREVIEW_URL){ URL.revokeObjectURL(PREVIEW_URL); PREVIEW_URL=''; }
   const b=document.querySelector('#ctModal .box'); if(b) b.classList.remove('wide');
 }
