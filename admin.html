@@ -571,7 +571,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.10';
+const BUILD = '2026-08-08.11';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1283,7 +1283,6 @@ function newContract(){
   $('ctm_usd').textContent = '';
   $('ctm_sections').classList.add('hidden');
   $('ctm_ext').classList.remove('hidden');
-  EXTRACTED_EXTRAS=null;
   togglePreview();
   $('ct_externalForm').checked=false; PENDING_DOCS=[]; EXTRACTED_EXTRAS=null;
   if($('ext_file')) $('ext_file').value='';
@@ -1378,8 +1377,13 @@ function applyExtrasToDoc(x){
   return filled;
 }
 function applyExtrasNow(){
+  if(!EXTRACTED_EXTRAS || !Object.keys(EXTRACTED_EXTRAS).length){
+    notice('ext_msg','info','Nothing recognised yet — press "Read data from document" first.'); return;
+  }
   const f = applyExtrasToDoc(EXTRACTED_EXTRAS);
-  notice('ext_msg', f.length?'ok':'info', f.length ? ('Applied to Document settings: '+f.join(', ')) : 'Nothing to apply.');
+  notice('ext_msg', f.length?'ok':'err', f.length
+    ? ('Applied to Document settings: '+f.join(', '))
+    : 'Could not write the values — the Document settings section is not open on this contract.');
 }
 function showExtras(x){
   const el=$('ext_extra'); if(!el) return;
@@ -1546,11 +1550,14 @@ async function openContractDoc(c){
   const tpl = c.TemplateType || 'b2b';
   $('dc_templateType').value = tpl;
   const external = String(c.ExternalForm||'').toLowerCase()==='yes';
-  const def = external ? {} : (DC_DEFAULTS[tpl] || {});   // external contracts: no defaults, only what was recognised
+  // External contracts: no default numbers — only what was recognised. Dropdowns still need a value.
+  const SELECT_DEFAULTS = { paymentOption:'postpay', invoiceTrigger:'on_completion', paymentBasis:'hourly', reportFrequency:'on_completion' };
+  const def = external ? SELECT_DEFAULTS : (DC_DEFAULTS[tpl] || {});
   DC_TEXT.forEach(f=>{
     const el = $('dc_'+f); if(!el) return;
     let v = c[DC_KEY(f)];
     if((v===''||v==null) && def[f]!==undefined) v = def[f];
+    if(f==='templateType' && !v) v = tpl;          // a select must never end up blank
     el.value = (v==null?'':v);
   });
   $('dc_ourRole').value = c.OurRole || 'supplier';
@@ -1595,10 +1602,10 @@ function openContract(id, keepOpen){
     : '<span class="muted">USD equivalent not calculated yet.</span>';
   $('ctm_sections').classList.remove('hidden');
   $('ctm_ext').classList.remove('hidden');
-  EXTRACTED_EXTRAS=null;
   togglePreview();
   $('ct_externalForm').checked = String(c.ExternalForm||'').toLowerCase()==='yes';
   extLoadSources(id);
+  if(!EXTRACTED_EXTRAS && $('ext_extra')) $('ext_extra').innerHTML='';
   extFormToggle();
 const s=cur(c.Currency);
   const subs = CONTRACTS.filter(x=>String(x.ParentContractID)===String(id));
@@ -1987,7 +1994,7 @@ async function pdfFromList(aid){
     w.document.open(); w.document.write(html); w.document.close();
   }catch(e){ try{w.close();}catch(_){} alert(e.message); }
 }
-function closeModal(id){ if(id==='ctModal'){ const p=$('ext_preview'); if(p){ p.classList.add('hidden'); $('ext_frame').src=''; } const b=document.querySelector('#ctModal .box'); if(b) b.classList.remove('wide'); } $(id).classList.add('hidden'); }
+function closeModal(id){ if(id==='ctModal'){ EXTRACTED_EXTRAS=null; if($('ext_extra')) $('ext_extra').innerHTML=''; const p=$('ext_preview'); if(p){ p.classList.add('hidden'); $('ext_frame').src=''; } const b=document.querySelector('#ctModal .box'); if(b) b.classList.remove('wide'); } $(id).classList.add('hidden'); }
 
 // ── Data ──
 async function loadData(){
