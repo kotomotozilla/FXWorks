@@ -53,7 +53,7 @@
   .notice{padding:11px 13px;border-radius:10px;font-size:14px;margin:0 0 14px}
   .notice.err{background:#fcefec;color:var(--warn)} .notice.ok{background:#f0faf4;color:var(--pos)}
   .empty{color:var(--muted);padding:24px 0;text-align:center}
-  .hidden{display:none} .scroll{overflow-x:auto} .muted{color:var(--muted);font-size:13px}
+  .hidden{display:none !important} .scroll{overflow-x:auto} .muted{color:var(--muted);font-size:13px}
   .acts{display:flex;gap:6px;flex-wrap:wrap}
   .spin{display:inline-block;width:15px;height:15px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite}
   .spin.dark{border-color:var(--accent);border-top-color:transparent}
@@ -63,6 +63,7 @@
   .modal .box.wide{max-width:1180px}
   .ctgrid{display:flex;gap:18px;align-items:flex-start}
   .ctmain{flex:1 1 520px;min-width:0}
+  .ctgrid:not(:has(.ctside:not(.hidden))) .ctmain{flex:1 1 100%}
   .ctside{flex:1 1 460px;min-width:0;position:sticky;top:0;display:flex;flex-direction:column;max-height:calc(100vh - 90px)}
   .ctside iframe{flex:1;width:100%;border:1px solid var(--line);border-radius:10px;min-height:420px}
   @media(max-width:980px){ .ctgrid{flex-wrap:wrap} .ctside{position:static;max-height:none;flex:1 1 100%} }
@@ -559,7 +560,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.4';
+const BUILD = '2026-08-08.5';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1239,6 +1240,7 @@ function newContract(){
   $('ctm_usd').textContent = '';
   $('ctm_sections').classList.add('hidden');
   $('ctm_ext').classList.remove('hidden');
+  togglePreview();
   $('ct_externalForm').checked=false; PENDING_DOCS=[];
   if($('ext_file')) $('ext_file').value='';
   notice('ext_msg','','');
@@ -1517,6 +1519,7 @@ function openContract(id, keepOpen){
     : '<span class="muted">USD equivalent not calculated yet.</span>';
   $('ctm_sections').classList.remove('hidden');
   $('ctm_ext').classList.remove('hidden');
+  togglePreview();
   $('ct_externalForm').checked = String(c.ExternalForm||'').toLowerCase()==='yes';
   extLoadSources(id);
   extFormToggle();
@@ -1887,7 +1890,7 @@ async function pdfFromList(aid){
     w.document.open(); w.document.write(html); w.document.close();
   }catch(e){ try{w.close();}catch(_){} alert(e.message); }
 }
-function closeModal(id){ $(id).classList.add('hidden'); }
+function closeModal(id){ if(id==='ctModal'){ const p=$('ext_preview'); if(p){ p.classList.add('hidden'); $('ext_frame').src=''; } const b=document.querySelector('#ctModal .box'); if(b) b.classList.remove('wide'); } $(id).classList.add('hidden'); }
 
 // ── Data ──
 async function loadData(){
