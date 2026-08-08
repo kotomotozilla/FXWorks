@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.8';
+const BUILD = '2026-08-08.9';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -507,6 +507,53 @@ function nearNumber_(text, words, maxDist) {
   return best;
 }
 
+
+// ── Recognise the counterparty, the pricing model and the direction ─────────────
+function normName_(t) {
+  return String(t || '').toLowerCase()
+    .replace(/\b(ltd|llc|limited|fzco|fze|llp|inc|gmbh|co|company|sar|hong kong)\b/g, ' ')
+    .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function guessCounterparty_(text) {
+  var t = normName_(text), best = null, bestLen = 0;
+  readAll_(SHEETS.counterparties).forEach(function (c) {
+    var n = normName_(c.Name);
+    if (n.length < 4) return;
+    if (/fraktalex/i.test(c.Name || '')) return;          // that is us, not the counterparty
+    if (t.indexOf(n) >= 0 && n.length > bestLen) { best = c; bestLen = n.length; }
+  });
+  return best;
+}
+function guessPricing_(text) {
+  return /(per\s+hour|hourly\s+rate|per\s+man[- ]hour|\/\s*hour|\bper\s*hr\b)/i.test(text) ? 'hourly' : 'lump';
+}
+function hourlyRate_(text) {
+  var re = /(?:(USD|EUR|AED|SGD)\s*)?([\d][\d ,.]{0,12})\s*(?:(USD|EUR|AED|SGD)\s*)?(?:per\s+hour|\/\s*hour|hourly|per\s*hr)/ig, m, out = null;
+  while ((m = re.exec(text))) {
+    var v = normNum_(m[2]);
+    if (v > 0 && (!out || v > out.amount)) out = { amount: v, currency: (m[1] || m[3] || '').toUpperCase() };
+  }
+  return out;
+}
+// Which side are we? If Fraktalex is named as Supplier/Service Provider we receive money.
+function guessDirection_(text) {
+  var us = /fraktalex/i.exec(text);
+  if (!us) return '';
+  var roles = [
+    { re: /supplier|service provider|contractor|consultant/ig, dir: 'incoming' },
+    { re: /customer|client|purchaser/ig, dir: 'outgoing' }
+  ];
+  var best = null, bestDist = 400, m;
+  roles.forEach(function (r) {
+    r.re.lastIndex = 0;
+    while ((m = r.re.exec(text))) {
+      var d = Math.abs(m.index - us.index);
+      if (d < bestDist) { bestDist = d; best = r.dir; }
+    }
+  });
+  return best || '';
+}
+
 function parseContractText_(text) {
   var f = {};
   var num = text.match(/(?:agreement|contract)\s*(?:no\.?|number|#|\u2116)\s*([A-Za-z0-9\/\-\._]{3,40})/i);
@@ -519,6 +566,16 @@ function parseContractText_(text) {
     if (v > amount) { amount = v; cur = c; }
   }
   if (amount) { f.amount = amount; f.currency = cur; }
+
+  f.pricingType = guessPricing_(text);
+  if (f.pricingType === 'hourly') {
+    var hr = hourlyRate_(text);
+    if (hr) { f.amount = hr.amount; if (hr.currency) f.currency = hr.currency; }
+  }
+  var dir = guessDirection_(text);
+  if (dir) f.direction = dir;
+  var cp = guessCounterparty_(text);
+  if (cp) { f.counterpartyId = cp.CounterpartyID; f.counterpartyName = cp.Name; }
 
   var dates = parseDates_(text);
   if (dates.length) {

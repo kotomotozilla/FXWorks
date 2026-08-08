@@ -570,7 +570,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.8';
+const BUILD = '2026-08-08.9';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1359,32 +1359,10 @@ function extFormToggle(){
   $('ext_existing').classList.toggle('hidden', creating);
   $('ext_new').classList.toggle('hidden', !creating);
 }
-function matchCounterparty(extras){
-  if(!extras || !extras.parties) return false;
-  const names = String(extras.parties).split('|').map(x=>x.trim().toLowerCase()).filter(Boolean);
-  const norm = t => String(t||'').toLowerCase().replace(/\b(ltd|llc|limited|fzco|fze|llp|inc|gmbh|sar|hong kong)\b/g,'').replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim();
-  for(const n of names){
-    const cand = COUNTERPARTIES.find(c=>{
-      const cn = norm(c.Name); const pn = norm(n);
-      return cn && pn && (cn===pn || pn.includes(cn) || cn.includes(pn));
-    });
-    if(cand && !/fraktalex/i.test(cand.Name||'')){
-      $('ct_cp').innerHTML = ctCpOptions(cand.CounterpartyID);
-      return cand.Name;
-    }
-  }
-  return false;
-}
-function extFillFields(f){
-  const got=[];
-  if(f.number){ $('ct_number').value=f.number; got.push('number'); }
-  if(f.amount){ $('ct_amount').value=f.amount; got.push('amount'); }
-  if(f.currency){ $('ct_currency').value=f.currency; got.push('currency'); }
-  if(f.signDate){ $('ct_sign').value=f.signDate; got.push('sign date'); }
-  if(f.startDate){ $('ct_start').value=f.startDate; got.push('start date'); }
-  if(f.endDate){ $('ct_end').value=f.endDate; got.push('end date'); }
-  return got;
-}
+const EXTRA_LABEL = { paymentDays:'Payment days', acceptanceDays:'Acceptance days', remarksDays:'Days for remarks',
+  noticeDays:'Notice days', warrantyPeriod:'Warranty period', governingLaw:'Governing law',
+  jurisdictionPlace:'Place of jurisdiction', arbitrationBody:'Arbitration body',
+  percentagesFound:'Percentages found', parties:'Parties named in the text' };
 const EXTRA_TO_DC = { paymentDays:'dc_paymentDays', acceptanceDays:'dc_acceptanceDays', remarksDays:'dc_remarksDays',
   noticeDays:'dc_noticeDays', warrantyPeriod:'dc_warrantyPeriod', governingLaw:'dc_governingLaw',
   jurisdictionPlace:'dc_jurisdictionPlace', arbitrationBody:'dc_arbitrationBody' };
@@ -1398,17 +1376,18 @@ function applyExtrasToDoc(x){
   if(x.warrantyPeriod && $('dc_optWarranty')) $('dc_optWarranty').checked = true;
   return filled;
 }
-const EXTRA_LABEL = { paymentDays:'Payment days', acceptanceDays:'Acceptance days', remarksDays:'Days for remarks',
-  noticeDays:'Notice days', warrantyPeriod:'Warranty period', governingLaw:'Governing law',
-  jurisdictionPlace:'Place of jurisdiction', arbitrationBody:'Arbitration body',
-  percentagesFound:'Percentages found', parties:'Parties named in the text' };
+function applyExtrasNow(){
+  const f = applyExtrasToDoc(EXTRACTED_EXTRAS);
+  notice('ext_msg', f.length?'ok':'info', f.length ? ('Applied to Document settings: '+f.join(', ')) : 'Nothing to apply.');
+}
 function showExtras(x){
   const el=$('ext_extra'); if(!el) return;
   const keys = Object.keys(x||{});
   if(!keys.length){ el.innerHTML=''; return; }
   el.innerHTML = '<div style="margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:10px">'+
-    '<b style="font-size:13px">Also found in the document</b>'+
-    '<p class="muted" style="font-size:11px;margin:4px 0 8px">For reference only — nothing is saved automatically. Copy anything useful into Document settings.</p>'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b style="font-size:13px">Also found in the document</b>'+
+    '<button class="btn ghost sm" onclick="applyExtrasNow()">Apply to Document settings</button></div>'+
+    '<p class="muted" style="font-size:11px;margin:4px 0 8px">Values are put into Document settings automatically; use the button to apply them again after editing.</p>'+
     keys.map(k=>`<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0">
         <span class="muted">${esc(EXTRA_LABEL[k]||k)}</span><span style="text-align:right">${esc(String(x[k]))}</span></div>`).join('')+
     '</div>';
@@ -1417,11 +1396,11 @@ function showPreview(driveFileId){
   if(!driveFileId){ notice('ext_msg','err','No file to preview.'); return; }
   $('ext_frame').src = 'https://drive.google.com/file/d/'+encodeURIComponent(driveFileId)+'/preview';
   $('ext_preview').classList.remove('hidden');
-  document.querySelector('#ctModal .box').classList.add('wide');
+  const b=document.querySelector('#ctModal .box'); if(b) b.classList.add('wide');
 }
 function togglePreview(){
   $('ext_preview').classList.add('hidden'); $('ext_frame').src='';
-  document.querySelector('#ctModal .box').classList.remove('wide');
+  const b=document.querySelector('#ctModal .box'); if(b) b.classList.remove('wide');
 }
 async function previewSelected(){
   const ids = Array.from($('ext_src').selectedOptions).map(o=>o.value).filter(Boolean);
@@ -1450,11 +1429,10 @@ async function extractFromDoc(){
     const got = extFillFields(r.fields||{});
     EXTRACTED_EXTRAS = r.extras||{};
     showExtras(EXTRACTED_EXTRAS);
-    const matched = matchCounterparty(EXTRACTED_EXTRAS);
     const dcFilled = applyExtrasToDoc(EXTRACTED_EXTRAS);
     previewSelected();
     const notes = (r.notes||[]).map(n=>esc(n)).join('<br>');
-    notice('ext_msg','ok','Recognised: '+got.join(', ')+(dcFilled.length?'; document settings filled: '+dcFilled.join(', '):'')+(matched?'; counterparty matched: '+esc(matched):'')+'. Check everything, then press <b>Save contract</b> and <b>Save document settings</b>. Anything not recognised is left empty.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
+    notice('ext_msg','ok','Recognised: '+got.join(', ')+(dcFilled.length?'; document settings filled: '+dcFilled.join(', '):'')+'. Check everything, then press <b>Save contract</b> and <b>Save document settings</b>. Anything not recognised is left empty.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
   }catch(e){ notice('ext_msg','err', esc(e.message)+' — you can still type the details in by hand.'); }
   finally{ b.disabled=false; b.textContent='Read data from document'; }
 }
@@ -1463,9 +1441,23 @@ function mergeFieldsClient(parts){
   const annex = parts.filter(p=>p.docType==='annex' || p.docType==='amendment').map(p=>p.fields||{});
   const pick=(list,k)=>{ for(const f of list){ if(f[k]!==undefined && f[k]!=='' && f[k]!==null) return f[k]; } };
   const out={};
-  ['number','signDate','startDate'].forEach(k=>{ const v = pick(main,k) ?? pick(annex,k); if(v!==undefined) out[k]=v; });
+  ['number','signDate','startDate','pricingType','direction','counterpartyId','counterpartyName'].forEach(k=>{ const v = pick(main,k) ?? pick(annex,k); if(v!==undefined) out[k]=v; });
   ['amount','currency','endDate'].forEach(k=>{ const v = pick(annex,k) ?? pick(main,k); if(v!==undefined) out[k]=v; });
   return out;
+}
+
+function extFillFields(f){
+  const got=[];
+  if(f.number){ $('ct_number').value=f.number; got.push('number'); }
+  if(f.amount){ $('ct_amount').value=f.amount; got.push(f.pricingType==='hourly'?'hourly rate':'amount'); }
+  if(f.currency){ $('ct_currency').value=f.currency; got.push('currency'); }
+  if(f.pricingType){ $('ct_pricing').value=f.pricingType; got.push('pricing ('+(f.pricingType==='hourly'?'hourly':'lump sum')+')'); }
+  if(f.direction){ $('ct_dir').value=f.direction; got.push('direction ('+(f.direction==='outgoing'?'we pay':'we receive')+')'); }
+  if(f.counterpartyId){ $('ct_cp').innerHTML = ctCpOptions(f.counterpartyId); got.push('counterparty'+(f.counterpartyName?' ('+f.counterpartyName+')':'')); }
+  if(f.signDate){ $('ct_sign').value=f.signDate; got.push('sign date'); }
+  if(f.startDate){ $('ct_start').value=f.startDate; got.push('start date'); }
+  if(f.endDate){ $('ct_end').value=f.endDate; got.push('end date'); }
+  return got;
 }
 async function extractFromUpload(){
   const files = Array.from($('ext_file').files||[]);
@@ -1483,7 +1475,7 @@ async function extractFromUpload(){
       const r = await api('extract_upload',{fileName:f.name, mimeType:f.type||'application/octet-stream', dataBase64:b64, docType});
       PENDING_DOCS.push({ driveFileId:r.driveFileId, url:r.url, fileName:r.fileName, docType });
       parts.push({ docType, fields:r.fields||{} });
-      if(i===0){ EXTRACTED_EXTRAS = r.extras||{}; showExtras(EXTRACTED_EXTRAS); matchCounterparty(EXTRACTED_EXTRAS); showPreview(r.driveFileId); }
+      if(i===0){ EXTRACTED_EXTRAS = r.extras||{}; showExtras(EXTRACTED_EXTRAS); showPreview(r.driveFileId); }
       notes.push(f.name+' → '+(Object.keys(r.fields||{}).length?Object.keys(r.fields).join(', '):(r.warning||'nothing recognised')));
     }
     const got = extFillFields(mergeFieldsClient(parts));
