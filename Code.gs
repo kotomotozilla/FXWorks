@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.9';
+const BUILD = '2026-08-08.10';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -537,6 +537,8 @@ function hourlyRate_(text) {
 }
 // Which side are we? If Fraktalex is named as Supplier/Service Provider we receive money.
 function guessDirection_(text) {
+  // An Independent Contractor Agreement always means we pay the contractor.
+  if (/independent\s+contractor\s+agreement/i.test(text)) return 'outgoing';
   var us = /fraktalex/i.exec(text);
   if (!us) return '';
   var roles = [
@@ -572,6 +574,7 @@ function parseContractText_(text) {
     var hr = hourlyRate_(text);
     if (hr) { f.amount = hr.amount; if (hr.currency) f.currency = hr.currency; }
   }
+  if (/independent\s+contractor\s+agreement/i.test(text)) f.templateType = 'ica';
   var dir = guessDirection_(text);
   if (dir) f.direction = dir;
   var cp = guessCounterparty_(text);
@@ -618,6 +621,28 @@ function parseContractExtras_(text) {
   if (parties.length) x.parties = parties.slice(0, 3).join(' | ');
 
   return x;
+}
+
+// Merge fields recognised in several documents of one contract.
+// The main (signed) document wins for the number, dates and roles;
+// an annex / SOW wins for the price, because that is where it normally lives.
+function mergeContractFields_(parts) {
+  var main = [], annex = [];
+  parts.forEach(function (p) { (p.docType === 'annex' || p.docType === 'amendment' ? annex : main).push(p.fields || {}); });
+  function pick(list, key) {
+    for (var i = 0; i < list.length; i++) if (list[i][key] !== undefined && list[i][key] !== '' && list[i][key] !== null) return list[i][key];
+    return undefined;
+  }
+  var out = {};
+  ['number', 'signDate', 'startDate', 'pricingType', 'direction', 'counterpartyId', 'counterpartyName', 'templateType'].forEach(function (k) {
+    var v = pick(main, k); if (v === undefined) v = pick(annex, k);
+    if (v !== undefined) out[k] = v;
+  });
+  ['amount', 'currency', 'endDate'].forEach(function (k) {
+    var v = pick(annex, k); if (v === undefined) v = pick(main, k);
+    if (v !== undefined) out[k] = v;
+  });
+  return out;
 }
 
 function adminExtractContract_(d) {

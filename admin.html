@@ -62,11 +62,12 @@
   .modal{position:fixed;inset:0;background:rgba(20,30,40,.4);display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;z-index:10;overflow:auto}
   .modal .box{background:#fff;border-radius:16px;max-width:680px;width:100%;margin:auto;padding:22px}
   .modal .box.wide{max-width:1180px}
-  .ctgrid{display:flex;gap:18px;align-items:flex-start}
+  .ctgrid{display:flex;gap:18px;align-items:stretch}
   .ctmain{flex:1 1 520px;min-width:0}
   .ctgrid:not(:has(.ctside:not(.hidden))) .ctmain{flex:1 1 100%}
-  .ctside{flex:1 1 460px;min-width:0;position:sticky;top:0;display:flex;flex-direction:column;max-height:calc(100vh - 90px)}
-  .ctside iframe{flex:1;width:100%;border:1px solid var(--line);border-radius:10px;min-height:420px}
+  .ctside{flex:1 1 460px;min-width:0;display:flex;flex-direction:column;align-self:stretch}
+  .ctside iframe{flex:1 1 auto;width:100%;border:1px solid var(--line);border-radius:10px;min-height:75vh}
+  .ctside .pv-head{position:sticky;top:0;background:#fff;z-index:1}
   @media(max-width:980px){ .ctgrid{flex-wrap:wrap} .ctside{position:static;max-height:none;flex:1 1 100%} }
   .modal h2{display:flex;justify-content:space-between;align-items:center;margin-top:0}
   .x{background:none;border:0;font-size:22px;cursor:pointer;color:var(--muted);line-height:1}
@@ -524,7 +525,7 @@
   </div>
   </div>
   <aside class="ctside hidden" id="ext_preview">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+    <div class="pv-head" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;padding-bottom:4px">
       <b style="font-size:13px">Document preview</b>
       <button class="btn ghost sm" onclick="togglePreview()">Hide</button>
     </div>
@@ -570,7 +571,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.9';
+const BUILD = '2026-08-08.10';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1452,6 +1453,7 @@ function extFillFields(f){
   if(f.amount){ $('ct_amount').value=f.amount; got.push(f.pricingType==='hourly'?'hourly rate':'amount'); }
   if(f.currency){ $('ct_currency').value=f.currency; got.push('currency'); }
   if(f.pricingType){ $('ct_pricing').value=f.pricingType; got.push('pricing ('+(f.pricingType==='hourly'?'hourly':'lump sum')+')'); }
+  if(f.templateType && $('dc_templateType')){ $('dc_templateType').value=f.templateType; dcTemplateChange(); got.push('template ('+f.templateType.toUpperCase()+')'); }
   if(f.direction){ $('ct_dir').value=f.direction; got.push('direction ('+(f.direction==='outgoing'?'we pay':'we receive')+')'); }
   if(f.counterpartyId){ $('ct_cp').innerHTML = ctCpOptions(f.counterpartyId); got.push('counterparty'+(f.counterpartyName?' ('+f.counterpartyName+')':'')); }
   if(f.signDate){ $('ct_sign').value=f.signDate; got.push('sign date'); }
