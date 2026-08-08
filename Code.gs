@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.2';
+const BUILD = '2026-08-08.4';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -488,6 +488,23 @@ function nearestDate_(dates, text, words) {
   });
   return best;
 }
+function nearNumber_(text, words, maxDist) {
+  var best = null, bestDist = maxDist || 250;
+  var re = /(?:within|not exceed|exceed|of)\s+(?:[a-z\- ]+\()?(\d{1,3})\)?\s*(?:calendar |business |working )?days?/ig, m;
+  var hits = [];
+  while ((m = re.exec(text))) hits.push({ v: m[1], at: m.index });
+  words.forEach(function (w) {
+    var rw = new RegExp(w, 'ig'), k;
+    while ((k = rw.exec(text))) {
+      hits.forEach(function (h) {
+        var d = Math.abs(h.at - k.index);
+        if (d < bestDist) { bestDist = d; best = h.v; }
+      });
+    }
+  });
+  return best;
+}
+
 function parseContractText_(text) {
   var f = {};
   var num = text.match(/(?:agreement|contract)\s*(?:no\.?|number|#|\u2116)\s*([A-Za-z0-9\/\-\._]{3,40})/i);
@@ -509,26 +526,39 @@ function parseContractText_(text) {
   }
   return f;
 }
-// Merge fields recognised in several documents of one contract.
-// The main (signed) document wins for the number and the dates;
-// an annex / SOW wins for the price, because that is where it normally lives.
-function mergeContractFields_(parts) {
-  var main = [], annex = [];
-  parts.forEach(function (p) { (p.docType === 'annex' || p.docType === 'amendment' ? annex : main).push(p.fields || {}); });
-  function pick(list, key) {
-    for (var i = 0; i < list.length; i++) if (list[i][key] !== undefined && list[i][key] !== '' && list[i][key] !== null) return list[i][key];
-    return undefined;
-  }
-  var out = {};
-  ['number', 'signDate', 'startDate'].forEach(function (k) {
-    var v = pick(main, k); if (v === undefined) v = pick(annex, k);
-    if (v !== undefined) out[k] = v;
-  });
-  ['amount', 'currency', 'endDate'].forEach(function (k) {
-    var v = pick(annex, k); if (v === undefined) v = pick(main, k);
-    if (v !== undefined) out[k] = v;
-  });
-  return out;
+
+// Extra terms recognised in the text — shown to the admin for reference, never written automatically.
+function parseContractExtras_(text) {
+  var x = {};
+  var v;
+  v = nearNumber_(text, ['payment', 'shall be paid', 'paid within', 'due']);              if (v) x.paymentDays = v;
+  v = nearNumber_(text, ['acceptance procedure', 'deemed accepted', 'acceptance']);        if (v) x.acceptanceDays = v;
+  v = nearNumber_(text, ['remarks', 'comments']);                                          if (v) x.remarksDays = v;
+  v = nearNumber_(text, ['notice', 'terminate', 'termination']);                           if (v) x.noticeDays = v;
+
+  var w = text.match(/warranty[^.]{0,60}?((?:\d+(?:[.,]\d+)?)\s*(?:\([^)]{0,40}\)\s*)?(?:months?|years?|weeks?))/i);
+  if (w) x.warrantyPeriod = w[1].replace(/\s+/g, ' ').trim();
+
+  var law = text.match(/law(?:s)?\s+(?:in force\s+)?(?:of|in)\s+([A-Z][A-Za-z .\-]{2,40}?)(?:\s*,|\s+without|\s+and|\.|\n)/);
+  if (law) x.governingLaw = law[1].trim();
+
+  var jur = text.match(/([A-Z][A-Za-z .\-]{2,40}?)\s+shall be the place of jurisdiction/);
+  if (jur) x.jurisdictionPlace = jur[1].trim();
+
+  var arb = text.match(/(arbitration[^.]{0,120}?(?:Centre|Center|Institute|Chamber|Court)[A-Za-z ()]*)/i);
+  if (arb) x.arbitrationBody = arb[1].replace(/\s+/g, ' ').trim();
+
+  var pen = [];
+  var rp = /(\d+(?:[.,]\d+)?)\s*(?:%|per cent)/gi, pm;
+  while ((pm = rp.exec(text))) { if (pen.indexOf(pm[1]) < 0) pen.push(pm[1]); }
+  if (pen.length) x.percentagesFound = pen.slice(0, 6).join(', ') + ' %';
+
+  var parties = [];
+  var rpa = /([A-Z][A-Za-z0-9 .,&\-]{3,60}?)\s*[-\u2013]?\s*(?:hereafter|hereinafter)\s+referred to as/g, pa;
+  while ((pa = rpa.exec(text))) { var nm = pa[1].trim(); if (nm.length > 3 && parties.indexOf(nm) < 0) parties.push(nm); }
+  if (parties.length) x.parties = parties.slice(0, 3).join(' | ');
+
+  return x;
 }
 
 function adminExtractContract_(d) {
@@ -548,13 +578,15 @@ function adminExtractContract_(d) {
     var text = String(r.text || '');
     if (text.replace(/\s/g, '').length < 40) { notes.push(a.FileName + ': no readable text'); continue; }
     var f = parseContractText_(text);
-    parts.push({ docType: trim_(a.DocType), fileName: a.FileName, fields: f });
+    parts.push({ docType: trim_(a.DocType), fileName: a.FileName, fields: f, extras: parseContractExtras_(text) });
     notes.push(a.FileName + ': ' + (Object.keys(f).length ? Object.keys(f).join(', ') : 'nothing recognised'));
   }
   if (!parts.length) return { ok: false, error: notes.join('; ') || 'Nothing could be read' };
+  var extras = {};
+  parts.forEach(function (p) { for (var k in (p.extras || {})) if (extras[k] === undefined) extras[k] = p.extras[k]; });
   var merged = mergeContractFields_(parts);
   if (!merged.number && !merged.amount && !merged.signDate) return { ok: false, error: 'Text was read, but no contract details were recognised' };
-  return { ok: true, fields: merged, notes: notes };
+  return { ok: true, fields: merged, extras: extras, notes: notes };
 }
 
 // Upload a file straight into Drive and OCR it before the contract record exists.
@@ -576,6 +608,7 @@ function adminExtractUpload_(d) {
   var text = String(r.text || '');
   if (text.replace(/\s/g, '').length < 40) { res.warning = 'No readable text found in this file (a low-quality scan?)'; return res; }
   res.fields = parseContractText_(text);
+  res.extras = parseContractExtras_(text);
   if (!res.fields.number && !res.fields.amount && !res.fields.signDate) res.warning = 'Text was read, but no contract details were recognised';
   return res;
 }

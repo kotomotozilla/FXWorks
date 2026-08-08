@@ -60,6 +60,12 @@
   @keyframes sp{to{transform:rotate(360deg)}}
   .modal{position:fixed;inset:0;background:rgba(20,30,40,.4);display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;z-index:10;overflow:auto}
   .modal .box{background:#fff;border-radius:16px;max-width:680px;width:100%;margin:auto;padding:22px}
+  .modal .box.wide{max-width:1180px}
+  .ctgrid{display:flex;gap:18px;align-items:flex-start}
+  .ctmain{flex:1 1 520px;min-width:0}
+  .ctside{flex:1 1 460px;min-width:0;position:sticky;top:0;display:flex;flex-direction:column;max-height:calc(100vh - 90px)}
+  .ctside iframe{flex:1;width:100%;border:1px solid var(--line);border-radius:10px;min-height:420px}
+  @media(max-width:980px){ .ctgrid{flex-wrap:wrap} .ctside{position:static;max-height:none;flex:1 1 100%} }
   .modal h2{display:flex;justify-content:space-between;align-items:center;margin-top:0}
   .x{background:none;border:0;font-size:22px;cursor:pointer;color:var(--muted);line-height:1}
   .modal.hidden{display:none}
@@ -345,6 +351,7 @@
 
 <div id="ctModal" class="modal hidden"><div class="box">
   <h2><span id="ctm_title">Contract</span><button class="x" onclick="closeModal('ctModal')">×</button></h2>
+  <div class="ctgrid"><div class="ctmain">
   <div id="ctm_err"></div>
   <div class="row">
     <div><label>Number</label><input id="ct_number" placeholder="auto: agr/YYYY/MM/DD-N"></div>
@@ -383,13 +390,15 @@
       <div id="ext_existing" class="row" style="align-items:end">
         <div style="flex:2"><label>Source documents (Ctrl/Cmd-click to select several — e.g. the agreement and its SOW)</label><select id="ext_src" multiple size="4"></select></div>
         <div style="flex:0 0 auto"><button class="btn sm" id="ext_btn" onclick="extractFromDoc()">Read data from document</button></div>
-        <div style="flex:0 0 auto"><button class="btn ghost sm" id="ext_unlock" onclick="extUnlock()" style="display:none">Unlock for editing</button></div>
+        <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="previewSelected()">Preview</button></div>
+        
       </div>
       <div id="ext_new" class="row hidden" style="align-items:end">
         <div style="flex:2"><label>Signed documents (PDF or photo — you can pick several: agreement, SOW, annexes)</label><input type="file" id="ext_file" accept="application/pdf,image/*" multiple></div>
         <div style="flex:0 0 auto"><button class="btn sm" id="ext_upbtn" onclick="extractFromUpload()">Upload &amp; read data</button></div>
       </div>
       <div id="ext_msg"></div>
+      <div id="ext_extra"></div>
     </div>
   </div>
   <div id="ctm_sections">
@@ -502,6 +511,16 @@
   <button class="btn sm" id="dc_save" onclick="saveContractDoc()">Save document settings</button>
   </div>
   </div>
+  </div>
+  <aside class="ctside hidden" id="ext_preview">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+      <b style="font-size:13px">Document preview</b>
+      <button class="btn ghost sm" onclick="togglePreview()">Hide</button>
+    </div>
+    <iframe id="ext_frame" allow="autoplay"></iframe>
+    <p class="muted" style="font-size:11px">Opens from your Google Drive — visible only to you. Scrolls independently of the form.</p>
+  </aside>
+  </div>
 </div></div>
 
 <div id="repModal" class="modal hidden"><div class="box">
@@ -540,7 +559,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.2';
+const BUILD = '2026-08-08.4';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1211,6 +1230,7 @@ function ctFillForm(c){
 }
 function newContract(){
   EDIT_CT = '';
+  togglePreview();
   $('ctm_title').textContent = 'New contract';
   ctFillForm(null);
   $('ct_btn').textContent = 'Create contract';
@@ -1219,10 +1239,10 @@ function newContract(){
   $('ctm_usd').textContent = '';
   $('ctm_sections').classList.add('hidden');
   $('ctm_ext').classList.remove('hidden');
-  $('ct_externalForm').checked=false; CT_EXTRACTED=''; PENDING_DOCS=[];
+  $('ct_externalForm').checked=false; PENDING_DOCS=[];
   if($('ext_file')) $('ext_file').value='';
   notice('ext_msg','','');
-  ctLockCore(false); extFormToggle();
+  extFormToggle();
   $('ctModal').classList.remove('hidden');
 }
 async function deleteContractFromCard(){
@@ -1274,8 +1294,7 @@ async function saveContract(){
     }
     if(savedId && $('ct_externalForm')){
       const ext = $('ct_externalForm').checked;
-      const stamp = (ext && !CT_EXTRACTED && $('ext_msg').textContent.indexOf('Recognised')>=0) ? todayISO() : CT_EXTRACTED;
-      await api('save_contract_doc',{ id:savedId, externalForm:ext, extractedAt:stamp||'' });
+      await api('save_contract_doc',{ id:savedId, externalForm:ext });
     }
     await loadContracts();
     const id = EDIT_CT || (r.contract && r.contract.ContractID);
@@ -1285,25 +1304,13 @@ async function saveContract(){
   finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
 }
 // ── External contract form + OCR extraction ──
-const CT_CORE_FIELDS = ['ct_number','ct_cp','ct_dir','ct_sign','ct_start','ct_end','ct_amount','ct_currency','ct_parent','ct_desc'];
-let CT_EXTRACTED = '';
-function ctLockCore(lock){
-  CT_CORE_FIELDS.forEach(id=>{ const el=$(id); if(!el) return;
-    if(el.tagName==='SELECT') el.disabled = lock; else el.readOnly = lock;
-    el.style.background = lock ? '#F6F8FA' : '';
-  });
-  $('ct_btn').disabled = lock;
-  $('ext_unlock').style.display = lock ? '' : 'none';
-}
-let PENDING_DOCS = [];   // files uploaded while creating a contract, linked to it on save
+// Fields always stay editable — recognition can be wrong, so the admin must be able to correct it.
 function extFormToggle(){
   const on = $('ct_externalForm').checked, creating = !EDIT_CT;
   $('ext_panel').classList.toggle('hidden', !on);
   $('ctm_docwrap').classList.toggle('hidden', on || creating);
   $('ext_existing').classList.toggle('hidden', creating);
   $('ext_new').classList.toggle('hidden', !creating);
-  if(!on) ctLockCore(false);
-  else ctLockCore(!creating && !!CT_EXTRACTED);
 }
 function extFillFields(f){
   const got=[];
@@ -1315,7 +1322,38 @@ function extFillFields(f){
   if(f.endDate){ $('ct_end').value=f.endDate; got.push('end date'); }
   return got;
 }
-function extUnlock(){ CT_EXTRACTED=''; ctLockCore(false); notice('ext_msg','info','Fields unlocked — correct them and press Save contract.'); }
+const EXTRA_LABEL = { paymentDays:'Payment days', acceptanceDays:'Acceptance days', remarksDays:'Days for remarks',
+  noticeDays:'Notice days', warrantyPeriod:'Warranty period', governingLaw:'Governing law',
+  jurisdictionPlace:'Place of jurisdiction', arbitrationBody:'Arbitration body',
+  percentagesFound:'Percentages found', parties:'Parties named in the text' };
+function showExtras(x){
+  const el=$('ext_extra'); if(!el) return;
+  const keys = Object.keys(x||{});
+  if(!keys.length){ el.innerHTML=''; return; }
+  el.innerHTML = '<div style="margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:10px">'+
+    '<b style="font-size:13px">Also found in the document</b>'+
+    '<p class="muted" style="font-size:11px;margin:4px 0 8px">For reference only — nothing is saved automatically. Copy anything useful into Document settings.</p>'+
+    keys.map(k=>`<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0">
+        <span class="muted">${esc(EXTRA_LABEL[k]||k)}</span><span style="text-align:right">${esc(String(x[k]))}</span></div>`).join('')+
+    '</div>';
+}
+function showPreview(driveFileId){
+  if(!driveFileId){ notice('ext_msg','err','No file to preview.'); return; }
+  $('ext_frame').src = 'https://drive.google.com/file/d/'+encodeURIComponent(driveFileId)+'/preview';
+  $('ext_preview').classList.remove('hidden');
+  document.querySelector('#ctModal .box').classList.add('wide');
+}
+function togglePreview(){
+  $('ext_preview').classList.add('hidden'); $('ext_frame').src='';
+  document.querySelector('#ctModal .box').classList.remove('wide');
+}
+async function previewSelected(){
+  const ids = Array.from($('ext_src').selectedOptions).map(o=>o.value).filter(Boolean);
+  if(!ids.length){ notice('ext_msg','err','Select a document to preview.'); return; }
+  const r = await api('list_attachments',{parentType:'contract', parentId:EDIT_CT});
+  const a = (r.attachments||[]).find(x=>String(x.AttachmentID)===String(ids[0]));
+  showPreview(a && a.DriveFileID);
+}
 async function extLoadSources(contractId){
   const sel = $('ext_src');
   try{
@@ -1334,8 +1372,10 @@ async function extractFromDoc(){
   try{
     const r = await api('extract_contract',{attachmentIds:ids});
     const got = extFillFields(r.fields||{});
+    showExtras(r.extras||{});
+    previewSelected();
     const notes = (r.notes||[]).map(n=>esc(n)).join('<br>');
-    notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values above, correct anything wrong, then press <b>Save contract</b> — after saving the fields are locked.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
+    notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values above, correct anything wrong, then press <b>Save contract</b>. You can correct any field at any time.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
   }catch(e){ notice('ext_msg','err', esc(e.message)+' — you can still type the details in by hand.'); }
   finally{ b.disabled=false; b.textContent='Read data from document'; }
 }
@@ -1364,6 +1404,7 @@ async function extractFromUpload(){
       const r = await api('extract_upload',{fileName:f.name, mimeType:f.type||'application/octet-stream', dataBase64:b64, docType});
       PENDING_DOCS.push({ driveFileId:r.driveFileId, url:r.url, fileName:r.fileName, docType });
       parts.push({ docType, fields:r.fields||{} });
+      if(i===0){ showExtras(r.extras||{}); showPreview(r.driveFileId); }
       notes.push(f.name+' → '+(Object.keys(r.fields||{}).length?Object.keys(r.fields).join(', '):(r.warning||'nothing recognised')));
     }
     const got = extFillFields(mergeFieldsClient(parts));
@@ -1477,7 +1518,6 @@ function openContract(id, keepOpen){
   $('ctm_sections').classList.remove('hidden');
   $('ctm_ext').classList.remove('hidden');
   $('ct_externalForm').checked = String(c.ExternalForm||'').toLowerCase()==='yes';
-  CT_EXTRACTED = c.ExtractedAt||'';
   extLoadSources(id);
   extFormToggle();
 const s=cur(c.Currency);
