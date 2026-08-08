@@ -366,8 +366,8 @@
   <div class="row">
     <div><label>Number</label><input id="ct_number" placeholder="auto: agr/YYYY/MM/DD-N"></div>
     <div style="flex:2"><label>Counterparty</label><select id="ct_cp"></select></div>
-    <div style="max-width:210px"><label>Direction</label>
-      <select id="ct_dir"><option value="incoming">Incoming (we receive)</option><option value="outgoing">Outgoing (we pay)</option></select></div>
+    <div style="max-width:230px"><label>Our role</label>
+      <select id="ct_role"><option value="supplier">Fraktalex is Supplier (we receive)</option><option value="customer">Fraktalex is Customer (we pay)</option></select></div>
   </div>
   <div style="height:8px"></div>
   <div class="row">
@@ -427,8 +427,7 @@
         <option value="b2b">B2B agreement (legal entity)</option>
         <option value="ica">Independent Contractor Agreement</option>
       </select></div>
-    <div><label>Our role</label>
-      <select id="dc_ourRole"><option value="supplier">Fraktalex is Supplier</option><option value="customer">Fraktalex is Customer</option></select></div>
+
   </div>
   <div style="height:8px"></div>
   <div class="row">
@@ -470,12 +469,15 @@
       <div><label>Rate</label><input id="dc_rateAmount" type="number" min="0" step="0.01"></div>
       <div><label>Rate basis</label><input id="dc_rateBasis" placeholder="per hour"></div>
       <div><label>Term (years)</label><input id="dc_termYears" type="number" min="0"></div>
-      <div><label>Notice days</label><input id="dc_noticeDays" type="number" min="0"></div>
     </div>
     <div style="height:8px"></div>
     <div class="row">
+      <div><label>Notice days</label><input id="dc_noticeDays" type="number" min="0"></div>
       <div><label>Dispute days</label><input id="dc_disputeDays" type="number" min="0"></div>
-      <div><label>Evaluation days</label><input id="dc_evaluationDays" type="number" min="0"></div>
+      <div><label>Acceptance / evaluation days</label><input id="dc_evaluationDays" type="number" min="0"></div>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
       <div style="flex:2"><label>Restricted territories</label><input id="dc_restrictedTerritories"></div>
     </div>
   </div>
@@ -519,8 +521,7 @@
     <div><label>Warranty period</label><input id="dc_warrantyPeriod" placeholder="1.5 (one and a half) months"></div>
     <div><label>Insurance amount</label><input id="dc_insuranceAmount" type="number" min="0"></div>
   </div>
-  <div style="height:12px"></div>
-  <button class="btn sm" id="dc_save" onclick="saveContractDoc()">Save document settings</button>
+  <p class="muted" style="margin-top:12px">These settings are saved together with the contract — press <b>Save contract</b> above.</p>
   </div>
   </div>
   </div>
@@ -571,7 +572,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.12';
+const BUILD = '2026-08-08.13';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1261,7 +1262,7 @@ function todayISO(){ const d=new Date(), off=d.getTimezoneOffset(); return new D
 function ctFillForm(c){
   $('ct_number').value = c ? (c.Number||'') : '';
   $('ct_cp').innerHTML = ctCpOptions(c ? c.CounterpartyID : '');
-  $('ct_dir').value = (c && c.Direction==='outgoing') ? 'outgoing' : 'incoming';
+  $('ct_role').value = (c && (c.OurRole==='customer' || (!c.OurRole && c.Direction==='outgoing'))) ? 'customer' : 'supplier';
   $('ct_sign').value  = c && c.SignDate  ? fmtDate(c.SignDate)  : todayISO();
   $('ct_start').value = c && c.StartDate ? fmtDate(c.StartDate) : todayISO();
   $('ct_end').value   = c && c.EndDate   ? fmtDate(c.EndDate)   : '';
@@ -1324,9 +1325,12 @@ function renderContractsList(){
 async function saveContract(){
   notice('ctm_err','','');
   const b=$('ct_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  const payload = { id:EDIT_CT, number:$('ct_number').value.trim(), counterpartyId:$('ct_cp').value, direction:$('ct_dir').value,
+  const role = $('ct_role').value;
+  const payload = { id:EDIT_CT, number:$('ct_number').value.trim(), counterpartyId:$('ct_cp').value,
+    direction: (role==='customer' ? 'outgoing' : 'incoming'),
     signDate:$('ct_sign').value, startDate:$('ct_start').value, endDate:$('ct_end').value,
-    amount:$('ct_amount').value, currency:$('ct_currency').value, pricingType:$('ct_pricing').value, parentContractId:$('ct_parent').value, description:$('ct_desc').value.trim() };
+    amount:$('ct_amount').value, currency:$('ct_currency').value, pricingType:$('ct_pricing').value,
+    parentContractId:$('ct_parent').value, description:$('ct_desc').value.trim() };
   try{
     const r = await api(EDIT_CT?'update_contract':'create_contract', payload);
     const savedId = EDIT_CT || (r.contract && r.contract.ContractID);
@@ -1337,16 +1341,17 @@ async function saveContract(){
       }
       PENDING_DOCS = [];
     }
-    if(savedId && $('ct_externalForm')){
-      const ext = $('ct_externalForm').checked;
-      await api('save_contract_doc',{ id:savedId, externalForm:ext });
+    if(savedId){
+      const doc = { id:savedId, externalForm:$('ct_externalForm').checked, ourRole:role };
+      if($('dc_templateType')){
+        DC_TEXT.forEach(f=>{ const el=$('dc_'+f); if(el) doc[f]=el.value; });
+        DC_FLAGS.forEach(f=>{ const el=$('dc_'+f); if(el) doc[f]=el.checked; });
+      }
+      await api('save_contract_doc', doc);
     }
     await loadContracts();
-    const id = EDIT_CT || (r.contract && r.contract.ContractID);
-    if(id){
-      openContract(id, true);
-    }
-    notice('ctm_err','ok','Contract saved.');
+    if(savedId) openContract(savedId, true);
+    notice('ctm_err','ok','Contract and document settings saved.');
   }catch(e){ notice('ctm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
 }
@@ -1374,6 +1379,7 @@ function applyExtrasToDoc(x){
     const el = $(EXTRA_TO_DC[k]);
     if(el && x[k]!==undefined && x[k]!=='' && x[k]!==null){ el.value = x[k]; filled.push(EXTRA_LABEL[k]||k); }
   });
+  if(x.acceptanceDays && $('dc_evaluationDays') && !$('dc_evaluationDays').value){ $('dc_evaluationDays').value = x.acceptanceDays; }
   if(x.warrantyPeriod && $('dc_optWarranty')) $('dc_optWarranty').checked = true;
   return filled;
 }
@@ -1459,7 +1465,7 @@ function extFillFields(f){
   if(f.currency){ $('ct_currency').value=f.currency; got.push('currency'); }
   if(f.pricingType){ $('ct_pricing').value=f.pricingType; got.push('pricing ('+(f.pricingType==='hourly'?'hourly':'lump sum')+')'); }
   if(f.templateType && $('dc_templateType')){ $('dc_templateType').value=f.templateType; dcTemplateChange(); got.push('template ('+f.templateType.toUpperCase()+')'); }
-  if(f.direction){ $('ct_dir').value=f.direction; got.push('direction ('+(f.direction==='outgoing'?'we pay':'we receive')+')'); }
+  if(f.direction){ $('ct_role').value = (f.direction==='outgoing'?'customer':'supplier'); got.push('our role ('+(f.direction==='outgoing'?'we pay':'we receive')+')'); }
   if(f.counterpartyId){ $('ct_cp').innerHTML = ctCpOptions(f.counterpartyId); got.push('counterparty'+(f.counterpartyName?' ('+f.counterpartyName+')':'')); }
   if(f.signDate){ $('ct_sign').value=f.signDate; got.push('sign date'); }
   if(f.startDate){ $('ct_start').value=f.startDate; got.push('start date'); }
@@ -1494,7 +1500,7 @@ async function extractFromUpload(){
 }
 
 // ── Document settings on a contract ──
-const DC_TEXT = ['templateType','ourRole','ourRequisiteId','theirRequisiteId','subject','paymentOption','paymentDays',
+const DC_TEXT = ['templateType','ourRequisiteId','theirRequisiteId','subject','paymentOption','paymentDays',
   'advancePercent','advanceDays','governingLaw','jurisdictionPlace','arbitrationBody','arbitrationSeat','remarksDays',
   'acceptanceDays','evaluationDays','disputeDays','cureDays','noticeDays','termYears','warrantyPeriod',
   'penaltyDelayPercent','penaltyFailurePercent','penaltyCapPercent','insuranceAmount','restrictedTerritories',
@@ -1561,7 +1567,6 @@ async function openContractDoc(c){
     if(f==='templateType' && !v) v = tpl;          // a select must never end up blank
     el.value = (v==null?'':v);
   });
-  $('dc_ourRole').value = c.OurRole || 'supplier';
   $('dc_ourRequisiteId').innerHTML = reqOptions(our, c.OurRequisiteID);
   $('dc_theirRequisiteId').innerHTML = reqOptions(theirs, c.TheirRequisiteID);
   const isNew = !c.TemplateType;
@@ -1575,19 +1580,6 @@ async function openContractDoc(c){
     const filled = applyExtrasToDoc(EXTRACTED_EXTRAS);
     if(filled.length) notice('dc_err','ok','Filled from the document: '+filled.join(', ')+'. Anything not recognised is left empty — check and press Save document settings.');
   }
-}
-async function saveContractDoc(){
-  notice('dc_err','','');
-  const b=$('dc_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  const payload = { id:DC_ID };
-  DC_TEXT.forEach(f=>{ const el=$('dc_'+f); if(el) payload[f]=el.value; });
-  DC_FLAGS.forEach(f=>{ const el=$('dc_'+f); if(el) payload[f]=el.checked; });
-  try{
-    await api('save_contract_doc', payload);
-    await loadContracts();
-    notice('dc_err','ok','Document settings saved.');
-  }catch(e){ notice('dc_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Save document settings'; }
 }
 
 function openContract(id, keepOpen){

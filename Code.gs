@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.12';
+const BUILD = '2026-08-08.13';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -394,6 +394,7 @@ function contractFields_(d) {
   return {
     Description: trim_(d.description), CounterpartyID: trim_(d.counterpartyId),
     Direction: (trim_(d.direction) === 'outgoing') ? 'outgoing' : 'incoming',
+    OurRole: (trim_(d.direction) === 'outgoing') ? 'customer' : 'supplier',
     SignDate: trim_(d.signDate), StartDate: trim_(d.startDate), EndDate: trim_(d.endDate),
     Amount: num_(d.amount), Currency: currency, PricingType: (trim_(d.pricingType)==='hourly'?'hourly':'lump'), ParentContractID: trim_(d.parentContractId)
   };
@@ -410,7 +411,7 @@ function adminCreateContract_(d) {
   else if (numberTaken_(SHEETS.contracts, number, '', 'ContractID')) return { ok: false, error: 'Contract number already exists' };
   var row = {
     ContractID: Utilities.getUuid(), Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID,
-    Direction: f.Direction, SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate,
+    Direction: f.Direction, OurRole: f.OurRole, SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate,
     Amount: f.Amount, Currency: f.Currency, PricingType: f.PricingType, AmountUSD: '', FxRate: '', FxAsOf: '',
     ParentContractID: f.ParentContractID, CreatedAt: new Date().toISOString()
   };
@@ -429,7 +430,7 @@ function adminUpdateContract_(d) {
   if (numberTaken_(SHEETS.contracts, number, id, 'ContractID')) return { ok: false, error: 'Contract number already exists' };
   var cfx = computeFx_(f.Currency, f.Amount, f.SignDate);
   updateRow_(SHEETS.contracts, 'ContractID', id, {
-    Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID, Direction: f.Direction,
+    Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID, Direction: f.Direction, OurRole: f.OurRole,
     SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate, Amount: f.Amount, Currency: f.Currency,
     AmountUSD: cfx.AmountUSD, FxRate: cfx.FxRate, FxAsOf: cfx.FxAsOf,
     PricingType: f.PricingType, ParentContractID: f.ParentContractID
@@ -742,6 +743,8 @@ function adminSaveContractDoc_(d) {
       (upd.OptWarranty === 'no' || (upd.OptWarranty === undefined && !truthy_(c.OptWarranty)))) {
     return { ok: false, error: 'Payment "after warranty period" requires the Warranty block to be enabled' };
   }
+  // Our role and the money direction are two views of the same fact — keep them in step.
+  if (upd.OurRole) upd.Direction = (upd.OurRole === 'customer') ? 'outgoing' : 'incoming';
   updateRow_(SHEETS.contracts, 'ContractID', c.ContractID, upd);
   return { ok: true };
 }
