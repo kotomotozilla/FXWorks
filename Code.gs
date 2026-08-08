@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-07-26.3';
+const BUILD = '2026-08-02.1';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -47,7 +47,7 @@ const HEADERS = {
   projects:    ['ProjectID', 'Name', 'Customer', 'CounterpartyID', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
-                'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt'],
+                'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt', 'PayoutCurrency', 'AcceptedBy', 'AcceptedAt'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
 
@@ -118,6 +118,7 @@ function route_(action, d) {
     case 'release_assignment': return adminSetStatus_(d, 'released', true);
     case 'reopen_assignment':  return adminReopen_(d);
     case 'remind_assignment':  return adminRemind_(d);
+    case 'accept_assignment':  return adminAcceptAssignment_(d);
     case 'delete_assignment':  return adminDeleteAssignment_(d);
     case 'admin_get_report':   return adminGetReport_(d);
     case 'admin_save_report':  return adminSaveReport_(d);
@@ -883,6 +884,7 @@ function adminSaveReport_(d) {
   var sub = trim_(d.submittedDate);
   var upd = { ReportedHours: hours, ReportedAmount: amount, SubmittedAt: sub, UpdatedAt: now };
   if (d.title !== undefined) upd.Title = trim_(d.title);
+  if (d.payoutCurrency !== undefined) upd.PayoutCurrency = payoutCur_(d.payoutCurrency);
   if (d.markSubmitted) { upd.Status = 'submitted'; if (!sub) upd.SubmittedAt = now.slice(0, 10); }
   updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
   return { ok: true, totals: { hours: round2_(hours), amount: amount, activities: activities.length } };
@@ -933,6 +935,27 @@ function adminInviteCounterparty_(d) {
     '<p style="color:#5B6671;font-size:12px">' + esc_(CONFIG.COMPANY_NAME) + '</p></div>';
   MailApp.sendEmail({ to: cp.Email, subject: 'Access to ' + CONFIG.COMPANY_NAME + ' reporting', htmlBody: html });
   return { ok: true };
+}
+
+var PAYOUT_CURRENCIES = ['EUR', 'USD', 'AED', 'SGD'];
+function payoutCur_(c) { c = trim_(c).toUpperCase(); return PAYOUT_CURRENCIES.indexOf(c) >= 0 ? c : ''; }
+
+// Countersigning the report = acceptance and the trigger for payment (ICA clauses 3.2-3.4).
+function adminAcceptAssignment_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  if (!a) return { ok: false, error: 'Report not found' };
+  if (a.Status !== 'submitted') return { ok: false, error: 'Only a submitted report can be accepted' };
+  var revoke = truthy_(d.revoke);
+  if (revoke) {
+    updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { AcceptedBy: '', AcceptedAt: '', UpdatedAt: new Date().toISOString() });
+    return { ok: true, revoked: true };
+  }
+  var by = trim_(d.acceptedBy);
+  if (!by) return { ok: false, error: 'Enter the name of the person accepting the report' };
+  var date = trim_(d.acceptedAt) || new Date().toISOString().slice(0, 10);
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { AcceptedBy: by, AcceptedAt: date, UpdatedAt: new Date().toISOString() });
+  return { ok: true, acceptedBy: by, acceptedAt: date };
 }
 
 function adminRemind_(d) {
@@ -997,6 +1020,7 @@ function employeeWrite_(d, finalize) {
   });
   var sub = trim_(d.submittedDate);
   var upd = { ReportedHours: hours, ReportedAmount: amount, SubmittedAt: sub, UpdatedAt: now };
+  if (d.payoutCurrency !== undefined) upd.PayoutCurrency = payoutCur_(d.payoutCurrency);
   if (finalize) { upd.Status = 'submitted'; if (!sub) upd.SubmittedAt = now.slice(0, 10); } else { upd.Status = 'draft'; }
   updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
 

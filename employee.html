@@ -122,6 +122,15 @@
       <input id="totalHours" type="number" min="0" step="0.1" placeholder="0" oninput="recalc()"></div>
 
     <div style="height:14px"></div>
+    <div class="hoursbox" id="curWrap"><label>Currency elected for payment</label>
+      <select id="payoutCur">
+        <option value="">Base currency of the contract</option>
+        <option value="EUR">EUR</option><option value="USD">USD</option>
+        <option value="AED">AED</option><option value="SGD">SGD</option>
+      </select>
+      <p class="sub" style="margin:6px 0 0">Conversion at the rate of the bank or payment service used by the company on the payment date.</p></div>
+
+    <div style="height:14px"></div>
     <div class="hoursbox" id="dateWrap"><label>Submission date</label>
       <input id="submitDate" type="date"></div>
 
@@ -176,7 +185,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-07-26.3';
+const BUILD='2026-08-02.1';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -280,13 +289,14 @@ async function openReport(aid){
       recalc();
     }
     $('submitDate').value = a.SubmittedAt ? toDate(a.SubmittedAt) : todayStr();
+    $('payoutCur').value = a.PayoutCurrency || '';
     applyMode(ro);
     show('screen-report'); window.scrollTo(0,0);
   }catch(e){ notice('reportsErr','err', esc(e.message)); show('screen-reports'); }
 }
 
 function applyMode(ro){
-  ['addBtn','reportActions','hoursWrap','dateWrap'].forEach(id=>{ const el=$(id); if(el) el.style.display = ro ? 'none' : ''; });
+  ['addBtn','reportActions','hoursWrap','dateWrap','curWrap'].forEach(id=>{ const el=$(id); if(el) el.style.display = ro ? 'none' : ''; });
   if(ro) notice('submitMsg','info','This report has been submitted — it is now read-only. You can still download a PDF below. The administrator can return it to you for corrections.');
 }
 
@@ -319,7 +329,7 @@ async function saveReport(finalize){
   const oldText = btn.textContent; btn.disabled=true; other.disabled=true;
   btn.innerHTML = `<span class="spin ${finalize?'':'dark'}"></span>`;
   try{
-    const r = await api(action, auth({assignmentId:STATE.current.AssignmentID, activities, hours, submittedDate:$('submitDate').value}));
+    const r = await api(action, auth({assignmentId:STATE.current.AssignmentID, activities, hours, submittedDate:$('submitDate').value, payoutCurrency:$('payoutCur').value}));
     const s = cur(STATE.current.Currency);
     if(finalize){
       const msg = `Report submitted: ${r.totals.activities} activities, ${fmtH(r.totals.hours)} h for ${s}${fmtMoney(r.totals.amount)}. The admin has been notified.`;
@@ -339,6 +349,21 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   const list = (activities && activities.length)
     ? '<ol>'+activities.map(x=>`<li>${esc(x)}</li>`).join('')+'</ol>'
     : '<span style="color:#777">—</span>';
+  const amtRaw = (a.ReportedAmount!==''&&a.ReportedAmount!=null) ? +a.ReportedAmount : (hours*(+a.Rate||0));
+  const amountDue = cur(a.Currency) + fmtMoney(amtRaw);
+  const accepted = a.AcceptedBy ? `
+    <div class="acc">
+      <div class="acch">Accepted on behalf of ${esc(COMPANY)}</div>
+      <div><span class="k">Name / title:</span> ${esc(a.AcceptedBy)}</div>
+      <div><span class="k">Date:</span> ${esc(fmtDate(a.AcceptedAt||''))}</div>
+      <div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>
+    </div>` : `
+    <div class="acc">
+      <div class="acch">Accepted on behalf of ${esc(COMPANY)}</div>
+      <div><span class="k">Name / title:</span> ______________________________</div>
+      <div><span class="k">Date:</span> ______________________________</div>
+      <div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>
+    </div>`;
   const perf = `
     <div class="perf">
       <div><span class="k">Performed by:</span> ${esc(a.EmployeeName||a.EmployeeEmail)}</div>
@@ -359,6 +384,8 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   td.label{width:44%;font-weight:bold;background:#f2f2f2}
   ol{margin:2px 0 2px 18px;padding:0} li{margin:3px 0}
   .foot{margin-top:26px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;font-family:Arial,Helvetica,sans-serif}
+  .acc{margin-top:34px;font-size:11pt;border-top:1px solid #cbd3da;padding-top:14px}
+  .acc>div{margin:7px 0} .acch{font-weight:bold;margin-bottom:10px}
   .perf{margin-top:40px;font-size:11pt} .perf>div{margin:7px 0} .perf .k{font-weight:bold}
   .sig{margin-top:26px} .sigline{border-bottom:1px solid #333;max-width:340px;height:24px} .siglbl{font-size:9pt;color:#555;margin-top:3px;font-family:Arial,Helvetica,sans-serif}
   @media print{ .no-print{display:none} body{padding:0} }
@@ -373,8 +400,11 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
     <tr><td class="label" colspan="2">A brief description and a list of completed tasks for the project:</td></tr>
     <tr><td colspan="2">${list}</td></tr>
     <tr><td class="label">The total number of hours spent:</td><td>${fmtH(hours)}</td></tr>
+    <tr><td class="label">Amount due:</td><td>${amountDue}</td></tr>
+    <tr><td class="label">Currency elected for payment:</td><td>${a.PayoutCurrency ? esc(a.PayoutCurrency) : 'Base currency of the contract'}</td></tr>
   </table>
   ${perf}
+  ${accepted}
   <div class="foot">CONFIDENTIAL</div>
   <script>setTimeout(function(){try{window.print();}catch(e){}},500);<\/script>
 </body></html>`;

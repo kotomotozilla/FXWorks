@@ -507,8 +507,11 @@
   <h2><span id="rm_title">Report</span><button class="x" onclick="closeModal('repModal')">×</button></h2>
   <div id="rm_sub" class="muted" style="margin-bottom:10px"></div>
   <div id="rm_err"></div>
-  <div style="margin-bottom:12px"><label>Report title</label>
-    <input id="rm_title_in" placeholder="e.g. May 2026 / Phase 1"></div>
+  <div class="row" style="margin-bottom:12px">
+    <div style="flex:2"><label>Report title</label><input id="rm_title_in" placeholder="e.g. May 2026 / Phase 1"></div>
+    <div><label>Currency elected for payment</label>
+      <select id="rm_payout"><option value="">Base currency</option><option value="EUR">EUR</option><option value="USD">USD</option><option value="AED">AED</option><option value="SGD">SGD</option></select></div>
+  </div>
   <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Activities</p>
   <div id="rm_items"></div>
   <button class="btn ghost sm" onclick="rmAddItem()">+ Add activity</button>
@@ -536,7 +539,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-07-26.3';
+const BUILD = '2026-08-02.1';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1382,7 +1385,7 @@ const DC_DEFAULTS = {
   b2b: { remarksDays:15, acceptanceDays:30, cureDays:15, paymentDays:30, paymentOption:'postpay',
          penaltyDelayPercent:0.1, penaltyFailurePercent:10, penaltyCapPercent:20,
          governingLaw:'Switzerland', jurisdictionPlace:'Geneva, Switzerland', warrantyPeriod:'1.5 (one and a half) months' },
-  ica: { paymentDays:30, disputeDays:20, evaluationDays:10, noticeDays:60, termYears:2, paymentOption:'postpay',
+  ica: { paymentDays:45, disputeDays:20, evaluationDays:10, noticeDays:60, termYears:2, paymentOption:'postpay',
          invoiceTrigger:'on_completion', paymentBasis:'hourly', reportFrequency:'on_completion', rateBasis:'per hour',
          governingLaw:'Hong Kong SAR', arbitrationBody:'Hong Kong International Arbitration Centre (HKIAC)',
          arbitrationSeat:'Hong Kong', restrictedTerritories:'the Russian Federation and the Republic of Belarus' }
@@ -1587,6 +1590,11 @@ function renderProjectModal(){
     const s=cur(a.Currency);
     const reportBtn = `<button class="btn ghost sm" onclick="viewReport('${a.AssignmentID}')">Report / edit</button>`;
     const remindBtn = (a.Status==='released'||a.Status==='draft') ? `<button class="btn ghost sm" onclick="remindAssignment('${a.AssignmentID}',this)">Remind</button>` : '';
+    const acceptBtn = (a.Status==='submitted')
+      ? (a.AcceptedBy
+          ? `<button class="btn ghost sm" onclick="acceptReport('${a.AssignmentID}',this,true)">Revoke acceptance</button>`
+          : `<button class="btn sm" onclick="acceptReport('${a.AssignmentID}',this,false)">Accept</button>`)
+      : '';
     const toggle = a.Status==='recalled'
       ? `<button class="btn sm" onclick="setStatus('${a.AssignmentID}','release',this)">Release again</button>`
       : a.Status==='submitted'
@@ -1597,6 +1605,7 @@ function renderProjectModal(){
         <div><div class="nm">${esc(a.EmployeeName||a.EmployeeEmail)} <span class="muted" style="font-weight:400">· ${a.Title?esc(a.Title):('report '+fmtDate(a.CreatedAt))}</span></div><div class="em">${esc(a.EmployeeEmail)} · ${s}${money(a.Rate)}/h</div></div>
         <span class="tag ${esc(a.Status)}">${statusEn(a.Status)}</span>
       </div>
+      ${a.AcceptedBy?`<div class="muted" style="font-size:12px">✓ Accepted by ${esc(a.AcceptedBy)}${a.AcceptedAt?' on '+esc(fmtDate(a.AcceptedAt)):''}${a.PayoutCurrency?' · payout in '+esc(a.PayoutCurrency):''}</div>`:(a.PayoutCurrency?`<div class="muted" style="font-size:12px">Payout currency: ${esc(a.PayoutCurrency)}</div>`:'')}
       ${(a.ReportedHours!==''&&a.ReportedHours!=null)?`<div class="muted" style="margin-bottom:4px">Reported: ${hrs(a.ReportedHours)} h · ${s}${money(a.ReportedAmount||0)}</div>`:''}
       <div class="muted" style="margin-bottom:8px">Submitted: ${a.SubmittedAt?fmtDate(a.SubmittedAt):'—'}</div>
       <label>Comment</label>
@@ -1604,7 +1613,7 @@ function renderProjectModal(){
       <div style="height:8px"></div>
       <div class="acts">
         <button class="btn ghost sm" onclick="saveComment('${a.AssignmentID}',this)">Save comment</button>
-        ${toggle}${remindBtn}${reportBtn}
+        ${toggle}${acceptBtn}${remindBtn}${reportBtn}
         <button class="btn ghost sm" onclick="pdfFromList('${a.AssignmentID}')">PDF</button>
         <button class="btn warn sm" onclick="deleteAssignment('${a.AssignmentID}',this)">Delete</button>
       </div>
@@ -1677,6 +1686,21 @@ async function deleteAssignment(aid, btn){
   try{ await api('delete_assignment',{assignmentId:aid}); await refreshModal(); }
   catch(e){ alert(e.message); }
 }
+async function acceptReport(aid, btn, revoke){
+  if(revoke){
+    if(!confirm('Revoke acceptance of this report?')) return;
+    btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+    try{ await api('accept_assignment',{assignmentId:aid, revoke:true}); await refreshModal(); }
+    catch(e){ notice('pm_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Revoke acceptance'; }
+    return;
+  }
+  const who = prompt('Accepting the report on behalf of ' + COMPANY + '.\nName / title of the authorised representative:', 'Konstantin Maiorov, Director');
+  if(who===null) return;
+  if(!who.trim()){ notice('pm_err','err','Enter the name of the person accepting the report.'); return; }
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{ await api('accept_assignment',{assignmentId:aid, acceptedBy:who.trim(), acceptedAt:todayISO()}); await refreshModal(); notice('pm_err','ok','Report accepted — this is the basis for payment.'); }
+  catch(e){ notice('pm_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Accept'; }
+}
 async function remindAssignment(aid, btn){
   btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
   try{ await api('remind_assignment',{assignmentId:aid}); notice('pm_err','ok','Reminder sent.'); }
@@ -1699,6 +1723,7 @@ async function viewReport(aid){
     $('rm_hours').value = (a.ReportedHours!==''&&a.ReportedHours!=null) ? a.ReportedHours : '';
     $('rm_date').value = a.SubmittedAt ? fmtDate(a.SubmittedAt) : '';
     $('rm_title_in').value = a.Title || '';
+    $('rm_payout').value = a.PayoutCurrency || '';
     rmRecalc();
     $('repModal').classList.remove('hidden');
   }catch(e){ alert(e.message); }
@@ -1721,7 +1746,7 @@ async function saveAdminReport(markSubmitted){
   const b = markSubmitted ? $('rm_submit') : $('rm_save'); const other = markSubmitted ? $('rm_save') : $('rm_submit');
   b.disabled=true; other.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
-    await api('admin_save_report',{assignmentId:REP.AssignmentID, activities, hours, title:$('rm_title_in').value, submittedDate:$('rm_date').value, markSubmitted:!!markSubmitted});
+    await api('admin_save_report',{assignmentId:REP.AssignmentID, activities, hours, title:$('rm_title_in').value, payoutCurrency:$('rm_payout').value, submittedDate:$('rm_date').value, markSubmitted:!!markSubmitted});
     closeModal('repModal'); await refreshModal();
   }catch(e){ notice('rm_err','err', esc(e.message)); }
   finally{ b.disabled=false; other.disabled=false; $('rm_save').textContent='Save'; $('rm_submit').innerHTML='Save &amp; submit'; }
@@ -1732,6 +1757,21 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   const list = (activities && activities.length)
     ? '<ol>'+activities.map(x=>`<li>${esc(x)}</li>`).join('')+'</ol>'
     : '<span style="color:#777">—</span>';
+  const amtRaw = (a.ReportedAmount!==''&&a.ReportedAmount!=null) ? +a.ReportedAmount : (hours*(+a.Rate||0));
+  const amountDue = cur(a.Currency) + money(amtRaw);
+  const accepted = a.AcceptedBy ? `
+    <div class="acc">
+      <div class="acch">Accepted on behalf of ${esc(COMPANY)}</div>
+      <div><span class="k">Name / title:</span> ${esc(a.AcceptedBy)}</div>
+      <div><span class="k">Date:</span> ${esc(fmtDate(a.AcceptedAt||''))}</div>
+      <div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>
+    </div>` : `
+    <div class="acc">
+      <div class="acch">Accepted on behalf of ${esc(COMPANY)}</div>
+      <div><span class="k">Name / title:</span> ______________________________</div>
+      <div><span class="k">Date:</span> ______________________________</div>
+      <div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>
+    </div>`;
   const perf = `
     <div class="perf">
       <div><span class="k">Performed by:</span> ${esc(a.EmployeeName||a.EmployeeEmail)}</div>
@@ -1752,6 +1792,8 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   td.label{width:44%;font-weight:bold;background:#f2f2f2}
   ol{margin:2px 0 2px 18px;padding:0} li{margin:3px 0}
   .foot{margin-top:26px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;font-family:Arial,Helvetica,sans-serif}
+  .acc{margin-top:34px;font-size:11pt;border-top:1px solid #cbd3da;padding-top:14px}
+  .acc>div{margin:7px 0} .acch{font-weight:bold;margin-bottom:10px}
   .perf{margin-top:40px;font-size:11pt} .perf>div{margin:7px 0} .perf .k{font-weight:bold}
   .sig{margin-top:26px} .sigline{border-bottom:1px solid #333;max-width:340px;height:24px} .siglbl{font-size:9pt;color:#555;margin-top:3px;font-family:Arial,Helvetica,sans-serif}
   @media print{ .no-print{display:none} body{padding:0} }
@@ -1766,8 +1808,11 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
     <tr><td class="label" colspan="2">A brief description and a list of completed tasks for the project:</td></tr>
     <tr><td colspan="2">${list}</td></tr>
     <tr><td class="label">The total number of hours spent:</td><td>${hrs(hours)}</td></tr>
+    <tr><td class="label">Amount due:</td><td>${amountDue}</td></tr>
+    <tr><td class="label">Currency elected for payment:</td><td>${a.PayoutCurrency ? esc(a.PayoutCurrency) : 'Base currency of the contract'}</td></tr>
   </table>
   ${perf}
+  ${accepted}
   <div class="foot">CONFIDENTIAL</div>
   <script>setTimeout(function(){try{window.print();}catch(e){}},500);<\/script>
 </body></html>`;
