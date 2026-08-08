@@ -368,6 +368,11 @@
     <div style="flex:2"><label>Counterparty</label><select id="ct_cp"></select></div>
     <div style="max-width:230px"><label>Our role</label>
       <select id="ct_role"><option value="supplier">Fraktalex is Supplier (we receive)</option><option value="customer">Fraktalex is Customer (we pay)</option></select></div>
+    <div style="max-width:250px"><label>Contract type / template</label>
+      <select id="ct_template" onchange="dcTemplateChange()">
+        <option value="b2b">B2B agreement (legal entity)</option>
+        <option value="ica">Independent Contractor Agreement</option>
+      </select></div>
   </div>
   <div style="height:8px"></div>
   <div class="row">
@@ -422,15 +427,6 @@
   <p class="muted">Values and optional blocks used when generating the contract and its SOW.</p>
   <div id="dc_err"></div>
   <div class="row">
-    <div><label>Template</label>
-      <select id="dc_templateType" onchange="dcTemplateChange()">
-        <option value="b2b">B2B agreement (legal entity)</option>
-        <option value="ica">Independent Contractor Agreement</option>
-      </select></div>
-
-  </div>
-  <div style="height:8px"></div>
-  <div class="row">
     <div style="flex:2"><label>Our requisites</label><select id="dc_ourRequisiteId"></select></div>
     <div style="flex:2"><label>Counterparty requisites</label><select id="dc_theirRequisiteId"></select></div>
   </div>
@@ -450,9 +446,9 @@
         <option value="prepay_100">100% advance</option>
         <option value="milestone">By milestones</option>
       </select></div>
-    <div><label>Payment days</label><input id="dc_paymentDays" type="number" min="0"></div>
-    <div><label>Advance %</label><input id="dc_advancePercent" type="number" min="0" max="100"></div>
-    <div><label>Advance days</label><input id="dc_advanceDays" type="number" min="0"></div>
+    <div style="flex:1 1 130px"><label>Payment days</label><input id="dc_paymentDays" type="number" min="0"></div>
+    <div style="flex:1 1 130px"><label>Advance %</label><input id="dc_advancePercent" type="number" min="0" max="100"></div>
+    <div style="flex:1 1 130px"><label>Advance days</label><input id="dc_advanceDays" type="number" min="0"></div>
   </div>
   <div id="dc_icaPay" class="hidden">
     <div style="height:8px"></div>
@@ -572,7 +568,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.13';
+const BUILD = '2026-08-08.14';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1269,6 +1265,7 @@ function ctFillForm(c){
   $('ct_amount').value = (c && c.Amount!==''&&c.Amount!=null) ? c.Amount : '';
   $('ct_currency').value = (c && ['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0) ? c.Currency : 'USD';
   $('ct_pricing').value = (c && c.PricingType==='hourly') ? 'hourly' : 'lump';
+  $('ct_template').value = (c && c.TemplateType==='ica') ? 'ica' : 'b2b';
   $('ct_parent').innerHTML = ctParentOptions(c ? c.ParentContractID : '', c ? c.ContractID : '');
   $('ct_desc').value = c ? (c.Description||'') : '';
   notice('ctm_err','','');
@@ -1343,7 +1340,8 @@ async function saveContract(){
     }
     if(savedId){
       const doc = { id:savedId, externalForm:$('ct_externalForm').checked, ourRole:role };
-      if($('dc_templateType')){
+      if($('ct_template')){
+        doc.templateType = $('ct_template').value;
         DC_TEXT.forEach(f=>{ const el=$('dc_'+f); if(el) doc[f]=el.value; });
         DC_FLAGS.forEach(f=>{ const el=$('dc_'+f); if(el) doc[f]=el.checked; });
       }
@@ -1464,7 +1462,7 @@ function extFillFields(f){
   if(f.amount){ $('ct_amount').value=f.amount; got.push(f.pricingType==='hourly'?'hourly rate':'amount'); }
   if(f.currency){ $('ct_currency').value=f.currency; got.push('currency'); }
   if(f.pricingType){ $('ct_pricing').value=f.pricingType; got.push('pricing ('+(f.pricingType==='hourly'?'hourly':'lump sum')+')'); }
-  if(f.templateType && $('dc_templateType')){ $('dc_templateType').value=f.templateType; dcTemplateChange(); got.push('template ('+f.templateType.toUpperCase()+')'); }
+  if(f.templateType && $('ct_template')){ $('ct_template').value=f.templateType; dcTemplateChange(); got.push('template ('+f.templateType.toUpperCase()+')'); }
   if(f.direction){ $('ct_role').value = (f.direction==='outgoing'?'customer':'supplier'); got.push('our role ('+(f.direction==='outgoing'?'we pay':'we receive')+')'); }
   if(f.counterpartyId){ $('ct_cp').innerHTML = ctCpOptions(f.counterpartyId); got.push('counterparty'+(f.counterpartyName?' ('+f.counterpartyName+')':'')); }
   if(f.signDate){ $('ct_sign').value=f.signDate; got.push('sign date'); }
@@ -1500,7 +1498,7 @@ async function extractFromUpload(){
 }
 
 // ── Document settings on a contract ──
-const DC_TEXT = ['templateType','ourRequisiteId','theirRequisiteId','subject','paymentOption','paymentDays',
+const DC_TEXT = ['ourRequisiteId','theirRequisiteId','subject','paymentOption','paymentDays',
   'advancePercent','advanceDays','governingLaw','jurisdictionPlace','arbitrationBody','arbitrationSeat','remarksDays',
   'acceptanceDays','evaluationDays','disputeDays','cureDays','noticeDays','termYears','warrantyPeriod',
   'penaltyDelayPercent','penaltyFailurePercent','penaltyCapPercent','insuranceAmount','restrictedTerritories',
@@ -1535,7 +1533,7 @@ function OUR_CP_ID(){
   return me ? me.CounterpartyID : '';
 }
 function dcTemplateChange(){
-  const ica = $('dc_templateType').value==='ica';
+  const ica = $('ct_template').value==='ica';
   $('dc_icaPay').classList.toggle('hidden', !ica);
   $('dc_b2bProc').classList.toggle('hidden', ica);
   $('dc_arbWrap').classList.toggle('hidden', !ica);
@@ -1555,7 +1553,7 @@ async function openContractDoc(c){
   const our = OUR_CP_ID(), theirs = c.CounterpartyID;
   await loadReqsFor([our, theirs]);
   const tpl = c.TemplateType || 'b2b';
-  $('dc_templateType').value = tpl;
+  $('ct_template').value = tpl;
   const external = String(c.ExternalForm||'').toLowerCase()==='yes';
   // External contracts: no default numbers — only what was recognised. Dropdowns still need a value.
   const SELECT_DEFAULTS = { paymentOption:'postpay', invoiceTrigger:'on_completion', paymentBasis:'hourly', reportFrequency:'on_completion' };
@@ -1564,7 +1562,6 @@ async function openContractDoc(c){
     const el = $('dc_'+f); if(!el) return;
     let v = c[DC_KEY(f)];
     if((v===''||v==null) && def[f]!==undefined) v = def[f];
-    if(f==='templateType' && !v) v = tpl;          // a select must never end up blank
     el.value = (v==null?'':v);
   });
   $('dc_ourRequisiteId').innerHTML = reqOptions(our, c.OurRequisiteID);
