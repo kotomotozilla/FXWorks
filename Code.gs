@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.7';
+const BUILD = '2026-08-08.8';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -510,7 +510,7 @@ function nearNumber_(text, words, maxDist) {
 function parseContractText_(text) {
   var f = {};
   var num = text.match(/(?:agreement|contract)\s*(?:no\.?|number|#|\u2116)\s*([A-Za-z0-9\/\-\._]{3,40})/i);
-  if (num) f.number = num[1].replace(/[.,;]$/, '');
+  if (num) f.number = num[1].replace(/[.,;]+$/, '').trim();
 
   var cur = null, amount = 0;
   var reA = /(?:(USD|EUR|AED|SGD)\s*([\d][\d ,.]{2,})|([\d][\d ,.]{2,})\s*(USD|EUR|AED|SGD))/gi, m;
@@ -1169,14 +1169,17 @@ function readAll_(name) {
   for (var i = 1; i < values.length; i++) { var o = {}; for (var j = 0; j < head.length; j++) o[head[j]] = values[i][j]; out.push(o); }
   return out;
 }
+var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName'];
 function appendRow_(name, obj) {
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
   var arr = head.map(function (h) { return obj[h] != null ? obj[h] : ''; });
   sh.appendRow(arr);
-  // Keep plain YYYY-MM-DD dates as text (no timezone-shifted serials).
+  // Keep dates and reference numbers as text — otherwise Sheets turns "2515-1" into a date.
   var r = sh.getLastRow();
   for (var i = 0; i < arr.length; i++) {
-    if (typeof arr[i] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(arr[i])) {
+    var isDate = (typeof arr[i] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(arr[i]));
+    var isRef = (typeof arr[i] === 'string' && arr[i] !== '' && TEXT_COLS.indexOf(head[i]) >= 0);
+    if (isDate || isRef) {
       var cell = sh.getRange(r, i + 1); cell.setNumberFormat('@'); cell.setValue(arr[i]);
     }
   }
@@ -1202,8 +1205,9 @@ function updateRow_(name, idField, idValue, updates) {
         var c = head.indexOf(key);
         if (c >= 0) {
           var cell = sh.getRange(i + 1, c + 1), val = updates[key];
-          // Keep plain YYYY-MM-DD dates as text so Sheets does not convert them to a timezone-shifted serial.
-          if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val)) cell.setNumberFormat('@');
+          // Keep dates and reference numbers as text (Sheets would otherwise parse "2515-1" as a date).
+          if (typeof val === 'string' && val !== '' &&
+              (/^\d{4}-\d{2}-\d{2}$/.test(val) || TEXT_COLS.indexOf(key) >= 0)) cell.setNumberFormat('@');
           cell.setValue(val);
         }
       }

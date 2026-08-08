@@ -36,7 +36,8 @@
   th.srt{cursor:pointer;user-select:none;white-space:nowrap}
   th.srt:hover{color:var(--brand)}
   .fbadge{background:var(--brand);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:6px}
-  .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1 1 150px;min-width:0}
+  .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1 1 170px;min-width:150px}
+  .row>label,.row>div>label{display:block;white-space:normal}
   .panel{border:1px solid var(--line);border-radius:14px;padding:18px;background:#fff;margin:0 0 18px}
   .tabs{display:flex;gap:4px;margin:0 0 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
   .tabs button{background:none;border:0;cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;color:var(--muted);padding:10px 14px;border-bottom:2px solid transparent;margin-bottom:-1px}
@@ -256,6 +257,9 @@
     <button class="btn ghost sm" id="cm_invite" onclick="inviteFromCard(this)">Send invite</button>
     <button class="btn warn sm cp-only" onclick="deleteFromCard()">Delete counterparty</button>
   </div>
+  <div class="sep cp-only"></div>
+  <h2 style="font-size:15px" class="cp-only">Contracts</h2>
+  <div id="cpm_contracts" class="cp-only"></div>
   <div class="sep cp-only"></div>
   <h2 style="font-size:15px" class="cp-only">Requisite sets</h2>
   <p class="muted cp-only">Legal details, bank account and signatory used in generated contracts. The set marked <b>default</b> is pre-selected when a contract is created.</p>
@@ -566,7 +570,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.7';
+const BUILD = '2026-08-08.8';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -739,6 +743,20 @@ function newCounterparty(){
   cmAccessToggle(); notice('cm_err','','');
   $('cpModal').classList.remove('hidden');
 }
+function renderCpContracts(cpId){
+  const el = $('cpm_contracts'); if(!el) return;
+  const list = CONTRACTS.filter(c=>String(c.CounterpartyID)===String(cpId));
+  if(!list.length){ el.innerHTML = '<div class="muted" style="padding:6px 0">No contracts with this counterparty yet.</div>'; return; }
+  el.innerHTML = list.map(c=>{
+    const kind = (c.PricingType==='hourly') ? 'hourly rate' : 'lump sum';
+    const amt = (c.Amount!==''&&c.Amount!=null) ? cur(c.Currency)+money(c.Amount) : '—';
+    return `<div class="asg"><div class="top2">
+      <div><div class="nm">${esc(c.Number)}</div>
+        <div class="em">${c.Direction==='outgoing'?'Outgoing':'Incoming'} · ${kind} · ${amt}${c.SignDate?' · signed '+esc(fmtDate(c.SignDate)):''}</div></div>
+      <button class="btn ghost sm" onclick="closeModal('cpModal');openContract('${esc(c.ContractID)}')">Open</button>
+    </div></div>`;
+  }).join('');
+}
 function cpContractOptions(cpId, sel){
   const list = CONTRACTS.filter(c=>String(c.CounterpartyID)===String(cpId));
   return '<option value="">— not linked to a contract —</option>'+list.map(c=>{
@@ -775,6 +793,7 @@ function openCounterparty(id){
   document.querySelectorAll('#cpModal .cp-only').forEach(el=>el.classList.remove('hidden'));
   $('cm_save').textContent='Save counterparty';
   reqCancel();
+  renderCpContracts(id);
   loadRequisites(id);
   renderAttachments('cpm_attach','counterparty',id);
   $('cpModal').classList.remove('hidden');
@@ -1326,11 +1345,6 @@ async function saveContract(){
     const id = EDIT_CT || (r.contract && r.contract.ContractID);
     if(id){
       openContract(id, true);
-      if(EXTRACTED_EXTRAS){
-        setTimeout(()=>{ const f = applyExtrasToDoc(EXTRACTED_EXTRAS);
-          if(f.length) notice('dc_err','ok','Filled from the document: '+f.join(', ')+'. Anything not recognised is left empty — press Save document settings when checked.');
-        }, 400);
-      }
     }
     notice('ctm_err','ok','Contract saved.');
   }catch(e){ notice('ctm_err','err', esc(e.message)); }
@@ -1344,6 +1358,22 @@ function extFormToggle(){
   $('ctm_docwrap').classList.toggle('hidden', creating);
   $('ext_existing').classList.toggle('hidden', creating);
   $('ext_new').classList.toggle('hidden', !creating);
+}
+function matchCounterparty(extras){
+  if(!extras || !extras.parties) return false;
+  const names = String(extras.parties).split('|').map(x=>x.trim().toLowerCase()).filter(Boolean);
+  const norm = t => String(t||'').toLowerCase().replace(/\b(ltd|llc|limited|fzco|fze|llp|inc|gmbh|sar|hong kong)\b/g,'').replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim();
+  for(const n of names){
+    const cand = COUNTERPARTIES.find(c=>{
+      const cn = norm(c.Name); const pn = norm(n);
+      return cn && pn && (cn===pn || pn.includes(cn) || cn.includes(pn));
+    });
+    if(cand && !/fraktalex/i.test(cand.Name||'')){
+      $('ct_cp').innerHTML = ctCpOptions(cand.CounterpartyID);
+      return cand.Name;
+    }
+  }
+  return false;
 }
 function extFillFields(f){
   const got=[];
@@ -1420,10 +1450,11 @@ async function extractFromDoc(){
     const got = extFillFields(r.fields||{});
     EXTRACTED_EXTRAS = r.extras||{};
     showExtras(EXTRACTED_EXTRAS);
+    const matched = matchCounterparty(EXTRACTED_EXTRAS);
     const dcFilled = applyExtrasToDoc(EXTRACTED_EXTRAS);
     previewSelected();
     const notes = (r.notes||[]).map(n=>esc(n)).join('<br>');
-    notice('ext_msg','ok','Recognised: '+got.join(', ')+(dcFilled.length?'; document settings filled: '+dcFilled.join(', '):'')+'. Check everything, then press <b>Save contract</b> and <b>Save document settings</b>. Anything not recognised is left empty.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
+    notice('ext_msg','ok','Recognised: '+got.join(', ')+(dcFilled.length?'; document settings filled: '+dcFilled.join(', '):'')+(matched?'; counterparty matched: '+esc(matched):'')+'. Check everything, then press <b>Save contract</b> and <b>Save document settings</b>. Anything not recognised is left empty.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
   }catch(e){ notice('ext_msg','err', esc(e.message)+' — you can still type the details in by hand.'); }
   finally{ b.disabled=false; b.textContent='Read data from document'; }
 }
@@ -1452,7 +1483,7 @@ async function extractFromUpload(){
       const r = await api('extract_upload',{fileName:f.name, mimeType:f.type||'application/octet-stream', dataBase64:b64, docType});
       PENDING_DOCS.push({ driveFileId:r.driveFileId, url:r.url, fileName:r.fileName, docType });
       parts.push({ docType, fields:r.fields||{} });
-      if(i===0){ EXTRACTED_EXTRAS = r.extras||{}; showExtras(EXTRACTED_EXTRAS); showPreview(r.driveFileId); }
+      if(i===0){ EXTRACTED_EXTRAS = r.extras||{}; showExtras(EXTRACTED_EXTRAS); matchCounterparty(EXTRACTED_EXTRAS); showPreview(r.driveFileId); }
       notes.push(f.name+' → '+(Object.keys(r.fields||{}).length?Object.keys(r.fields).join(', '):(r.warning||'nothing recognised')));
     }
     const got = extFillFields(mergeFieldsClient(parts));
@@ -1538,6 +1569,10 @@ async function openContractDoc(c){
     el.checked = (raw==='' || raw==null) ? (isNew && f!=='optWarranty' && (f!=='optPayoutCurrency' || tpl==='ica')) : String(raw).toLowerCase()==='yes';
   });
   dcTemplateChange(); dcPayChange(); notice('dc_err','','');
+  if(EXTRACTED_EXTRAS){
+    const filled = applyExtrasToDoc(EXTRACTED_EXTRAS);
+    if(filled.length) notice('dc_err','ok','Filled from the document: '+filled.join(', ')+'. Anything not recognised is left empty — check and press Save document settings.');
+  }
 }
 async function saveContractDoc(){
   notice('dc_err','','');
