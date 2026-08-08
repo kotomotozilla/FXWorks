@@ -568,7 +568,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.14';
+const BUILD = '2026-08-08.15';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1451,7 +1451,7 @@ function mergeFieldsClient(parts){
   const annex = parts.filter(p=>p.docType==='annex' || p.docType==='amendment').map(p=>p.fields||{});
   const pick=(list,k)=>{ for(const f of list){ if(f[k]!==undefined && f[k]!=='' && f[k]!==null) return f[k]; } };
   const out={};
-  ['number','signDate','startDate','pricingType','direction','counterpartyId','counterpartyName'].forEach(k=>{ const v = pick(main,k) ?? pick(annex,k); if(v!==undefined) out[k]=v; });
+  ['number','signDate','startDate','pricingType','direction','counterpartyId','counterpartyName','templateType'].forEach(k=>{ const v = pick(main,k) ?? pick(annex,k); if(v!==undefined) out[k]=v; });
   ['amount','currency','endDate'].forEach(k=>{ const v = pick(annex,k) ?? pick(main,k); if(v!==undefined) out[k]=v; });
   return out;
 }

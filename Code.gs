@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.14';
+const BUILD = '2026-08-08.15';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -575,7 +575,16 @@ function parseContractText_(text) {
     var hr = hourlyRate_(text);
     if (hr) { f.amount = hr.amount; if (hr.currency) f.currency = hr.currency; }
   }
-  if (/independent\s+contractor\s+agreement/i.test(text)) f.templateType = 'ica';
+  // Contract type: an ICA names a Service Provider / independent contractor;
+  // a B2B agreement talks about Supplier and Customer.
+  var icaHits = 0, b2bHits = 0;
+  if (/independent\s+contractor\s+agreement/i.test(text)) icaHits += 3;
+  if (/service\s+provider/i.test(text)) icaHits += 2;
+  if (/independent\s+contractor/i.test(text)) icaHits += 1;
+  if (/\bsupplier\b/i.test(text)) b2bHits += 2;
+  if (/acceptance\s+act/i.test(text)) b2bHits += 2;
+  if (/\bdeliverables\b/i.test(text)) b2bHits += 1;
+  if (icaHits || b2bHits) f.templateType = (icaHits >= b2bHits) ? 'ica' : 'b2b';
   var dir = guessDirection_(text);
   if (dir) f.direction = dir;
   var cp = guessCounterparty_(text);
