@@ -522,10 +522,11 @@
   <aside class="ctside hidden" id="ext_preview">
     <div class="pv-head" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;padding-bottom:4px">
       <b style="font-size:13px">Document preview</b>
-      <button class="btn ghost sm" onclick="togglePreview()">Hide</button>
+      <span class="acts"><a class="btn ghost sm" id="ext_open" href="#" target="_blank" rel="noopener">Open in Drive</a>
+      <button class="btn ghost sm" onclick="togglePreview()">Hide</button></span>
     </div>
     <iframe id="ext_frame" allow="autoplay"></iframe>
-    <p class="muted" style="font-size:11px">Opens from your Google Drive — visible only to you. Scrolls independently of the form.</p>
+    <p class="muted" style="font-size:11px" id="ext_pvmsg"></p>
   </aside>
   </div>
 </div></div>
@@ -566,7 +567,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.16';
+const BUILD = '2026-08-08.17';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1400,14 +1401,31 @@ function showExtras(x){
         <span class="muted">${esc(EXTRA_LABEL[k]||k)}</span><span style="text-align:right">${esc(String(x[k]))}</span></div>`).join('')+
     '</div>';
 }
-function showPreview(driveFileId){
+let PREVIEW_URL = '';
+async function showPreview(driveFileId){
   if(!driveFileId){ notice('ext_msg','err','No file to preview.'); return; }
-  $('ext_frame').src = 'https://drive.google.com/file/d/'+encodeURIComponent(driveFileId)+'/preview';
-  $('ext_preview').classList.remove('hidden');
+  const wrap = $('ext_preview');
+  wrap.classList.remove('hidden');
   const b=document.querySelector('#ctModal .box'); if(b) b.classList.add('wide');
+  $('ext_open').href = 'https://drive.google.com/file/d/'+encodeURIComponent(driveFileId)+'/view';
+  $('ext_frame').removeAttribute('src');
+  $('ext_pvmsg').textContent = 'Loading the document…';
+  try{
+    const r = await api('attachment_data',{driveFileId});
+    const bin = atob(r.dataBase64);
+    const arr = new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+    if(PREVIEW_URL) URL.revokeObjectURL(PREVIEW_URL);
+    PREVIEW_URL = URL.createObjectURL(new Blob([arr], {type:r.mimeType||'application/pdf'}));
+    $('ext_frame').src = PREVIEW_URL;
+    $('ext_pvmsg').textContent = r.name || '';
+  }catch(e){
+    $('ext_pvmsg').innerHTML = esc(e.message)+' — use <b>Open in Drive</b> above.';
+  }
 }
 function togglePreview(){
-  $('ext_preview').classList.add('hidden'); $('ext_frame').src='';
+  $('ext_preview').classList.add('hidden'); $('ext_frame').removeAttribute('src');
+  if(PREVIEW_URL){ URL.revokeObjectURL(PREVIEW_URL); PREVIEW_URL=''; }
   const b=document.querySelector('#ctModal .box'); if(b) b.classList.remove('wide');
 }
 async function previewSelected(){

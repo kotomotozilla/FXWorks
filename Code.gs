@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.16';
+const BUILD = '2026-08-08.17';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -91,6 +91,7 @@ function route_(action, d) {
     case 'save_contract_doc':  return adminSaveContractDoc_(d);
     case 'extract_contract':   return adminExtractContract_(d);
     case 'extract_upload':     return adminExtractUpload_(d);
+    case 'attachment_data':    return adminAttachmentData_(d);
     case 'attach_existing':    return adminAttachExisting_(d);
     // Invoices
     case 'create_invoice':     return adminCreateInvoice_(d);
@@ -705,6 +706,26 @@ function adminExtractUpload_(d) {
   res.extras = parseContractExtras_(text);
   if (!res.fields.number && !res.fields.amount && !res.fields.signDate) res.warning = 'Text was read, but no contract details were recognised';
   return res;
+}
+
+// Serve a stored file back to the admin page so it can be previewed without
+// relying on Drive's iframe (which needs a Google session and third-party cookies).
+function adminAttachmentData_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.driveFileId);
+  if (!id) {
+    var a = findRow_(SHEETS.attachments, 'AttachmentID', trim_(d.attachmentId));
+    if (!a) return { ok: false, error: 'Attachment not found' };
+    id = trim_(a.DriveFileID);
+  }
+  if (!id) return { ok: false, error: 'No stored file' };
+  try {
+    var f = DriveApp.getFileById(id);
+    var blob = f.getBlob();
+    var bytes = blob.getBytes();
+    if (bytes.length > 12 * 1024 * 1024) return { ok: false, error: 'File is too large to preview here — use "Open in Drive"' };
+    return { ok: true, name: f.getName(), mimeType: blob.getContentType(), dataBase64: Utilities.base64Encode(bytes) };
+  } catch (e) { return { ok: false, error: 'Could not read the file: ' + e }; }
 }
 
 // Link a file that is already in Drive (uploaded during contract creation) to a record.
