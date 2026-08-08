@@ -571,7 +571,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.11';
+const BUILD = '2026-08-08.12';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1351,6 +1351,7 @@ async function saveContract(){
   finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
 }
 // ── External contract form + OCR extraction ──
+let PENDING_DOCS = [], EXTRACTED_EXTRAS = null;   // files uploaded while creating a contract + values read from them
 // Fields always stay editable — recognition can be wrong, so the admin must be able to correct it.
 function extFormToggle(){
   const on = $('ct_externalForm').checked, creating = !EDIT_CT;
