@@ -492,6 +492,7 @@
     <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optInsurance" style="width:auto"> Insurance</label>
     <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optDataSecurity" style="width:auto"> Data security</label>
     <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optWarranty" style="width:auto" onchange="dcPayChange()"> Warranty</label>
+    <label id="dc_payoutWrap" style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optPayoutCurrency" style="width:auto"> Contractor may elect payment currency (EUR/USD/AED/SGD)</label>
   </div>
   <div class="row" id="dc_warrantyWrap" style="margin-top:8px">
     <div><label>Warranty period</label><input id="dc_warrantyPeriod" placeholder="1.5 (one and a half) months"></div>
@@ -539,7 +540,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-02.1';
+const BUILD = '2026-08-08.2';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1379,7 +1380,7 @@ const DC_TEXT = ['templateType','ourRole','ourRequisiteId','theirRequisiteId','s
   'acceptanceDays','evaluationDays','disputeDays','cureDays','noticeDays','termYears','warrantyPeriod',
   'penaltyDelayPercent','penaltyFailurePercent','penaltyCapPercent','insuranceAmount','restrictedTerritories',
   'rateAmount','rateBasis','invoiceTrigger','paymentBasis','reportFrequency','completionDate','pMName','sowScope'];
-const DC_FLAGS = ['optAcceptanceAct','optPenalties','optUsageRights','optInsurance','optDataSecurity','optWarranty'];
+const DC_FLAGS = ['optAcceptanceAct','optPenalties','optUsageRights','optInsurance','optDataSecurity','optWarranty','optPayoutCurrency'];
 const DC_KEY = f => f.charAt(0).toUpperCase()+f.slice(1);
 const DC_DEFAULTS = {
   b2b: { remarksDays:15, acceptanceDays:30, cureDays:15, paymentDays:30, paymentOption:'postpay',
@@ -1415,6 +1416,8 @@ function dcTemplateChange(){
   $('dc_arbWrap').classList.toggle('hidden', !ica);
   $('dc_seatWrap').classList.toggle('hidden', !ica);
   $('dc_jurWrap').classList.toggle('hidden', ica);
+  if($('dc_payoutWrap')) $('dc_payoutWrap').style.display = ica ? '' : 'none';
+  if(!ica && $('dc_optPayoutCurrency')) $('dc_optPayoutCurrency').checked = false;
 }
 function dcPayChange(){
   if($('dc_paymentOption').value==='after_warranty' && !$('dc_optWarranty').checked){
@@ -1442,7 +1445,7 @@ async function openContractDoc(c){
   DC_FLAGS.forEach(f=>{
     const el=$('dc_'+f); if(!el) return;
     const raw = c[DC_KEY(f)];
-    el.checked = (raw==='' || raw==null) ? (isNew && f!=='optWarranty') : String(raw).toLowerCase()==='yes';
+    el.checked = (raw==='' || raw==null) ? (isNew && f!=='optWarranty' && (f!=='optPayoutCurrency' || tpl==='ica')) : String(raw).toLowerCase()==='yes';
   });
   dcTemplateChange(); dcPayChange(); notice('dc_err','','');
 }
@@ -1723,6 +1726,8 @@ async function viewReport(aid){
     $('rm_hours').value = (a.ReportedHours!==''&&a.ReportedHours!=null) ? a.ReportedHours : '';
     $('rm_date').value = a.SubmittedAt ? fmtDate(a.SubmittedAt) : '';
     $('rm_title_in').value = a.Title || '';
+    const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes' || !!a.PayoutCurrency;
+    $('rm_payout').parentElement.style.display = allowCur ? '' : 'none';
     $('rm_payout').value = a.PayoutCurrency || '';
     rmRecalc();
     $('repModal').classList.remove('hidden');

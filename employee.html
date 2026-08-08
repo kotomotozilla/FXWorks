@@ -185,7 +185,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-08-02.1';
+const BUILD='2026-08-08.2';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -289,6 +289,8 @@ async function openReport(aid){
       recalc();
     }
     $('submitDate').value = a.SubmittedAt ? toDate(a.SubmittedAt) : todayStr();
+    const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes';
+    $('curWrap').style.display = allowCur ? '' : 'none';
     $('payoutCur').value = a.PayoutCurrency || '';
     applyMode(ro);
     show('screen-report'); window.scrollTo(0,0);
@@ -296,7 +298,8 @@ async function openReport(aid){
 }
 
 function applyMode(ro){
-  ['addBtn','reportActions','hoursWrap','dateWrap','curWrap'].forEach(id=>{ const el=$(id); if(el) el.style.display = ro ? 'none' : ''; });
+  ['addBtn','reportActions','hoursWrap','dateWrap'].forEach(id=>{ const el=$(id); if(el) el.style.display = ro ? 'none' : ''; });
+  if(ro && $('curWrap')) $('curWrap').style.display='none';
   if(ro) notice('submitMsg','info','This report has been submitted — it is now read-only. You can still download a PDF below. The administrator can return it to you for corrections.');
 }
 

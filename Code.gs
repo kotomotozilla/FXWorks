@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-02.1';
+const BUILD = '2026-08-08.2';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -40,7 +40,7 @@ const HEADERS = {
                 'InsuranceAmount', 'RestrictedTerritories', 'RateAmount', 'RateBasis',
                 'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope',
                 'OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty',
-                'ExternalForm', 'ExtractedAt'],
+                'OptPayoutCurrency', 'ExternalForm', 'ExtractedAt'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
   attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt'],
@@ -605,7 +605,7 @@ var DOC_TEXT_FIELDS = ['TemplateType', 'OurRole', 'OurRequisiteID', 'TheirRequis
   'CureDays', 'NoticeDays', 'TermYears', 'WarrantyPeriod', 'PenaltyDelayPercent', 'PenaltyFailurePercent',
   'PenaltyCapPercent', 'InsuranceAmount', 'RestrictedTerritories', 'RateAmount', 'RateBasis',
   'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope', 'ExtractedAt'];
-var DOC_FLAGS = ['OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty', 'ExternalForm'];
+var DOC_FLAGS = ['OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty', 'OptPayoutCurrency', 'ExternalForm'];
 
 function adminSaveContractDoc_(d) {
   requireAdmin_(d);
@@ -862,6 +862,7 @@ function adminGetReport_(d) {
   var a = findRow_(SHEETS.assignments, 'AssignmentID', d.assignmentId);
   if (!a) return { ok: false, error: 'Report not found' };
   var items = readAll_(SHEETS.entries).filter(function (r) { return r.AssignmentID === a.AssignmentID; });
+  a.AllowPayoutCurrency = payoutAllowed_(a) ? 'yes' : 'no';
   return { ok: true, assignment: a, items: items };
 }
 
@@ -938,6 +939,20 @@ function adminInviteCounterparty_(d) {
 }
 
 var PAYOUT_CURRENCIES = ['EUR', 'USD', 'AED', 'SGD'];
+// The contractor may pick a payout currency when their OWN contract with us (an ICA)
+// allows it — not the contract the project happens to be linked to.
+function payoutAllowed_(a) {
+  var cp = findRow_(SHEETS.counterparties, 'Email', normEmail_(a.EmployeeEmail));
+  if (!cp) return false;
+  var allowed = false;
+  readAll_(SHEETS.contracts).forEach(function (c) {
+    if (allowed) return;
+    if (String(c.CounterpartyID) !== String(cp.CounterpartyID)) return;
+    if (trim_(c.TemplateType) !== 'ica') return;
+    if (truthy_(c.OptPayoutCurrency)) allowed = true;
+  });
+  return allowed;
+}
 function payoutCur_(c) { c = trim_(c).toUpperCase(); return PAYOUT_CURRENCIES.indexOf(c) >= 0 ? c : ''; }
 
 // Countersigning the report = acceptance and the trigger for payment (ICA clauses 3.2-3.4).
@@ -987,6 +1002,7 @@ function employeeList_(d) {
   var rows = readAll_(SHEETS.assignments).filter(function (r) {
     return normEmail_(r.EmployeeEmail) === email && r.Status !== 'recalled';
   });
+  rows.forEach(function (r) { r.AllowPayoutCurrency = payoutAllowed_(r) ? 'yes' : 'no'; });
   return { ok: true, email: email, assignments: rows };
 }
 function employeeGet_(d) {
@@ -996,6 +1012,7 @@ function employeeGet_(d) {
   if (!a || normEmail_(a.EmployeeEmail) !== normEmail_(d.email)) return { ok: false, error: 'No access to this report' };
   if (a.Status === 'recalled') return { ok: false, error: 'This task was recalled by the admin' };
   var items = readAll_(SHEETS.entries).filter(function (r) { return r.AssignmentID === a.AssignmentID; });
+  a.AllowPayoutCurrency = payoutAllowed_(a) ? 'yes' : 'no';
   return { ok: true, assignment: a, items: items };
 }
 function employeeWrite_(d, finalize) {
@@ -1020,7 +1037,7 @@ function employeeWrite_(d, finalize) {
   });
   var sub = trim_(d.submittedDate);
   var upd = { ReportedHours: hours, ReportedAmount: amount, SubmittedAt: sub, UpdatedAt: now };
-  if (d.payoutCurrency !== undefined) upd.PayoutCurrency = payoutCur_(d.payoutCurrency);
+  if (d.payoutCurrency !== undefined && payoutAllowed_(a)) upd.PayoutCurrency = payoutCur_(d.payoutCurrency);
   if (finalize) { upd.Status = 'submitted'; if (!sub) upd.SubmittedAt = now.slice(0, 10); } else { upd.Status = 'draft'; }
   updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
 
