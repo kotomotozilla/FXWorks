@@ -19,13 +19,13 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.5';
+const BUILD = '2026-08-08.7';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
-  counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'CreatedAt'],
+  counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
                 'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
@@ -40,14 +40,15 @@ const HEADERS = {
                 'InsuranceAmount', 'RestrictedTerritories', 'RateAmount', 'RateBasis',
                 'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope',
                 'OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty',
-                'OptPayoutCurrency', 'ExternalForm', 'ExtractedAt'],
+                'OptPayoutCurrency', 'ExternalForm', 'ExtractedAt', 'PricingType'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
   attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt'],
   projects:    ['ProjectID', 'Name', 'Customer', 'CounterpartyID', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
-                'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt', 'PayoutCurrency', 'AcceptedBy', 'AcceptedAt'],
+                'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt', 'PayoutCurrency', 'AcceptedBy', 'AcceptedAt',
+                'ContractID', 'RateSource', 'PricingType'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
 
@@ -164,6 +165,7 @@ function adminSaveCounterparty_(d) {
   var pwd = trim_(d.password), rate = num_(d.rate);
   var currency = CURRENCIES.indexOf(trim_(d.currency)) >= 0 ? trim_(d.currency) : 'USD';
   var phone = trim_(d.phone), address = trim_(d.address), id = trim_(d.id);
+  var rateContractId = trim_(d.rateContractId);
 
   if (access === 'yes' && !isEmail_(email)) return { ok: false, error: 'Reporting access requires a valid email' };
   if (email) {
@@ -177,7 +179,7 @@ function adminSaveCounterparty_(d) {
     var rec = findRow_(SHEETS.counterparties, 'CounterpartyID', id);
     if (!rec) return { ok: false, error: 'Counterparty not found' };
     var oldEmail = normEmail_(rec.Email);
-    var upd = { Name: name, Type: type, Address: address, Email: email, Phone: phone, HasReportingAccess: access, Rate: rate, Currency: currency };
+    var upd = { Name: name, Type: type, Address: address, Email: email, Phone: phone, HasReportingAccess: access, Rate: rate, Currency: currency, RateContractID: rateContractId };
     if (pwd) upd.Password = pwd;                 // blank keeps the old password
     updateRow_(SHEETS.counterparties, 'CounterpartyID', id, upd);
     // Reporting link is by email — cascade email/name changes onto assignments and entries.
@@ -192,7 +194,7 @@ function adminSaveCounterparty_(d) {
 
   appendRow_(SHEETS.counterparties, {
     CounterpartyID: Utilities.getUuid(), Name: name, Type: type, Address: address, Email: email, Phone: phone,
-    Password: pwd, HasReportingAccess: access, Rate: rate, Currency: currency, CreatedAt: new Date().toISOString()
+    Password: pwd, HasReportingAccess: access, Rate: rate, Currency: currency, RateContractID: rateContractId, CreatedAt: new Date().toISOString()
   });
   return { ok: true };
 }
@@ -393,7 +395,7 @@ function contractFields_(d) {
     Description: trim_(d.description), CounterpartyID: trim_(d.counterpartyId),
     Direction: (trim_(d.direction) === 'outgoing') ? 'outgoing' : 'incoming',
     SignDate: trim_(d.signDate), StartDate: trim_(d.startDate), EndDate: trim_(d.endDate),
-    Amount: num_(d.amount), Currency: currency, ParentContractID: trim_(d.parentContractId)
+    Amount: num_(d.amount), Currency: currency, PricingType: (trim_(d.pricingType)==='hourly'?'hourly':'lump'), ParentContractID: trim_(d.parentContractId)
   };
 }
 function adminCreateContract_(d) {
@@ -409,7 +411,7 @@ function adminCreateContract_(d) {
   var row = {
     ContractID: Utilities.getUuid(), Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID,
     Direction: f.Direction, SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate,
-    Amount: f.Amount, Currency: f.Currency, AmountUSD: '', FxRate: '', FxAsOf: '',
+    Amount: f.Amount, Currency: f.Currency, PricingType: f.PricingType, AmountUSD: '', FxRate: '', FxAsOf: '',
     ParentContractID: f.ParentContractID, CreatedAt: new Date().toISOString()
   };
   var fx = computeFx_(f.Currency, f.Amount, f.SignDate);
@@ -430,7 +432,7 @@ function adminUpdateContract_(d) {
     Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID, Direction: f.Direction,
     SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate, Amount: f.Amount, Currency: f.Currency,
     AmountUSD: cfx.AmountUSD, FxRate: cfx.FxRate, FxAsOf: cfx.FxAsOf,
-    ParentContractID: f.ParentContractID
+    PricingType: f.PricingType, ParentContractID: f.ParentContractID
   });
   return { ok: true };
 }
@@ -826,13 +828,27 @@ function adminAddAssignment_(d) {
   if (String(trim_(cp.HasReportingAccess)).toLowerCase() !== 'yes') return { ok: false, error: 'This counterparty has no reporting access' };
 
   // Multiple reports per (project × team member) are allowed; they are distinguished by Title.
+  // The rate comes either from one of the counterparty's contracts or from the counterparty card.
+  var contractId = trim_(d.contractId), rateSource = 'counterparty', pricing = 'hourly';
+  var rate = num_(cp.Rate);
   var currency = CURRENCIES.indexOf(trim_(cp.Currency)) >= 0 ? trim_(cp.Currency) : 'USD';
+  if (contractId) {
+    var ct = findRow_(SHEETS.contracts, 'ContractID', contractId);
+    if (!ct) return { ok: false, error: 'Contract not found' };
+    if (String(ct.CounterpartyID) !== String(cp.CounterpartyID)) return { ok: false, error: 'That contract belongs to another counterparty' };
+    rateSource = 'contract';
+    pricing = (trim_(ct.PricingType) === 'lump') ? 'lump' : 'hourly';
+    currency = CURRENCIES.indexOf(trim_(ct.Currency)) >= 0 ? trim_(ct.Currency) : currency;
+    rate = num_(ct.Amount);          // hourly: rate per hour; lump: the total contract amount
+  }
   var comment = trim_(d.comment), title = trim_(d.title), now = new Date().toISOString();
   var row = {
     AssignmentID: Utilities.getUuid(), ProjectID: p.ProjectID, ProjectName: p.Name, Customer: p.Customer, ProjectDescription: p.Description,
-    EmployeeEmail: email, EmployeeName: cp.Name || '', Title: title, Currency: currency, Rate: num_(cp.Rate),
-    Comment: comment, LastNotifiedComment: comment, Status: 'released', ReportedHours: '', ReportedAmount: '',
-    ReleasedAt: now, SubmittedAt: '', UpdatedAt: now, CreatedAt: now
+    EmployeeEmail: email, EmployeeName: cp.Name || '', Title: title, Currency: currency, Rate: (pricing === 'lump' ? '' : rate),
+    Comment: comment, LastNotifiedComment: comment, Status: 'released',
+    ReportedHours: '', ReportedAmount: (pricing === 'lump' ? rate : ''),
+    ReleasedAt: now, SubmittedAt: '', UpdatedAt: now, CreatedAt: now,
+    ContractID: contractId, RateSource: rateSource, PricingType: pricing
   };
   appendRow_(SHEETS.assignments, row);
   notifyEmployee_(row);            // newly added -> always notify
@@ -904,8 +920,11 @@ function adminSaveReport_(d) {
   var a = findRow_(SHEETS.assignments, 'AssignmentID', d.assignmentId);
   if (!a) return { ok: false, error: 'Report not found' };
   var activities = (Array.isArray(d.activities) ? d.activities : []).map(function (x) { return trim_(x); }).filter(function (x) { return x; });
-  var hours = num_(d.hours);
-  var rate = num_(a.Rate), amount = round2_(hours * rate), now = new Date().toISOString();
+  var lump = (trim_(a.PricingType) === 'lump');
+  var hours = lump ? '' : num_(d.hours);
+  var rate = num_(a.Rate);
+  var amount = lump ? ((a.ReportedAmount === '' || a.ReportedAmount == null) ? '' : num_(a.ReportedAmount)) : round2_(num_(d.hours) * rate);
+  var now = new Date().toISOString();
   deleteRowsWhere_(SHEETS.entries, 'AssignmentID', a.AssignmentID);
   activities.forEach(function (desc) {
     appendRow_(SHEETS.entries, {
@@ -1057,10 +1076,14 @@ function employeeWrite_(d, finalize) {
   if (a.Status === 'submitted') return { ok: false, error: 'Report already submitted — it is read-only. Ask the admin to return it for correction.' };
 
   var activities = (Array.isArray(d.activities) ? d.activities : []).map(function (x) { return trim_(x); }).filter(function (x) { return x; });
-  var hours = num_(d.hours);
-  if (finalize && (!activities.length || hours <= 0)) return { ok: false, error: 'Add at least one activity and the total hours' };
+  var lump = (trim_(a.PricingType) === 'lump');
+  var hours = lump ? '' : num_(d.hours);
+  if (finalize && !activities.length) return { ok: false, error: 'Add at least one activity' };
+  if (finalize && !lump && num_(d.hours) <= 0) return { ok: false, error: 'Enter the total hours' };
 
-  var rate = num_(a.Rate), amount = round2_(hours * rate), now = new Date().toISOString();
+  var rate = num_(a.Rate);
+  var amount = lump ? ((a.ReportedAmount === '' || a.ReportedAmount == null) ? '' : num_(a.ReportedAmount)) : round2_(num_(d.hours) * rate);
+  var now = new Date().toISOString();
   deleteRowsWhere_(SHEETS.entries, 'AssignmentID', a.AssignmentID);
   activities.forEach(function (desc) {
     appendRow_(SHEETS.entries, {

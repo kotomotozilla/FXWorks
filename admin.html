@@ -197,9 +197,12 @@
   <div class="sep pj-only"></div>
   <h2 style="font-size:15px" class="pj-only">Add team member</h2>
   <div class="row pj-only" style="align-items:end">
-    <div style="flex:2"><label>Team member</label><select id="pm_addEmp"></select></div>
+    <div style="flex:2"><label>Team member</label><select id="pm_addEmp" onchange="pmContractsFor()"></select></div>
     <div style="flex:2"><label>Report title (optional)</label><input id="pm_addTitle" placeholder="e.g. May 2026 / Phase 1"></div>
   </div>
+  <div style="height:8px" class="pj-only"></div>
+  <div class="pj-only"><label>Rate / contract for this report</label><select id="pm_addContract"></select>
+    <p class="muted" style="font-size:11px;margin:4px 0 0">Pick one of the counterparty's contracts, or "Counterparty rate" for non-contractual work. A lump-sum contract means the report has no hours.</p></div>
   <div style="height:8px" class="pj-only"></div>
   <div class="pj-only"><label>Comment</label><textarea id="pm_addComment" placeholder="What this team member must cover"></textarea></div>
   <div style="height:10px" class="pj-only"></div>
@@ -240,6 +243,7 @@
   <div id="cm_reporting" class="hidden">
     <div style="height:8px"></div>
     <div class="row">
+      <div style="flex:2"><label>Rate from contract</label><select id="cm_rateContract" onchange="cmRateFromContract()"></select></div>
       <div><label>Rate per hour</label><input id="cm_rate" type="number" min="0" step="0.01"></div>
       <div style="max-width:150px"><label>Currency</label>
         <select id="cm_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
@@ -368,7 +372,9 @@
   </div>
   <div style="height:8px"></div>
   <div class="row">
-    <div><label>Amount</label><input id="ct_amount" type="number" min="0" step="0.01" placeholder="0"></div>
+    <div><label>Amount / Rate</label><input id="ct_amount" type="number" min="0" step="0.01" placeholder="0"></div>
+    <div style="max-width:170px"><label>Pricing</label>
+      <select id="ct_pricing"><option value="lump">Lump sum (total)</option><option value="hourly">Hourly rate</option></select></div>
     <div style="max-width:150px"><label>Currency</label>
       <select id="ct_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
     <div style="flex:2"><label>General (parent) contract — empty for a general contract</label><select id="ct_parent"></select></div>
@@ -560,7 +566,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.5';
+const BUILD = '2026-08-08.7';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -725,12 +731,27 @@ function newCounterparty(){
   CARD_CP = '';
   $('cpm_title').textContent = 'New counterparty';
   ['cm_name','cm_email','cm_phone','cm_address','cm_rate','cm_pass'].forEach(id=>$(id).value='');
+  if($('cm_rateContract')) $('cm_rateContract').innerHTML = '<option value="">— not linked to a contract —</option>';
   $('cm_type').value='individual'; $('cm_currency').value='USD'; $('cm_access').checked=false;
   $('cm_save').textContent='Create counterparty';
   $('cm_invite').style.display='none';
   document.querySelectorAll('#cpModal .cp-only').forEach(el=>el.classList.add('hidden'));
   cmAccessToggle(); notice('cm_err','','');
   $('cpModal').classList.remove('hidden');
+}
+function cpContractOptions(cpId, sel){
+  const list = CONTRACTS.filter(c=>String(c.CounterpartyID)===String(cpId));
+  return '<option value="">— not linked to a contract —</option>'+list.map(c=>{
+    const kind = (c.PricingType==='hourly') ? 'hourly' : 'lump sum';
+    return `<option value="${esc(c.ContractID)}" ${String(sel)===String(c.ContractID)?'selected':''}>${esc(c.Number)} · ${kind}${(c.Amount!==''&&c.Amount!=null)?' · '+cur(c.Currency)+money(c.Amount):''}</option>`;
+  }).join('');
+}
+function cmRateFromContract(){
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String($('cm_rateContract').value));
+  if(!c) return;
+  if(c.Amount!==''&&c.Amount!=null) $('cm_rate').value = c.Amount;
+  if(['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0) $('cm_currency').value = c.Currency;
+  notice('cm_err','info','Rate taken from '+esc(c.Number)+' — you can still edit it.');
 }
 function cmAccessToggle(){ $('cm_reporting').classList.toggle('hidden', !$('cm_access').checked); }
 function openCounterparty(id){
@@ -745,6 +766,7 @@ function openCounterparty(id){
   $('cm_address').value = c.Address||'';
   const access = String(c.HasReportingAccess).toLowerCase()==='yes';
   $('cm_access').checked = access;
+  $('cm_rateContract').innerHTML = cpContractOptions(id, c.RateContractID||'');
   $('cm_rate').value = (c.Rate===''||c.Rate==null)?'':c.Rate;
   $('cm_currency').value = (['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0)?c.Currency:'USD';
   $('cm_pass').value='';
@@ -766,7 +788,7 @@ async function saveCounterpartyCard(){
   const b=$('cm_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
     await api('save_counterparty', { id:CARD_CP, name, type:$('cm_type').value, email, phone:$('cm_phone').value.trim(),
-      address:$('cm_address').value.trim(), hasAccess:access, password:$('cm_pass').value, rate:$('cm_rate').value, currency:$('cm_currency').value });
+      address:$('cm_address').value.trim(), hasAccess:access, password:$('cm_pass').value, rate:$('cm_rate').value, currency:$('cm_currency').value, rateContractId:($('cm_rateContract')?$('cm_rateContract').value:'') });
     await loadCounterparties();
     if(!CARD_CP){
       const created = COUNTERPARTIES.find(c=>(c.Name||'')===name);
@@ -1225,6 +1247,7 @@ function ctFillForm(c){
   $('ct_end').value   = c && c.EndDate   ? fmtDate(c.EndDate)   : '';
   $('ct_amount').value = (c && c.Amount!==''&&c.Amount!=null) ? c.Amount : '';
   $('ct_currency').value = (c && ['USD','EUR','AED','SGD'].indexOf(c.Currency)>=0) ? c.Currency : 'USD';
+  $('ct_pricing').value = (c && c.PricingType==='hourly') ? 'hourly' : 'lump';
   $('ct_parent').innerHTML = ctParentOptions(c ? c.ParentContractID : '', c ? c.ContractID : '');
   $('ct_desc').value = c ? (c.Description||'') : '';
   notice('ctm_err','','');
@@ -1240,8 +1263,9 @@ function newContract(){
   $('ctm_usd').textContent = '';
   $('ctm_sections').classList.add('hidden');
   $('ctm_ext').classList.remove('hidden');
+  EXTRACTED_EXTRAS=null;
   togglePreview();
-  $('ct_externalForm').checked=false; PENDING_DOCS=[];
+  $('ct_externalForm').checked=false; PENDING_DOCS=[]; EXTRACTED_EXTRAS=null;
   if($('ext_file')) $('ext_file').value='';
   notice('ext_msg','','');
   extFormToggle();
@@ -1283,7 +1307,7 @@ async function saveContract(){
   const b=$('ct_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   const payload = { id:EDIT_CT, number:$('ct_number').value.trim(), counterpartyId:$('ct_cp').value, direction:$('ct_dir').value,
     signDate:$('ct_sign').value, startDate:$('ct_start').value, endDate:$('ct_end').value,
-    amount:$('ct_amount').value, currency:$('ct_currency').value, parentContractId:$('ct_parent').value, description:$('ct_desc').value.trim() };
+    amount:$('ct_amount').value, currency:$('ct_currency').value, pricingType:$('ct_pricing').value, parentContractId:$('ct_parent').value, description:$('ct_desc').value.trim() };
   try{
     const r = await api(EDIT_CT?'update_contract':'create_contract', payload);
     const savedId = EDIT_CT || (r.contract && r.contract.ContractID);
@@ -1300,7 +1324,14 @@ async function saveContract(){
     }
     await loadContracts();
     const id = EDIT_CT || (r.contract && r.contract.ContractID);
-    if(id) openContract(id, true);
+    if(id){
+      openContract(id, true);
+      if(EXTRACTED_EXTRAS){
+        setTimeout(()=>{ const f = applyExtrasToDoc(EXTRACTED_EXTRAS);
+          if(f.length) notice('dc_err','ok','Filled from the document: '+f.join(', ')+'. Anything not recognised is left empty — press Save document settings when checked.');
+        }, 400);
+      }
+    }
     notice('ctm_err','ok','Contract saved.');
   }catch(e){ notice('ctm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
@@ -1310,7 +1341,7 @@ async function saveContract(){
 function extFormToggle(){
   const on = $('ct_externalForm').checked, creating = !EDIT_CT;
   $('ext_panel').classList.toggle('hidden', !on);
-  $('ctm_docwrap').classList.toggle('hidden', on || creating);
+  $('ctm_docwrap').classList.toggle('hidden', creating);
   $('ext_existing').classList.toggle('hidden', creating);
   $('ext_new').classList.toggle('hidden', !creating);
 }
@@ -1323,6 +1354,19 @@ function extFillFields(f){
   if(f.startDate){ $('ct_start').value=f.startDate; got.push('start date'); }
   if(f.endDate){ $('ct_end').value=f.endDate; got.push('end date'); }
   return got;
+}
+const EXTRA_TO_DC = { paymentDays:'dc_paymentDays', acceptanceDays:'dc_acceptanceDays', remarksDays:'dc_remarksDays',
+  noticeDays:'dc_noticeDays', warrantyPeriod:'dc_warrantyPeriod', governingLaw:'dc_governingLaw',
+  jurisdictionPlace:'dc_jurisdictionPlace', arbitrationBody:'dc_arbitrationBody' };
+function applyExtrasToDoc(x){
+  if(!x) return [];
+  const filled=[];
+  Object.keys(EXTRA_TO_DC).forEach(k=>{
+    const el = $(EXTRA_TO_DC[k]);
+    if(el && x[k]!==undefined && x[k]!=='' && x[k]!==null){ el.value = x[k]; filled.push(EXTRA_LABEL[k]||k); }
+  });
+  if(x.warrantyPeriod && $('dc_optWarranty')) $('dc_optWarranty').checked = true;
+  return filled;
 }
 const EXTRA_LABEL = { paymentDays:'Payment days', acceptanceDays:'Acceptance days', remarksDays:'Days for remarks',
   noticeDays:'Notice days', warrantyPeriod:'Warranty period', governingLaw:'Governing law',
@@ -1374,10 +1418,12 @@ async function extractFromDoc(){
   try{
     const r = await api('extract_contract',{attachmentIds:ids});
     const got = extFillFields(r.fields||{});
-    showExtras(r.extras||{});
+    EXTRACTED_EXTRAS = r.extras||{};
+    showExtras(EXTRACTED_EXTRAS);
+    const dcFilled = applyExtrasToDoc(EXTRACTED_EXTRAS);
     previewSelected();
     const notes = (r.notes||[]).map(n=>esc(n)).join('<br>');
-    notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values above, correct anything wrong, then press <b>Save contract</b>. You can correct any field at any time.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
+    notice('ext_msg','ok','Recognised: '+got.join(', ')+(dcFilled.length?'; document settings filled: '+dcFilled.join(', '):'')+'. Check everything, then press <b>Save contract</b> and <b>Save document settings</b>. Anything not recognised is left empty.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
   }catch(e){ notice('ext_msg','err', esc(e.message)+' — you can still type the details in by hand.'); }
   finally{ b.disabled=false; b.textContent='Read data from document'; }
 }
@@ -1406,7 +1452,7 @@ async function extractFromUpload(){
       const r = await api('extract_upload',{fileName:f.name, mimeType:f.type||'application/octet-stream', dataBase64:b64, docType});
       PENDING_DOCS.push({ driveFileId:r.driveFileId, url:r.url, fileName:r.fileName, docType });
       parts.push({ docType, fields:r.fields||{} });
-      if(i===0){ showExtras(r.extras||{}); showPreview(r.driveFileId); }
+      if(i===0){ EXTRACTED_EXTRAS = r.extras||{}; showExtras(EXTRACTED_EXTRAS); showPreview(r.driveFileId); }
       notes.push(f.name+' → '+(Object.keys(r.fields||{}).length?Object.keys(r.fields).join(', '):(r.warning||'nothing recognised')));
     }
     const got = extFillFields(mergeFieldsClient(parts));
@@ -1474,7 +1520,8 @@ async function openContractDoc(c){
   await loadReqsFor([our, theirs]);
   const tpl = c.TemplateType || 'b2b';
   $('dc_templateType').value = tpl;
-  const def = DC_DEFAULTS[tpl] || {};
+  const external = String(c.ExternalForm||'').toLowerCase()==='yes';
+  const def = external ? {} : (DC_DEFAULTS[tpl] || {});   // external contracts: no defaults, only what was recognised
   DC_TEXT.forEach(f=>{
     const el = $('dc_'+f); if(!el) return;
     let v = c[DC_KEY(f)];
@@ -1519,6 +1566,7 @@ function openContract(id, keepOpen){
     : '<span class="muted">USD equivalent not calculated yet.</span>';
   $('ctm_sections').classList.remove('hidden');
   $('ctm_ext').classList.remove('hidden');
+  EXTRACTED_EXTRAS=null;
   togglePreview();
   $('ct_externalForm').checked = String(c.ExternalForm||'').toLowerCase()==='yes';
   extLoadSources(id);
@@ -1651,6 +1699,7 @@ function renderProjectModal(){
         <div><div class="nm">${esc(a.EmployeeName||a.EmployeeEmail)} <span class="muted" style="font-weight:400">· ${a.Title?esc(a.Title):('report '+fmtDate(a.CreatedAt))}</span></div><div class="em">${esc(a.EmployeeEmail)} · ${s}${money(a.Rate)}/h</div></div>
         <span class="tag ${esc(a.Status)}">${statusEn(a.Status)}</span>
       </div>
+      <div class="muted" style="font-size:12px">${a.ContractID?('Contract: '+esc(ctNumber(a.ContractID))+(a.PricingType==='lump'?' · lump sum':' · hourly')):'Counterparty rate · non-contractual'}</div>
       ${a.AcceptedBy?`<div class="muted" style="font-size:12px">✓ Accepted by ${esc(a.AcceptedBy)}${a.AcceptedAt?' on '+esc(fmtDate(a.AcceptedAt)):''}${a.PayoutCurrency?' · payout in '+esc(a.PayoutCurrency):''}</div>`:(a.PayoutCurrency?`<div class="muted" style="font-size:12px">Payout currency: ${esc(a.PayoutCurrency)}</div>`:'')}
       ${(a.ReportedHours!==''&&a.ReportedHours!=null)?`<div class="muted" style="margin-bottom:4px">Reported: ${hrs(a.ReportedHours)} h · ${s}${money(a.ReportedAmount||0)}</div>`:''}
       <div class="muted" style="margin-bottom:8px">Submitted: ${a.SubmittedAt?fmtDate(a.SubmittedAt):'—'}</div>
@@ -1671,6 +1720,7 @@ function renderProjectModal(){
     ? '<option value="">— select —</option>'+rep.map(c=>`<option value="${esc(c.Email)}">${esc(c.Name||c.Email)} — ${esc(c.Email)}</option>`).join('')
     : '<option value="">No counterparties with reporting access</option>';
   $('pm_addComment').value=''; if($('pm_addTitle')) $('pm_addTitle').value='';
+  pmContractsFor();
 }
 async function refreshModal(){ const r = await api('get_project',{projectId:CURRENT.project.ProjectID}); CURRENT=r; renderProjectModal(); loadProjects(); }
 
@@ -1698,11 +1748,26 @@ async function deleteProject(){
   try{ await api('delete_project',{projectId:CURRENT.project.ProjectID}); closeModal('projModal'); loadProjects(); }
   catch(e){ alert(e.message); }
 }
+function pmContractsFor(){
+  const email = ($('pm_addEmp').value||'').toLowerCase();
+  const cp = COUNTERPARTIES.find(c=>String(c.Email||'').toLowerCase()===email);
+  const sel = $('pm_addContract'); if(!sel) return;
+  const rate = cp && cp.Rate!=='' && cp.Rate!=null ? ' ('+cur(cp.Currency)+money(cp.Rate)+'/h)' : '';
+  let html = `<option value="">Counterparty rate${esc(rate)} — non-contractual work</option>`;
+  if(cp){
+    html += CONTRACTS.filter(c=>String(c.CounterpartyID)===String(cp.CounterpartyID)).map(c=>{
+      const kind = (c.PricingType==='hourly') ? 'hourly' : 'lump sum';
+      const def = (String(cp.RateContractID||'')===String(c.ContractID)) ? ' selected' : '';
+      return `<option value="${esc(c.ContractID)}"${def}>${esc(c.Number)} · ${kind}${(c.Amount!==''&&c.Amount!=null)?' · '+cur(c.Currency)+money(c.Amount):''}</option>`;
+    }).join('');
+  }
+  sel.innerHTML = html;
+}
 async function addAssignment(){
   notice('pm_err','',''); const email=$('pm_addEmp').value;
   if(!email){ notice('pm_err','err','Select a team member.'); return; }
   const b=$('pm_addBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  try{ await api('add_assignment',{projectId:CURRENT.project.ProjectID, email, title:$('pm_addTitle').value.trim(), comment:$('pm_addComment').value.trim()}); await refreshModal(); }
+  try{ await api('add_assignment',{projectId:CURRENT.project.ProjectID, email, title:$('pm_addTitle').value.trim(), contractId:($('pm_addContract')?$('pm_addContract').value:''), comment:$('pm_addComment').value.trim()}); await refreshModal(); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.innerHTML='Add &amp; notify'; }
 }
@@ -1772,6 +1837,9 @@ async function viewReport(aid){
     const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes' || !!a.PayoutCurrency;
     $('rm_payout').parentElement.style.display = allowCur ? '' : 'none';
     $('rm_payout').value = a.PayoutCurrency || '';
+    const lump = a.PricingType==='lump';
+    const hw = $('rm_hours') ? $('rm_hours').closest('div') : null;
+    if(hw) hw.style.display = lump ? 'none' : '';
     rmRecalc();
     $('repModal').classList.remove('hidden');
   }catch(e){ alert(e.message); }
@@ -1855,7 +1923,7 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
     ${a.ProjectDescription ? `<tr><td class="label">Project description:</td><td>${esc(a.ProjectDescription)}</td></tr>` : ''}
     <tr><td class="label" colspan="2">A brief description and a list of completed tasks for the project:</td></tr>
     <tr><td colspan="2">${list}</td></tr>
-    <tr><td class="label">The total number of hours spent:</td><td>${hrs(hours)}</td></tr>
+    ${a.PricingType==='lump' ? '' : `<tr><td class="label">The total number of hours spent:</td><td>${hrs(hours)}</td></tr>`}
     <tr><td class="label">Amount due:</td><td>${amountDue}</td></tr>
     <tr><td class="label">Currency elected for payment:</td><td>${a.PayoutCurrency ? esc(a.PayoutCurrency) : 'Base currency of the contract'}</td></tr>
   </table>
