@@ -438,7 +438,7 @@
   <div style="height:12px"></div>
   <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Payment</p>
   <div class="row">
-    <div style="flex:2"><label>Payment term</label>
+    <div class="b2b-only" style="flex:2 1 220px"><label>Payment term</label>
       <select id="dc_paymentOption" onchange="dcPayChange()">
         <option value="postpay">After acceptance</option>
         <option value="after_warranty">After warranty period</option>
@@ -446,15 +446,13 @@
         <option value="prepay_100">100% advance</option>
         <option value="milestone">By milestones</option>
       </select></div>
-    <div style="flex:1 1 130px"><label>Payment days</label><input id="dc_paymentDays" type="number" min="0"></div>
-    <div style="flex:1 1 130px"><label>Advance %</label><input id="dc_advancePercent" type="number" min="0" max="100"></div>
-    <div style="flex:1 1 130px"><label>Advance days</label><input id="dc_advanceDays" type="number" min="0"></div>
+    <div style="flex:1 1 150px"><label>Payment days</label><input id="dc_paymentDays" type="number" min="0"></div>
+    <div class="b2b-only" style="flex:1 1 130px"><label>Advance %</label><input id="dc_advancePercent" type="number" min="0" max="100"></div>
+    <div class="b2b-only" style="flex:1 1 130px"><label>Advance days</label><input id="dc_advanceDays" type="number" min="0"></div>
   </div>
   <div id="dc_icaPay" class="hidden">
     <div style="height:8px"></div>
     <div class="row">
-      <div><label>Invoice trigger</label>
-        <select id="dc_invoiceTrigger"><option value="on_completion">On completion</option><option value="monthly">Monthly</option><option value="per_milestone">Per milestone</option></select></div>
       <div><label>Payment basis</label>
         <select id="dc_paymentBasis"><option value="hourly">Hourly</option><option value="fixed">Fixed fee</option><option value="milestone">Milestones</option></select></div>
       <div><label>Report frequency</label>
@@ -462,9 +460,9 @@
     </div>
     <div style="height:8px"></div>
     <div class="row">
-      <div><label>Rate</label><input id="dc_rateAmount" type="number" min="0" step="0.01"></div>
       <div><label>Rate basis</label><input id="dc_rateBasis" placeholder="per hour"></div>
       <div><label>Term (years)</label><input id="dc_termYears" type="number" min="0"></div>
+      <div style="flex:2 1 200px"></div>
     </div>
     <div style="height:8px"></div>
     <div class="row">
@@ -505,17 +503,17 @@
   <div style="height:12px"></div>
   <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Optional blocks</p>
   <div id="dc_flags" style="display:flex;flex-wrap:wrap;gap:14px;font-size:14px">
-    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optAcceptanceAct" style="width:auto"> Acceptance Act</label>
-    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optPenalties" style="width:auto"> Penalties</label>
-    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optUsageRights" style="width:auto"> Usage rights</label>
-    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optInsurance" style="width:auto"> Insurance</label>
-    <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optDataSecurity" style="width:auto"> Data security</label>
+    <label class="b2b-only" style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optAcceptanceAct" style="width:auto"> Acceptance Act</label>
+    <label class="b2b-only" style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optPenalties" style="width:auto"> Penalties</label>
+    <label class="b2b-only" style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optUsageRights" style="width:auto"> Usage rights</label>
+    <label class="ica-only" style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optInsurance" style="width:auto"> Insurance</label>
+    <label class="ica-only" style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optDataSecurity" style="width:auto"> Data security</label>
     <label style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optWarranty" style="width:auto" onchange="dcPayChange()"> Warranty</label>
     <label id="dc_payoutWrap" style="display:flex;align-items:center;gap:6px;width:auto"><input type="checkbox" id="dc_optPayoutCurrency" style="width:auto"> Contractor may elect payment currency (EUR/USD/AED/SGD)</label>
   </div>
   <div class="row" id="dc_warrantyWrap" style="margin-top:8px">
     <div><label>Warranty period</label><input id="dc_warrantyPeriod" placeholder="1.5 (one and a half) months"></div>
-    <div><label>Insurance amount</label><input id="dc_insuranceAmount" type="number" min="0"></div>
+    <div class="ica-only"><label>Insurance amount</label><input id="dc_insuranceAmount" type="number" min="0"></div>
   </div>
   <p class="muted" style="margin-top:12px">These settings are saved together with the contract — press <b>Save contract</b> above.</p>
   </div>
@@ -568,7 +566,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.15';
+const BUILD = '2026-08-08.16';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1502,7 +1500,7 @@ const DC_TEXT = ['ourRequisiteId','theirRequisiteId','subject','paymentOption','
   'advancePercent','advanceDays','governingLaw','jurisdictionPlace','arbitrationBody','arbitrationSeat','remarksDays',
   'acceptanceDays','evaluationDays','disputeDays','cureDays','noticeDays','termYears','warrantyPeriod',
   'penaltyDelayPercent','penaltyFailurePercent','penaltyCapPercent','insuranceAmount','restrictedTerritories',
-  'rateAmount','rateBasis','invoiceTrigger','paymentBasis','reportFrequency','completionDate','pMName','sowScope'];
+  'rateBasis','paymentBasis','reportFrequency','completionDate','pMName','sowScope'];
 const DC_FLAGS = ['optAcceptanceAct','optPenalties','optUsageRights','optInsurance','optDataSecurity','optWarranty','optPayoutCurrency'];
 const DC_KEY = f => f.charAt(0).toUpperCase()+f.slice(1);
 const DC_DEFAULTS = {
@@ -1510,7 +1508,7 @@ const DC_DEFAULTS = {
          penaltyDelayPercent:0.1, penaltyFailurePercent:10, penaltyCapPercent:20,
          governingLaw:'Switzerland', jurisdictionPlace:'Geneva, Switzerland', warrantyPeriod:'1.5 (one and a half) months' },
   ica: { paymentDays:45, disputeDays:20, evaluationDays:10, noticeDays:60, termYears:2, paymentOption:'postpay',
-         invoiceTrigger:'on_completion', paymentBasis:'hourly', reportFrequency:'on_completion', rateBasis:'per hour',
+         paymentBasis:'hourly', reportFrequency:'on_completion', rateBasis:'per hour',
          governingLaw:'Hong Kong SAR', arbitrationBody:'Hong Kong International Arbitration Centre (HKIAC)',
          arbitrationSeat:'Hong Kong', restrictedTerritories:'the Russian Federation and the Republic of Belarus' }
 };
@@ -1539,6 +1537,8 @@ function dcTemplateChange(){
   $('dc_arbWrap').classList.toggle('hidden', !ica);
   $('dc_seatWrap').classList.toggle('hidden', !ica);
   $('dc_jurWrap').classList.toggle('hidden', ica);
+  document.querySelectorAll('#ctModal .b2b-only').forEach(el=>el.classList.toggle('hidden', ica));
+  document.querySelectorAll('#ctModal .ica-only').forEach(el=>el.classList.toggle('hidden', !ica));
   if($('dc_payoutWrap')) $('dc_payoutWrap').style.display = ica ? '' : 'none';
   if(!ica && $('dc_optPayoutCurrency')) $('dc_optPayoutCurrency').checked = false;
 }
@@ -1556,7 +1556,7 @@ async function openContractDoc(c){
   $('ct_template').value = tpl;
   const external = String(c.ExternalForm||'').toLowerCase()==='yes';
   // External contracts: no default numbers — only what was recognised. Dropdowns still need a value.
-  const SELECT_DEFAULTS = { paymentOption:'postpay', invoiceTrigger:'on_completion', paymentBasis:'hourly', reportFrequency:'on_completion' };
+  const SELECT_DEFAULTS = { paymentOption:'postpay', paymentBasis:'hourly', reportFrequency:'on_completion' };
   const def = external ? SELECT_DEFAULTS : (DC_DEFAULTS[tpl] || {});
   DC_TEXT.forEach(f=>{
     const el = $('dc_'+f); if(!el) return;
