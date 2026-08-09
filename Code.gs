@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.23';
+const BUILD = '2026-08-08.24';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -641,7 +641,7 @@ function testGemini() {
 
 var AI_FIELDS = [
   'number', 'signDate', 'startDate', 'endDate', 'amount', 'currency', 'pricingType', 'rateBasis',
-  'templateType', 'direction', 'subject',
+  'templateType', 'direction', 'subject', 'sowScope',
   'paymentDays', 'acceptanceDays', 'remarksDays', 'noticeDays', 'disputeDays', 'cureDays',
   'termYears', 'warrantyPeriod', 'governingLaw', 'jurisdictionPlace', 'arbitrationBody', 'arbitrationSeat',
   'penaltyDelayPercent', 'penaltyFailurePercent', 'penaltyCapPercent', 'insuranceAmount',
@@ -652,15 +652,68 @@ var AI_FIELDS = [
 // Minimise what leaves the account: bank details, contacts and identifiers are masked,
 // and the parties are replaced by neutral tokens. Amounts, dates and terms are kept —
 // they are exactly what we are extracting.
+
+// PDF ligatures often come back from OCR as stray punctuation:
+// "Konstan<n" = ti, "Interna]onal" = ti, "Rai\\eisen" = ff. Repair before anything else.
+function fixOcrText_(t) {
+  t = String(t || '');
+  t = t.replace(/([A-Za-z])[<\]\}](?=[a-z])/g, '$1ti');
+  t = t.replace(/([A-Za-z])\\(?=[a-z])/g, '$1ff');
+  t = t.replace(/([A-Za-z])\|(?=[a-z])/g, '$1ti');
+  t = t.replace(/\u00ad/g, '');
+  return t;
+}
+
+// Names of everyone we know (counterparties and signatories) plus bank lines are masked,
+// so no personal or banking data reaches the model.
+function maskNamesAndBanks_(t) {
+  var names = [];
+  readAll_(SHEETS.counterparties).forEach(function (c) { if (trim_(c.Name).length > 3) names.push(trim_(c.Name)); });
+  readAll_(SHEETS.requisites).forEach(function (r) {
+    ['SignatoryName', 'BeneficiaryName', 'LegalName'].forEach(function (f) {
+      if (trim_(r[f]).length > 3) names.push(trim_(r[f]));
+    });
+  });
+  names.sort(function (a, b) { return b.length - a.length; });          // longest first
+  names.forEach(function (n) {
+    var esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    t = t.replace(new RegExp(esc, 'gi'), '[NAME]');
+    var parts = n.split(/\s+/).filter(function (p) { return p.length > 3; });
+    parts.forEach(function (p) {
+      t = t.replace(new RegExp('\\b' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), '[NAME]');
+    });
+  });
+  // whole lines that carry banking details
+  t = t.split('\n').map(function (line) {
+    return /(account\s*(no|number)|iban|swift|correspondent bank|beneficiary)/i.test(line) ? '[BANK DETAILS]' : line;
+  }).join('\n');
+  // account-like numbers with dots/dashes, e.g. 000-55.036.222
+  t = t.replace(/\b\d[\d]*(?:[.\-]\d+){2,}\b/g, '[ACCOUNT]');
+  return t;
+}
+
+
 function maskForAI_(text, counterpartyName) {
-  var t = String(text || '');
+  var t = fixOcrText_(text);
+  t = maskNamesAndBanks_(t);
   t = t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]');
   t = t.replace(/(?:\+\d[\d ()\-]{7,}\d)/g, '[PHONE]');
   t = t.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/g, '[IBAN]');                 // IBAN
   t = t.replace(/\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b/g, '[SWIFT]');          // SWIFT/BIC
   t = t.replace(/\b\d{8,20}\b/g, '[ACCOUNT]');                                   // account / registration numbers
+  t = t.replace(/\b\d{2,4}(?:[-. ]\d{2,4}){2,}\b/g, '[ACCOUNT]');                 // 000-55.036.222 and friends
+  t = t.replace(/(Account\s*(?:No\.?|number)?\s*:?\s*)([^\n,]{4,40})/gi, '$1[ACCOUNT]');
   t = t.replace(/(Address\s*:?\s*)([^\n]{5,120})/gi, '$1[ADDRESS]');
   t = t.replace(/(having its (?:principal )?place of business at\s+)([^\n,]{5,120})/gi, '$1[ADDRESS]');
+
+  // People who sign for us or for the counterparty are not needed by the model at all.
+  var people = [];
+  readAll_(SHEETS.requisites).forEach(function (r) { if (trim_(r.SignatoryName)) people.push(trim_(r.SignatoryName)); });
+  readAll_(SHEETS.counterparties).forEach(function (c) { if (trim_(c.Type) === 'individual' && trim_(c.Name)) people.push(trim_(c.Name)); });
+  people.forEach(function (p) {
+    if (p.length < 5) return;
+    t = t.replace(new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '[PERSON]');
+  });
 
   // Party pseudonyms — the model only needs to know which side is which.
   var us = String(CONFIG.COMPANY_NAME || 'Fraktalex').split(/\s+/)[0];
@@ -693,6 +746,8 @@ function geminiExtract_(text) {
     '- templateType: "ica" if this is an independent contractor agreement with a person, else "b2b"\n' +
     '- direction: "incoming" if PARTY_US receives money, "outgoing" if PARTY_US pays\n' +
     '- subject: one short line describing the subject of the contract\n' +
+    '- sowScope: the services / deliverables the contract requires, as a plain list, one item per line, no numbering\n' +
+    '- sowScope: the list of services/deliverables from the statement of work, one item per line, plain text without numbering\n' +
     '- paymentDays, acceptanceDays, remarksDays, noticeDays, disputeDays, cureDays: integers (days)\n' +
     '- termYears: integer\n' +
     '- warrantyPeriod: as written, e.g. "1.5 (one and a half) months"\n' +
@@ -846,7 +901,7 @@ function adminExtractContract_(d) {
     if (!a || !a.DriveFileID) { notes.push('File not found'); continue; }
     var r = ocrText_(a.DriveFileID);
     if (!r.ok) { notes.push(a.FileName + ': ' + r.error); continue; }
-    var text = String(r.text || '');
+    var text = fixOcrText_(String(r.text || ''));
     if (text.replace(/\s/g, '').length < 40) { notes.push(a.FileName + ': no readable text'); continue; }
     var f = parseContractText_(text), ex = parseContractExtras_(text), used = 'rules', sentText = '';
     var cpGuess = guessCounterparty_(text);                       // matched locally, before anything leaves
@@ -888,7 +943,7 @@ function adminExtractUpload_(d) {
   var res = { ok: true, driveFileId: file.getId(), url: file.getUrl(), fileName: fileName, docType: attachDocType_(d.docType), fields: {} };
   var r = ocrText_(file.getId());
   if (!r.ok) { res.warning = r.error; return res; }
-  var text = String(r.text || '');
+  var text = fixOcrText_(String(r.text || ''));
   if (text.replace(/\s/g, '').length < 40) { res.warning = 'No readable text found in this file (a low-quality scan?)'; return res; }
   res.fields = parseContractText_(text);
   res.extras = parseContractExtras_(text);

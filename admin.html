@@ -581,7 +581,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.23';
+const BUILD = '2026-08-08.24';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1559,63 +1559,74 @@ async function extractFromUpload(){
 
 // ── What each setting does to the generated document ──
 const DOC_HELP = {
-  paymentDays: ['Payment days', 'Inserted into the payment clause of the SOW.',
-    'The total price shall be paid within {value} calendar days after signature of the Acceptance Act, or the date on which the Deliverables are deemed accepted.\n\nICA: Fraktalex shall pay the amount confirmed by the countersigned report within {value} days of the date of countersignature.'],
-  advancePercent: ['Advance %', 'Used only with the payment terms "Advance + balance" and "100% advance".',
-    '{value}% of the total price shall be paid as an advance within {advanceDays} calendar days after signature of this Agreement; the remaining amount shall be paid after acceptance.'],
-  advanceDays: ['Advance days', 'Days allowed for the advance payment.', 'See the Advance % clause.'],
-  remarksDays: ['Days for remarks', 'Clause 8.1 of the B2B agreement.',
-    'Following initial submission of a report, the Customer shall provide its remarks (if any) within {value} calendar days.'],
-  acceptanceDays: ['Acceptance days', 'Clause 8.2 — the deadline after which work is deemed accepted.',
-    'The acceptance procedure shall not exceed {value} calendar days from submission of the report and the Acceptance Act.\nIf the Customer neither signs nor rejects within that period, the Deliverables are deemed accepted.'],
-  evaluationDays: ['Acceptance / evaluation days', 'ICA clause 3.3 — time to countersign the report or send comments.',
-    'Within {value} days of receiving a report, Fraktalex shall either countersign it or provide written reasoned comments.'],
-  cureDays: ['Cure days', 'Clause 15.2 — time to remedy a breach before termination.',
-    'The Customer may terminate if the Supplier has not remedied the failure within {value} calendar days of written notice.'],
+  paymentDays: ['Payment days', 'B2B SOW clause 3.3 / ICA clause 3.4.',
+    'B2B: The total price shall be paid within {value} calendar days after signature of the Acceptance Act, or the date on which the Deliverables are deemed accepted.\n\nICA: Fraktalex shall pay the amount confirmed by the countersigned report within {value} days of the date of countersignature, to the account of the Service Provider stated in the SOW.'],
+  advancePercent: ['Advance %', 'Used with the payment terms "Advance + balance" and "100% advance".',
+    '{value}% of the total price shall be paid as an advance within {advanceDays} calendar days after signature of this Agreement; the remaining amount shall be paid within {paymentDays} calendar days after signature of the Acceptance Act.'],
+  advanceDays: ['Advance days', 'Days allowed for the advance payment.',
+    'See the Advance % wording.'],
+  remarksDays: ['Days for remarks', 'B2B clause 8.1.',
+    'Following initial submission of a report, the Customer shall provide its remarks (if any) within {value} calendar days, so that the Supplier has sufficient time to address them.'],
+  acceptanceDays: ['Acceptance days', 'B2B clauses 8.2 and 8.4.',
+    '8.2. The acceptance procedure shall not exceed {value} calendar days from submission of the report and the Acceptance Act.\n\n8.4. If the Customer neither signs nor issues a written reasoned rejection within that period, the Deliverables shall be deemed accepted on the last day of that period.'],
+  evaluationDays: ['Acceptance / evaluation days', 'ICA clause 3.3.',
+    'Within {value} days of receiving a report, Fraktalex shall either countersign it or provide written reasoned comments identifying what must be corrected.'],
+  cureDays: ['Cure days', 'B2B clause 15.2.',
+    'The Customer may terminate this Agreement if the Supplier fails to perform and has not remedied such failure within {value} calendar days of written notice.'],
   noticeDays: ['Notice days', 'ICA clause 2.2 — termination for convenience.',
-    'Fraktalex may terminate this Agreement for its convenience at any time by giving the Service Provider {value} days written notice.'],
-  disputeDays: ['Dispute days', 'ICA clause 3.2 — time to dispute an amount.',
-    'Within {value} days after receipt of an invoice, Fraktalex shall either pay the undisputed amount or notify of any disputed fees.'],
-  termYears: ['Term (years)', 'ICA clause 2.1 — duration of the agreement.',
-    'This Agreement commences on the Effective Date and terminates {value} years later, or on completion of all SOWs, whichever is later.'],
-  warrantyPeriod: ['Warranty period', 'Only if the Warranty block is on.',
-    'Upon completion of the works, the Supplier shall provide a warranty for the performed works for a period of {value}.'],
-  governingLaw: ['Governing law', 'Clause 17.1 (B2B) / 9.2 (ICA).',
-    'This Agreement shall be governed by and interpreted in accordance with the substantive law in force in {value}.'],
+    'Fraktalex may terminate this Agreement, in whole or in part, for its convenience at any time by giving the Service Provider {value} days written notice, without liability other than payment for Services performed prior to the effective date of termination.'],
+  disputeDays: ['Dispute days', 'ICA clause 3.2.',
+    'Within {value} days after receipt of an invoice, Fraktalex shall either pay the undisputed amount in accordance with the SOW or notify the Service Provider of any disputed fees or expenses.'],
+  termYears: ['Term (years)', 'ICA clause 2.1.',
+    'This Agreement commences on the Effective Date and terminates on the later of {value} years from the Effective Date or completion of all SOWs entered into hereunder. No SOW shall have a term greater than {value} years.'],
+  warrantyPeriod: ['Warranty period', 'Only when the Warranty block is on.',
+    'Upon completion of the works, the Supplier shall provide a warranty for the performed works for a period of {value}, measured from the date on which the entire scope of works is accepted, or deemed accepted.'],
+  governingLaw: ['Governing law', 'B2B clause 17.1 / ICA clause 9.2.',
+    'This Agreement and its content shall be governed by and interpreted in accordance with the substantive law in force in {value}, without reference to its conflict-of-law rules. The application of the UN Convention on Contracts for the International Sale of Goods is excluded.'],
   jurisdictionPlace: ['Place of jurisdiction', 'B2B clause 17.2.',
     '{value} shall be the place of jurisdiction for any disputes arising out of or in connection with this Agreement.'],
   arbitrationBody: ['Arbitration body', 'ICA clause 9.2.',
-    'Any dispute shall be finally resolved by arbitration administered by the {value} under its rules in force at the time of submission.'],
+    'Any dispute arising out of or in connection with this Agreement shall be finally resolved by arbitration administered by the {value} under its rules in force at the time of submission.'],
   arbitrationSeat: ['Seat of arbitration', 'ICA clause 9.2.',
-    'The seat of arbitration shall be {value}, the language English, and the tribunal shall consist of one arbitrator.'],
-  penaltyDelayPercent: ['Penalty for delay %', 'B2B clause 12.3 — only if the Penalties block is on.',
-    'In the event of delay, the Customer may claim a penalty of {value}% of the amount of the improperly performed obligation for each calendar day of delay.'],
+    'The seat of arbitration shall be {value}, the language of the arbitration shall be English, and the tribunal shall consist of one (1) arbitrator.'],
+  penaltyDelayPercent: ['Penalty for delay %', 'B2B clause 12.3 — only when Penalties is on.',
+    'Except in cases of force majeure, in the event of delay in providing the Deliverables or in remedying defects, the Customer shall be entitled to claim a penalty of {value} per cent of the amount of the improperly performed obligation for each calendar day of delay.'],
   penaltyFailurePercent: ['Penalty for failure %', 'B2B clause 12.4.',
-    'In the event of failure to provide the Deliverables, the Supplier shall pay a penalty of {value}% of the amount of the unfulfilled obligation.'],
-  penaltyCapPercent: ['Penalty cap %', 'B2B clause 12.5 — the ceiling on all penalties.',
-    'The aggregate amount of all penalties shall not exceed {value} per cent of the total price of this Agreement.'],
-  insuranceAmount: ['Insurance amount', 'ICA clause 8.2 — only if the Insurance block is on.',
-    'The Service Provider shall maintain professional indemnity insurance with a minimum cover of {value} {currency}.'],
-  restrictedTerritories: ['Restricted territories', 'ICA clause 1.5 and the SOW.',
-    'The Service Provider shall not perform any of the Services in the territory of {value}.'],
-  rateBasis: ['Rate basis', 'ICA SOW clause 3.1.', 'Fraktalex shall pay the Service Provider {amount} {currency} {value}.'],
-  paymentBasis: ['Payment basis', 'ICA SOW clause 3.2.', 'Payment shall be based on: {value}.'],
-  reportFrequency: ['Report frequency', 'ICA SOW clause 3.3.', 'The Service Provider shall submit reports {value}.'],
+    'Except in cases of force majeure, in the event of failure to provide the Deliverables and/or to remedy defects, the Supplier shall pay a penalty of {value} per cent of the amount of the unfulfilled obligation under this Agreement.'],
+  penaltyCapPercent: ['Penalty cap %', 'B2B clause 12.5.',
+    'The aggregate amount of all penalties payable under clauses 12.3 and 12.4 shall not exceed {value} per cent of the total price of this Agreement. Payment of a penalty does not release the Supplier from performance of its obligations.'],
+  insuranceAmount: ['Insurance amount', 'ICA clause 8.2 — only when Insurance is on.',
+    'The Service Provider shall maintain professional indemnity insurance with a minimum cover of {value} {currency} throughout the Term and shall provide evidence of such cover upon request.'],
+  restrictedTerritories: ['Restricted territories', 'ICA clause 1.5 and SOW clause 1.2.',
+    'The Parties agree that the Service Provider shall not perform any of the Services in the territory of {value}.'],
+  rateBasis: ['Rate basis', 'ICA SOW clause 3.1.',
+    'Fraktalex shall pay the Service Provider as follows: {amount} {currency} {value}.'],
+  paymentBasis: ['Payment basis', 'ICA SOW clause 3.2.',
+    'Payment shall be based on {value}.'],
+  reportFrequency: ['Report frequency', 'ICA SOW clause 3.3.',
+    'The Service Provider shall submit reports in the format set out in section 5 of the SOW, {value}.'],
   completionDate: ['Completion date', 'B2B SOW clause 2.1.',
-    'The Supplier shall perform the services no later than {value}, commencing from the date the Agreement is signed.'],
+    'The Supplier shall perform the services described in this Statement of Work no later than {value}, commencing from the date on which the Agreement is signed by both Parties.'],
   pMName: ['Project manager', 'B2B SOW clause 4.1.',
-    'For the period of performance, the Supplier shall designate {value} as Project Manager.'],
-  subject: ['Subject / scope summary', 'Short description of what the contract is about.', '{value}'],
-  sowScope: ['SOW scope', 'Becomes the list of services in the SOW (one item per line).', '{value}'],
-  optAcceptanceAct: ['Acceptance Act', 'B2B — ON: acceptance is evidenced by a signed act. OFF: written confirmation of the report is enough.',
-    'ON: "Acceptance shall be evidenced solely by an Acceptance Act signed by the authorised representatives of both Parties."\nOFF: "The Customer shall either confirm acceptance in writing or issue a written reasoned rejection. Confirmation by e-mail is sufficient."'],
-  optPenalties: ['Penalties', 'B2B clause 12.', 'ON: clauses 12.3–12.5 with the percentages above.\nOFF: "No contractual penalties apply. Remedies are limited to direct damages and termination."'],
-  optUsageRights: ['Usage rights', 'B2B clause 13.2.', 'ON: "Upon full payment, the Supplier grants the Customer a non-exclusive, perpetual, worldwide right to use the Deliverables."\nOFF: the clause is removed.'],
-  optInsurance: ['Insurance', 'ICA clause 8.2.', 'ON: professional indemnity insurance for the amount above.\nOFF: "No professional indemnity insurance is required, unless expressly required by an applicable SOW."'],
-  optDataSecurity: ['Data security', 'ICA section 6.', 'ON: full list — device encryption, MFA, no removable media, no third-party AI/cloud without consent, 48-hour breach notice.\nOFF: a single clause on reasonable measures and prompt notification.'],
-  optWarranty: ['Warranty', 'B2B SOW section 6 / ICA section 8A.', 'ON: warranty clause for the period above.\nOFF: "No warranty period applies to the works under this Attachment."'],
-  optPayoutCurrency: ['Contractor may elect payment currency', 'ICA clause 3.5.',
-    'ON: "In each work completion report the Service Provider may elect to be paid in EUR, USD, AED or SGD, converted at the rate of the bank used by Fraktalex on the date of payment."\nOFF: payment is always made in the base currency.']
+    'For the period of performance, the Supplier shall designate by name an individual as Project Manager (PM): {value}.'],
+  subject: ['Subject / scope summary', 'Appears as the subject of the contract.',
+    '{value}'],
+  sowScope: ['SOW scope', 'Becomes the list of services in the SOW (one item per line).',
+    'The Supplier shall provide the following services during the term of the Agreement, including but not limited to:\n\n{value}'],
+  optAcceptanceAct: ['Acceptance Act', 'B2B: clauses 1.2, 6.3, 8.3, 8.4, 10.3 and SOW 3.4.',
+    'WHEN ON, the document says:\n\n1.2. "Acceptance Act" means the bilateral document confirming that the Deliverables have been provided in accordance with this Agreement and accepted by the Customer, and stating the corresponding amount payable.\n\n6.3. Together with the report, the Supplier shall submit to the Customer an Acceptance Act in two (2) counterparts, listing the Deliverables provided and the corresponding amount payable.\n\n8.3. Acceptance of the Deliverables shall be evidenced solely by an Acceptance Act signed by the authorised representatives of both Parties.\n\n8.4. If the Customer neither signs the Acceptance Act nor issues a written reasoned rejection within the period, the Deliverables shall be deemed accepted, and an Acceptance Act signed unilaterally by the Supplier shall constitute valid evidence of acceptance.\n\n10.3. The Supplier shall be entitled to issue an invoice only after the relevant Acceptance Act has been signed by both Parties, or the Deliverables have been deemed accepted.\n\nWHEN OFF, those become:\n\n1.2. "Acceptance" means the confirmation by the Customer, in accordance with clause 8, that the Deliverables have been provided in accordance with this Agreement.\n\n6.3. The report shall list the Deliverables provided and the corresponding amount payable. No separate acceptance act is required under this Agreement.\n\n8.3. Within the period set out in clause 8.2, the Customer shall either confirm acceptance in writing or issue a written reasoned rejection. Confirmation by e-mail from the responsible project manager of the Customer shall be sufficient.\n\n8.4. If the Customer neither confirms acceptance nor issues a written reasoned rejection within that period, the Deliverables shall be deemed accepted on the last day of that period.\n\n10.3. The Supplier shall be entitled to issue an invoice only after the Deliverables have been accepted, or deemed accepted, in accordance with clause 8.'],
+  optPenalties: ['Penalties', 'B2B clauses 12.3–12.5.',
+    'WHEN ON:\n\n12.3. Except in cases of force majeure, in the event of delay in providing the Deliverables or in remedying defects, the Customer shall be entitled to claim a penalty of {penaltyDelayPercent} per cent of the amount of the improperly performed obligation for each calendar day of delay.\n\n12.4. Except in cases of force majeure, in the event of failure to provide the Deliverables and/or to remedy defects, the Supplier shall pay a penalty of {penaltyFailurePercent} per cent of the amount of the unfulfilled obligation.\n\n12.5. The aggregate amount of all penalties shall not exceed {penaltyCapPercent} per cent of the total price of this Agreement. Payment of a penalty does not release the Supplier from performance of its obligations.\n\nWHEN OFF, all three are replaced by one clause:\n\n12.3. No contractual penalties apply under this Agreement. In the event of delay or non-performance, the Customer\'s remedies shall be limited to claims for direct damages actually incurred, subject to clause 12.6, and to the termination rights set out in clause 15.'],
+  optUsageRights: ['Usage rights', 'B2B clause 13.2.',
+    'WHEN ON, this clause is added:\n\n13.2. Upon full payment of the corresponding price, the Supplier grants the Customer a non-exclusive, perpetual, worldwide right to use the Deliverables and the Documentation for the Customer\'s own business purposes.\n\nWHEN OFF, clause 13.2 is removed and only 13.1 remains:\n\n13.1. The intellectual property rights in all standard documentation, methodologies, tools and pre-existing materials of the Supplier shall remain the property of the Supplier or of its licensors.'],
+  optInsurance: ['Insurance', 'ICA clause 8.2.',
+    'WHEN ON:\n\n8.2. The Service Provider shall maintain professional indemnity insurance with a minimum cover of {insuranceAmount} {currency} throughout the Term and shall provide evidence of such cover upon request.\n\nWHEN OFF:\n\n8.2. No professional indemnity insurance is required under this Agreement, unless expressly required by an applicable SOW.\n\nClause 8.1 stays either way: the Service Provider is solely responsible for their own taxes, social contributions, pension and health arrangements, and for any insurance required by the law applicable to them.'],
+  optDataSecurity: ['Data security', 'ICA section 6.',
+    'WHEN ON, the full section is included:\n\n6.1. The Service Provider shall protect all Fraktalex data and Confidential Information using measures appropriate to an individual professional, including as a minimum:\n- full-disk encryption on every device used to store or process Fraktalex data;\n- unique, strong credentials and, where supported, multi-factor authentication;\n- current operating system and security updates, and active anti-malware protection;\n- no storage of Fraktalex data on removable media, personal file-sharing accounts or shared or public devices;\n- no upload of Fraktalex data to third-party services, including artificial intelligence or cloud processing services, without the prior written consent of Fraktalex;\n- secure deletion of Fraktalex data upon completion of the Services or termination of this Agreement.\n\n6.2. The Service Provider shall notify Fraktalex without undue delay, and in any event within forty-eight (48) hours, of becoming aware of any actual or suspected loss, theft, unauthorised access to, or disclosure of Fraktalex data or Confidential Information, and shall cooperate fully in the investigation and remediation.\n\n6.3. All transmission and exchange of data with Fraktalex shall take place by secure means in accordance with the specifications of Fraktalex.\n\nWHEN OFF, section 6 shrinks to a single clause:\n\n6.1. The Service Provider shall take reasonable technical and organisational measures to protect all Fraktalex data and Confidential Information against loss, theft and unauthorised access, and shall notify Fraktalex without undue delay of any actual or suspected security incident affecting such data.'],
+  optWarranty: ['Warranty', 'B2B SOW clauses 2.3 and 6 / ICA section 8A.',
+    'WHEN ON (B2B SOW):\n\n2.3. Upon completion of the works, the Supplier shall provide a warranty for the performed works for a period of {warrantyPeriod}. The warranty terms are set out in section 6 of this Attachment.\n\n6.1. The Supplier warrants that all services and deliverables will be performed in a professional manner, in accordance with industry standards, and will be free from material defects and errors.\n6.2. The warranty period shall be {warrantyPeriod} from the date on which the entire scope of works is accepted, or deemed accepted.\n6.3. During the warranty period the Supplier shall, at its own expense, promptly correct any deficiencies, inaccuracies or non-conformities identified by the Customer and attributable to the Supplier\'s performance.\n6.4. This warranty does not cover issues arising from changes in the Customer\'s data, systems or business processes after completion, or from the Customer\'s misuse of the Deliverables.\n\nWHEN ON (ICA), section 8A is added with the same logic, measured from acceptance of the relevant Deliverable.\n\nWHEN OFF:\n\n2.3. No warranty period applies to the works under this Attachment. The Supplier remains liable for the quality of the Deliverables in accordance with clause 3.4 of the Agreement.\n\nSection 6 (or 8A in the ICA) is removed entirely.'],
+  optPayoutCurrency: ['Contractor may elect payment currency', 'ICA clause 3.5 and the SOW report form.',
+    'WHEN ON:\n\n3.5. All amounts under this Agreement are denominated in {currency} (the "Base Currency"). In each work completion report the Service Provider may elect to be paid in one of the following currencies: EUR, USD, AED or SGD. Where the elected currency differs from the Base Currency, the amount payable shall be converted at the exchange rate applied by the bank or payment service provider used by Fraktalex to make that payment, as at the date the payment is made. Payment made in the elected currency at that rate discharges the corresponding obligation in full, and neither Party shall have any claim in respect of a difference arising from exchange-rate movements. Bank charges of the paying bank shall be borne by Fraktalex and bank charges of the receiving bank by the Service Provider.\n\nThe report form also gains the row: "Currency elected for payment (EUR / USD / AED / SGD)".\n\nWHEN OFF, clause 3.5 and that row are removed; payment is always made in the base currency and the contractor sees no currency selector in the reporting app.']
 };
 function showDocHelp(key){
   const h = DOC_HELP[key]; if(!h) return;
@@ -1626,6 +1637,9 @@ function showDocHelp(key){
     .replace(/\{currency\}/g, ($('ct_currency')?$('ct_currency').value:'') || '…')
     .replace(/\{amount\}/g, ($('ct_amount')?$('ct_amount').value:'') || '…')
     .replace(/\{advanceDays\}/g, ($('dc_advanceDays')?$('dc_advanceDays').value:'') || '…');
+  ['penaltyDelayPercent','penaltyFailurePercent','penaltyCapPercent','insuranceAmount','warrantyPeriod'].forEach(k2=>{
+    const e2=$('dc_'+k2); body = body.split('{'+k2+'}').join((e2&&e2.value)||'…');
+  });
   $('help_title').textContent = h[0];
   $('help_sub').textContent = h[1];
   $('help_body').textContent = body;
