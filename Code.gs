@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.21';
+const BUILD = '2026-08-08.22';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -571,7 +571,25 @@ function setGeminiKey(key) {
 }
 function geminiKey_() { return PropertiesService.getScriptProperties().getProperty('gemini_key') || ''; }
 // Model can be changed without touching the code: script property "gemini_model".
-function geminiModel_() { return PropertiesService.getScriptProperties().getProperty('gemini_model') || 'gemini-2.0-flash'; }
+function geminiModel_() { return PropertiesService.getScriptProperties().getProperty('gemini_model') || 'gemini-2.5-flash'; }
+// Google retires models from time to time (they stay in models.list but answer 404).
+// Try the configured one first, then known-good alternatives, and remember what worked.
+var GEMINI_FALLBACKS = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-2.5-pro'];
+function geminiCall_(key, payload) {
+  var tried = [], models = [geminiModel_()];
+  GEMINI_FALLBACKS.forEach(function (m) { if (models.indexOf(m) < 0) models.push(m); });
+  for (var i = 0; i < models.length; i++) {
+    var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent?key=' + encodeURIComponent(key);
+    var r = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: payload });
+    if (r.getResponseCode() === 200) {
+      if (models[i] !== geminiModel_()) PropertiesService.getScriptProperties().setProperty('gemini_model', models[i]);
+      return { ok: true, model: models[i], body: r.getContentText() };
+    }
+    tried.push(models[i] + ' -> HTTP ' + r.getResponseCode());
+    if (r.getResponseCode() !== 404) return { ok: false, error: tried.join('; ') + ' | ' + r.getContentText().slice(0, 300) };
+  }
+  return { ok: false, error: 'No working model. Tried: ' + tried.join('; ') };
+}
 function setGeminiModel(name) {
   PropertiesService.getScriptProperties().setProperty('gemini_model', String(name || '').trim());
   return 'Model set to ' + geminiModel_();
@@ -600,14 +618,14 @@ function diagGemini() {
   } catch (e) { out.push('models.list EXCEPTION: ' + e); }
 
   try {
-    var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + geminiModel_() + ':generateContent?key=' + encodeURIComponent(key);
-    var r = UrlFetchApp.fetch(url, {
-      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-      payload: JSON.stringify({ contents: [{ parts: [{ text: 'Reply with {"ok":true} only.' }] }],
-                                generationConfig: { temperature: 0, responseMimeType: 'application/json' } })
-    });
-    out.push('generateContent HTTP ' + r.getResponseCode());
-    out.push('Body: ' + r.getContentText().slice(0, 500));
+    var call = geminiCall_(key, JSON.stringify({ contents: [{ parts: [{ text: 'Reply with {"ok":true} only.' }] }],
+                                                 generationConfig: { temperature: 0, responseMimeType: 'application/json' } }));
+    if (call.ok) {
+      out.push('generateContent OK with model: ' + call.model + (call.model !== geminiModel_() ? ' (saved as default)' : ''));
+      out.push('Body: ' + String(call.body).slice(0, 300));
+    } else {
+      out.push('generateContent FAILED: ' + call.error);
+    }
   } catch (e) { out.push('generateContent EXCEPTION: ' + e); }
 
   var s = out.join('\n');
@@ -686,16 +704,12 @@ function geminiExtract_(text) {
     'CONTRACT TEXT:\n' + String(text).slice(0, 60000);
 
   try {
-    var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + geminiModel_() + ':generateContent?key=' + encodeURIComponent(key);
-    var resp = UrlFetchApp.fetch(url, {
-      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-      payload: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0, responseMimeType: 'application/json' }
-      })
-    });
-    if (resp.getResponseCode() !== 200) return null;
-    var data = JSON.parse(resp.getContentText());
+    var call = geminiCall_(key, JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+    }));
+    if (!call.ok) return null;
+    var data = JSON.parse(call.body);
     var out = data && data.candidates && data.candidates[0] && data.candidates[0].content &&
               data.candidates[0].content.parts && data.candidates[0].content.parts[0].text;
     if (!out) return null;
