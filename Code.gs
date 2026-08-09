@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.26';
+const BUILD = '2026-08-08.27';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -696,39 +696,48 @@ function maskNamesAndBanks_(t) {
 
 function maskForAI_(text, counterpartyName) {
   var t = fixOcrText_(text);
+
+  // Party pseudonyms FIRST — otherwise the general name masking turns our own company
+  // into [NAME] and the model loses the only clue about who is who.
+  var esc = function (x) { return String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); };
+  var usFull = String(CONFIG.COMPANY_NAME || 'Fraktalex');
+  var usShort = usFull.split(/\s+/)[0];
+  t = t.replace(new RegExp(esc(usFull), 'gi'), 'PARTY_US');
+  t = t.replace(new RegExp('\\b' + esc(usShort) + '\\b', 'gi'), 'PARTY_US');
+  if (counterpartyName) {
+    var cn = String(counterpartyName).trim();
+    if (cn.length > 3) t = t.replace(new RegExp(esc(cn), 'gi'), 'PARTY_OTHER');
+    var first = cn.split(/\s+/)[0];
+    if (first && first.length > 3) t = t.replace(new RegExp('\\b' + esc(first) + '\\b', 'gi'), 'PARTY_OTHER');
+  }
+
+  // Now the rest: people, banks, contacts, identifiers.
   t = maskNamesAndBanks_(t);
   t = t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]');
   t = t.replace(/(?:\+\d[\d ()\-]{7,}\d)/g, '[PHONE]');
-  t = t.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/g, '[IBAN]');                 // IBAN
-  t = t.replace(/\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b/g, '[SWIFT]');          // SWIFT/BIC
-  t = t.replace(/\b\d{8,20}\b/g, '[ACCOUNT]');                                   // account / registration numbers
-  t = t.replace(/\b\d{2,4}(?:[-. ]\d{2,4}){2,}\b/g, '[ACCOUNT]');                 // 000-55.036.222 and friends
+  t = t.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/g, '[IBAN]');
+  t = t.replace(/\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b/g, '[SWIFT]');
+  t = t.replace(/\b\d{8,20}\b/g, '[ACCOUNT]');
+  t = t.replace(/\b\d{2,4}(?:[-. ]\d{2,4}){2,}\b/g, '[ACCOUNT]');
   t = t.replace(/(Account\s*(?:No\.?|number)?\s*:?\s*)([^\n,]{4,40})/gi, '$1[ACCOUNT]');
   t = t.replace(/(Address\s*:?\s*)([^\n]{5,120})/gi, '$1[ADDRESS]');
   t = t.replace(/(having its (?:principal )?place of business at\s+)([^\n,]{5,120})/gi, '$1[ADDRESS]');
-
-  // People who sign for us or for the counterparty are not needed by the model at all.
-  var people = [];
-  readAll_(SHEETS.requisites).forEach(function (r) { if (trim_(r.SignatoryName)) people.push(trim_(r.SignatoryName)); });
-  readAll_(SHEETS.counterparties).forEach(function (c) { if (trim_(c.Type) === 'individual' && trim_(c.Name)) people.push(trim_(c.Name)); });
-  people.forEach(function (p) {
-    if (p.length < 5) return;
-    t = t.replace(new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '[PERSON]');
-  });
-
-  // Party pseudonyms — the model only needs to know which side is which.
-  var us = String(CONFIG.COMPANY_NAME || 'Fraktalex').split(/\s+/)[0];
-  t = t.replace(new RegExp(us.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), 'PARTY_US');
-  if (counterpartyName) {
-    var cn = String(counterpartyName).trim();
-    if (cn.length > 3) t = t.replace(new RegExp(cn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), 'PARTY_OTHER');
-    var first = cn.split(/\s+/)[0];
-    if (first && first.length > 3) t = t.replace(new RegExp('\\b' + first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), 'PARTY_OTHER');
-  }
   return t;
 }
 
-function geminiExtract_(text) {
+// Put the real names back into anything the model wrote out (subject, scope of work).
+function unmaskAI_(value, counterpartyName) {
+  if (typeof value !== 'string') return value;
+  return value
+    .replace(/PARTY_US/g, CONFIG.COMPANY_NAME || 'Fraktalex')
+    .replace(/PARTY_OTHER/g, counterpartyName || 'the Counterparty')
+    .replace(/\[NAME\]/g, CONFIG.COMPANY_NAME || 'Fraktalex')
+    .replace(/\[PERSON\]/g, 'the authorised representative');
+}
+
+var GEMINI_CP_NAME = '';
+function geminiExtract_(text, counterpartyName) {
+  GEMINI_CP_NAME = counterpartyName || '';
   var key = geminiKey_();
   if (!key) return null;
   var sent = text;
@@ -736,7 +745,9 @@ function geminiExtract_(text) {
     'You are reading a commercial contract. The parties are written as PARTY_US (our company) and PARTY_OTHER.\n' +
     'Personal data, bank details and addresses have been masked as [EMAIL], [PHONE], [IBAN], [ACCOUNT], [ADDRESS] — ignore them.\n' +
     'Extract the fields below and reply with ONE JSON object and nothing else — no prose, no markdown fences.\n' +
-    'Use null for anything the text does not state. Never invent values.\n\n' +
+    'Use null for anything the text does not state. Never invent values.\n' +
+    'Numbers are often written in words with digits in brackets — "within twenty (20) days" means 20. Always return the digits.\n' +
+    'In text fields (subject, sowScope) write PARTY_US and PARTY_OTHER for the parties; never copy [NAME], [PERSON] or other placeholders.\n\n' +
     'Fields:\n' +
     '- number: the contract/agreement number exactly as written\n' +
     '- signDate, startDate, endDate: ISO YYYY-MM-DD\n' +
@@ -784,6 +795,7 @@ function geminiExtract_(text) {
       var v = obj[f];
       if (v === null || v === undefined || v === '') return;
       if (typeof v === 'boolean') { res[f] = v; return; }
+      if (typeof v === 'string') { res[f] = unmaskAI_(v, GEMINI_CP_NAME); return; }
       res[f] = v;
     });
     res.__sent = sent;
@@ -915,7 +927,7 @@ function adminExtractContract_(d) {
     if (text.replace(/\s/g, '').length < 40) { notes.push(a.FileName + ': no readable text'); continue; }
     var f = parseContractText_(text), ex = parseContractExtras_(text), used = 'rules', sentText = '';
     var cpGuess = guessCounterparty_(text);                       // matched locally, before anything leaves
-    var ai = geminiExtract_(maskForAI_(text, cpGuess ? cpGuess.Name : ''));
+    var ai = geminiExtract_(maskForAI_(text, cpGuess ? cpGuess.Name : ''), cpGuess ? cpGuess.Name : '');
     if (ai) {
       sentText = ai.__sent || ''; delete ai.__sent;
       var sp = aiSplit_(ai);
@@ -958,7 +970,7 @@ function adminExtractUpload_(d) {
   res.fields = parseContractText_(text);
   res.extras = parseContractExtras_(text);
   var cpU = guessCounterparty_(text);
-  var aiU = geminiExtract_(maskForAI_(text, cpU ? cpU.Name : ''));
+  var aiU = geminiExtract_(maskForAI_(text, cpU ? cpU.Name : ''), cpU ? cpU.Name : '');
   if (aiU) {
     res.sent = aiU.__sent || ''; delete aiU.__sent;
     var spU = aiSplit_(aiU);
