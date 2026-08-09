@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.20';
+const BUILD = '2026-08-08.21';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -570,6 +570,51 @@ function setGeminiKey(key) {
   return 'Saved. Run testGemini() to check it.';
 }
 function geminiKey_() { return PropertiesService.getScriptProperties().getProperty('gemini_key') || ''; }
+// Model can be changed without touching the code: script property "gemini_model".
+function geminiModel_() { return PropertiesService.getScriptProperties().getProperty('gemini_model') || 'gemini-2.0-flash'; }
+function setGeminiModel(name) {
+  PropertiesService.getScriptProperties().setProperty('gemini_model', String(name || '').trim());
+  return 'Model set to ' + geminiModel_();
+}
+
+// Full diagnostics: key present? which models are available? what does the API answer?
+function diagGemini() {
+  var out = [];
+  var key = geminiKey_();
+  out.push('Key in Script Properties: ' + (key ? 'yes, length ' + key.length : 'NO — add property gemini_key'));
+  if (!key) { Logger.log(out.join('\n')); return out.join('\n'); }
+  out.push('Model: ' + geminiModel_());
+
+  try {
+    var lr = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + encodeURIComponent(key), { muteHttpExceptions: true });
+    out.push('models.list HTTP ' + lr.getResponseCode());
+    if (lr.getResponseCode() === 200) {
+      var names = (JSON.parse(lr.getContentText()).models || [])
+        .filter(function (m) { return (m.supportedGenerationMethods || []).indexOf('generateContent') >= 0; })
+        .map(function (m) { return String(m.name).replace('models/', ''); });
+      out.push('Available (' + names.length + '): ' + names.slice(0, 25).join(', '));
+      if (names.indexOf(geminiModel_()) < 0) out.push('!! Current model is NOT in the list — run setGeminiModel("<one of the above>")');
+    } else {
+      out.push('Body: ' + lr.getContentText().slice(0, 400));
+    }
+  } catch (e) { out.push('models.list EXCEPTION: ' + e); }
+
+  try {
+    var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + geminiModel_() + ':generateContent?key=' + encodeURIComponent(key);
+    var r = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ contents: [{ parts: [{ text: 'Reply with {"ok":true} only.' }] }],
+                                generationConfig: { temperature: 0, responseMimeType: 'application/json' } })
+    });
+    out.push('generateContent HTTP ' + r.getResponseCode());
+    out.push('Body: ' + r.getContentText().slice(0, 500));
+  } catch (e) { out.push('generateContent EXCEPTION: ' + e); }
+
+  var s = out.join('\n');
+  Logger.log(s);
+  return s;
+}
+
 function testGemini() {
   var r = geminiExtract_('AGREEMENT No. TEST/1 dated 5 January 2026 between Alpha Ltd (Supplier) and Beta LLC (Customer). Price: 1,000 EUR. Payment within 30 calendar days.');
   Logger.log(r);
@@ -641,7 +686,7 @@ function geminiExtract_(text) {
     'CONTRACT TEXT:\n' + String(text).slice(0, 60000);
 
   try {
-    var url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + encodeURIComponent(key);
+    var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + geminiModel_() + ':generateContent?key=' + encodeURIComponent(key);
     var resp = UrlFetchApp.fetch(url, {
       method: 'post', contentType: 'application/json', muteHttpExceptions: true,
       payload: JSON.stringify({
