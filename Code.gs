@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.24';
+const BUILD = '2026-08-08.26';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -645,7 +645,8 @@ var AI_FIELDS = [
   'paymentDays', 'acceptanceDays', 'remarksDays', 'noticeDays', 'disputeDays', 'cureDays',
   'termYears', 'warrantyPeriod', 'governingLaw', 'jurisdictionPlace', 'arbitrationBody', 'arbitrationSeat',
   'penaltyDelayPercent', 'penaltyFailurePercent', 'penaltyCapPercent', 'insuranceAmount',
-  'restrictedTerritories', 'paymentBasis', 'reportFrequency'
+  'restrictedTerritories', 'paymentBasis', 'reportFrequency',
+  'hasAcceptanceAct', 'hasPenalties', 'hasUsageRights', 'hasInsurance', 'hasDataSecurity', 'hasWarranty', 'hasPayoutCurrency'
 ];
 
 
@@ -755,7 +756,15 @@ function geminiExtract_(text) {
     '- penaltyDelayPercent, penaltyFailurePercent, penaltyCapPercent, insuranceAmount: numbers\n' +
     '- restrictedTerritories: territories where work must not be performed\n' +
     '- paymentBasis: "hourly" | "fixed" | "milestone"\n' +
-    '- reportFrequency: "on_completion" | "monthly"\n\n' +
+    '- reportFrequency: "on_completion" | "monthly"\n' +
+    'Blocks actually present in the text (true/false, use false if absent):\n' +
+    '- hasAcceptanceAct: an "Acceptance Act" signed by both parties is required\n' +
+    '- hasPenalties: contractual penalties for delay or non-performance\n' +
+    '- hasUsageRights: the customer is granted a right to use the deliverables\n' +
+    '- hasInsurance: the contractor must maintain professional indemnity insurance\n' +
+    '- hasDataSecurity: a data-security / information-protection section is present\n' +
+    '- hasWarranty: a warranty for the performed work is given\n' +
+    '- hasPayoutCurrency: the contractor may choose the currency of payment\n\n' +
     'CONTRACT TEXT:\n' + String(text).slice(0, 60000);
 
   try {
@@ -774,6 +783,7 @@ function geminiExtract_(text) {
     AI_FIELDS.forEach(function (f) {
       var v = obj[f];
       if (v === null || v === undefined || v === '') return;
+      if (typeof v === 'boolean') { res[f] = v; return; }
       res[f] = v;
     });
     res.__sent = sent;
@@ -1004,22 +1014,30 @@ var DOC_TEXT_FIELDS = ['TemplateType', 'OurRole', 'OurRequisiteID', 'TheirRequis
   'PaymentOption', 'PaymentDays', 'AdvancePercent', 'AdvanceDays', 'GoverningLaw', 'JurisdictionPlace',
   'ArbitrationBody', 'ArbitrationSeat', 'RemarksDays', 'AcceptanceDays', 'EvaluationDays', 'DisputeDays',
   'CureDays', 'NoticeDays', 'TermYears', 'WarrantyPeriod', 'PenaltyDelayPercent', 'PenaltyFailurePercent',
-  'PenaltyCapPercent', 'InsuranceAmount', 'RestrictedTerritories', 'RateAmount', 'RateBasis',
-  'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope', 'ExtractedAt'];
+  'PenaltyCapPercent', 'InsuranceAmount', 'RestrictedTerritories', 'RateBasis',
+  'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope', 'ExtractedAt'];
 var DOC_FLAGS = ['OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty', 'OptPayoutCurrency', 'ExternalForm'];
 
 function adminSaveContractDoc_(d) {
   requireAdmin_(d);
   var c = findRow_(SHEETS.contracts, 'ContractID', trim_(d.id));
   if (!c) return { ok: false, error: 'Contract not found' };
+  // Match incoming keys case-insensitively: the page sends ourRequisiteId, the column is OurRequisiteID.
+  var lower = {};
+  for (var k in d) lower[String(k).toLowerCase()] = d[k];
+  function incoming(field) {
+    var a = field.charAt(0).toLowerCase() + field.slice(1);
+    if (d[a] !== undefined) return d[a];
+    return lower[String(field).toLowerCase()];
+  }
   var upd = {};
   DOC_TEXT_FIELDS.forEach(function (f) {
-    var key = f.charAt(0).toLowerCase() + f.slice(1);
-    if (d[key] !== undefined) upd[f] = trim_(d[key]);
+    var v = incoming(f);
+    if (v !== undefined) upd[f] = trim_(v);
   });
   DOC_FLAGS.forEach(function (f) {
-    var key = f.charAt(0).toLowerCase() + f.slice(1);
-    if (d[key] !== undefined) upd[f] = truthy_(d[key]) ? 'yes' : 'no';
+    var v = incoming(f);
+    if (v !== undefined) upd[f] = truthy_(v) ? 'yes' : 'no';
   });
   // A payment term tied to the warranty period requires the warranty block to stay on.
   if (trim_(upd.PaymentOption || c.PaymentOption) === 'after_warranty' &&

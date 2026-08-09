@@ -421,13 +421,13 @@
         <div style="flex:2"><label>Source documents (Ctrl/Cmd-click to select several — e.g. the agreement and its SOW)</label><select id="ext_src" multiple size="4"></select></div>
         <div style="flex:0 0 auto"><button class="btn sm" id="ext_btn" onclick="extractFromDoc()">Read data from document</button></div>
         <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="previewSelected()">Preview</button></div>
-        <div style="flex:0 0 auto"><button class="btn ghost sm" id="ext_sentBtn" onclick="showSentText()" style="display:none">View text sent to AI</button></div>
         
       </div>
       <div id="ext_new" class="row hidden" style="align-items:end">
         <div style="flex:2"><label>Signed documents (PDF or photo — you can pick several: agreement, SOW, annexes)</label><input type="file" id="ext_file" accept="application/pdf,image/*" multiple></div>
         <div style="flex:0 0 auto"><button class="btn sm" id="ext_upbtn" onclick="extractFromUpload()">Upload &amp; read data</button></div>
       </div>
+      <div style="margin-top:8px"><button class="btn ghost sm" id="ext_sentBtn" onclick="showSentText()" style="display:none">View text sent to AI</button></div>
       <div id="ext_msg"></div>
       <div id="ext_extra"></div>
     </div>
@@ -581,7 +581,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.24';
+const BUILD = '2026-08-08.26';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1393,14 +1393,19 @@ const EXTRA_LABEL = { paymentDays:'Payment days', acceptanceDays:'Acceptance day
   arbitrationBody:'Arbitration body', arbitrationSeat:'Seat of arbitration', rateBasis:'Rate basis',
   paymentBasis:'Payment basis', reportFrequency:'Report frequency', restrictedTerritories:'Restricted territories',
   penaltyDelayPercent:'Penalty for delay %', penaltyFailurePercent:'Penalty for failure %', penaltyCapPercent:'Penalty cap %',
-  insuranceAmount:'Insurance amount', percentagesFound:'Percentages found', parties:'Parties named in the text' };
+  insuranceAmount:'Insurance amount', subject:'Subject / scope summary', sowScope:'SOW scope',
+  hasAcceptanceAct:'Acceptance Act present', hasPenalties:'Penalties present', hasUsageRights:'Usage rights present',
+  hasInsurance:'Insurance required', hasDataSecurity:'Data security section', hasWarranty:'Warranty given',
+  hasPayoutCurrency:'Currency election allowed',
+  percentagesFound:'Percentages found', parties:'Parties named in the text' };
 const EXTRA_TO_DC = { paymentDays:'dc_paymentDays', acceptanceDays:'dc_acceptanceDays', remarksDays:'dc_remarksDays',
   noticeDays:'dc_noticeDays', warrantyPeriod:'dc_warrantyPeriod', governingLaw:'dc_governingLaw',
   jurisdictionPlace:'dc_jurisdictionPlace', arbitrationBody:'dc_arbitrationBody', arbitrationSeat:'dc_arbitrationSeat',
   disputeDays:'dc_disputeDays', cureDays:'dc_cureDays', termYears:'dc_termYears', rateBasis:'dc_rateBasis',
   penaltyDelayPercent:'dc_penaltyDelayPercent', penaltyFailurePercent:'dc_penaltyFailurePercent',
   penaltyCapPercent:'dc_penaltyCapPercent', insuranceAmount:'dc_insuranceAmount',
-  restrictedTerritories:'dc_restrictedTerritories', paymentBasis:'dc_paymentBasis', reportFrequency:'dc_reportFrequency' };
+  restrictedTerritories:'dc_restrictedTerritories', paymentBasis:'dc_paymentBasis', reportFrequency:'dc_reportFrequency',
+  subject:'dc_subject', sowScope:'dc_sowScope' };
 function applyExtrasToDoc(x){
   if(!x) return [];
   const filled=[];
@@ -1409,6 +1414,14 @@ function applyExtrasToDoc(x){
     if(el && x[k]!==undefined && x[k]!=='' && x[k]!==null){ el.value = x[k]; filled.push(EXTRA_LABEL[k]||k); }
   });
   if(x.acceptanceDays && $('dc_evaluationDays') && !$('dc_evaluationDays').value){ $('dc_evaluationDays').value = x.acceptanceDays; }
+  // Optional blocks recognised in the text
+  const BLOCK_MAP = { hasAcceptanceAct:'dc_optAcceptanceAct', hasPenalties:'dc_optPenalties', hasUsageRights:'dc_optUsageRights',
+                      hasInsurance:'dc_optInsurance', hasDataSecurity:'dc_optDataSecurity', hasWarranty:'dc_optWarranty',
+                      hasPayoutCurrency:'dc_optPayoutCurrency' };
+  Object.keys(BLOCK_MAP).forEach(k=>{
+    const el=$(BLOCK_MAP[k]);
+    if(el && x[k]!==undefined && x[k]!==null){ el.checked = (x[k]===true || String(x[k]).toLowerCase()==='true'); filled.push(EXTRA_LABEL[k]||k); }
+  });
   if(x.warrantyPeriod && $('dc_optWarranty')) $('dc_optWarranty').checked = true;
   return filled;
 }
