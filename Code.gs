@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.18';
+const BUILD = '2026-08-08.20';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -558,6 +558,123 @@ function guessDirection_(text) {
   return best || '';
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI-assisted extraction (Gemini). The OCR text stays inside Google: the file is
+// read in your Drive and the text goes to the Gemini API of the same account.
+// The key is kept in Script Properties, not in this file — run setGeminiKey() once.
+// If no key is set, or the call fails, the rule-based parser is used instead.
+// ─────────────────────────────────────────────────────────────────────────────
+function setGeminiKey(key) {
+  PropertiesService.getScriptProperties().setProperty('gemini_key', String(key || '').trim());
+  return 'Saved. Run testGemini() to check it.';
+}
+function geminiKey_() { return PropertiesService.getScriptProperties().getProperty('gemini_key') || ''; }
+function testGemini() {
+  var r = geminiExtract_('AGREEMENT No. TEST/1 dated 5 January 2026 between Alpha Ltd (Supplier) and Beta LLC (Customer). Price: 1,000 EUR. Payment within 30 calendar days.');
+  Logger.log(r);
+  return r;
+}
+
+var AI_FIELDS = [
+  'number', 'signDate', 'startDate', 'endDate', 'amount', 'currency', 'pricingType', 'rateBasis',
+  'templateType', 'direction', 'subject',
+  'paymentDays', 'acceptanceDays', 'remarksDays', 'noticeDays', 'disputeDays', 'cureDays',
+  'termYears', 'warrantyPeriod', 'governingLaw', 'jurisdictionPlace', 'arbitrationBody', 'arbitrationSeat',
+  'penaltyDelayPercent', 'penaltyFailurePercent', 'penaltyCapPercent', 'insuranceAmount',
+  'restrictedTerritories', 'paymentBasis', 'reportFrequency'
+];
+
+
+// Minimise what leaves the account: bank details, contacts and identifiers are masked,
+// and the parties are replaced by neutral tokens. Amounts, dates and terms are kept —
+// they are exactly what we are extracting.
+function maskForAI_(text, counterpartyName) {
+  var t = String(text || '');
+  t = t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]');
+  t = t.replace(/(?:\+\d[\d ()\-]{7,}\d)/g, '[PHONE]');
+  t = t.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/g, '[IBAN]');                 // IBAN
+  t = t.replace(/\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b/g, '[SWIFT]');          // SWIFT/BIC
+  t = t.replace(/\b\d{8,20}\b/g, '[ACCOUNT]');                                   // account / registration numbers
+  t = t.replace(/(Address\s*:?\s*)([^\n]{5,120})/gi, '$1[ADDRESS]');
+  t = t.replace(/(having its (?:principal )?place of business at\s+)([^\n,]{5,120})/gi, '$1[ADDRESS]');
+
+  // Party pseudonyms — the model only needs to know which side is which.
+  var us = String(CONFIG.COMPANY_NAME || 'Fraktalex').split(/\s+/)[0];
+  t = t.replace(new RegExp(us.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), 'PARTY_US');
+  if (counterpartyName) {
+    var cn = String(counterpartyName).trim();
+    if (cn.length > 3) t = t.replace(new RegExp(cn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), 'PARTY_OTHER');
+    var first = cn.split(/\s+/)[0];
+    if (first && first.length > 3) t = t.replace(new RegExp('\\b' + first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), 'PARTY_OTHER');
+  }
+  return t;
+}
+
+function geminiExtract_(text) {
+  var key = geminiKey_();
+  if (!key) return null;
+  var sent = text;
+  var prompt =
+    'You are reading a commercial contract. The parties are written as PARTY_US (our company) and PARTY_OTHER.\n' +
+    'Personal data, bank details and addresses have been masked as [EMAIL], [PHONE], [IBAN], [ACCOUNT], [ADDRESS] — ignore them.\n' +
+    'Extract the fields below and reply with ONE JSON object and nothing else — no prose, no markdown fences.\n' +
+    'Use null for anything the text does not state. Never invent values.\n\n' +
+    'Fields:\n' +
+    '- number: the contract/agreement number exactly as written\n' +
+    '- signDate, startDate, endDate: ISO YYYY-MM-DD\n' +
+    '- amount: number only (no separators). For an hourly contract this is the hourly rate\n' +
+    '- currency: one of USD, EUR, AED, SGD\n' +
+    '- pricingType: "hourly" if paid per hour, otherwise "lump"\n' +
+    '- rateBasis: e.g. "per hour", "per man-day" (only if hourly)\n' +
+    '- templateType: "ica" if this is an independent contractor agreement with a person, else "b2b"\n' +
+    '- direction: "incoming" if PARTY_US receives money, "outgoing" if PARTY_US pays\n' +
+    '- subject: one short line describing the subject of the contract\n' +
+    '- paymentDays, acceptanceDays, remarksDays, noticeDays, disputeDays, cureDays: integers (days)\n' +
+    '- termYears: integer\n' +
+    '- warrantyPeriod: as written, e.g. "1.5 (one and a half) months"\n' +
+    '- governingLaw, jurisdictionPlace, arbitrationBody, arbitrationSeat: short strings\n' +
+    '- penaltyDelayPercent, penaltyFailurePercent, penaltyCapPercent, insuranceAmount: numbers\n' +
+    '- restrictedTerritories: territories where work must not be performed\n' +
+    '- paymentBasis: "hourly" | "fixed" | "milestone"\n' +
+    '- reportFrequency: "on_completion" | "monthly"\n\n' +
+    'CONTRACT TEXT:\n' + String(text).slice(0, 60000);
+
+  try {
+    var url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + encodeURIComponent(key);
+    var resp = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+      })
+    });
+    if (resp.getResponseCode() !== 200) return null;
+    var data = JSON.parse(resp.getContentText());
+    var out = data && data.candidates && data.candidates[0] && data.candidates[0].content &&
+              data.candidates[0].content.parts && data.candidates[0].content.parts[0].text;
+    if (!out) return null;
+    var clean = String(out).replace(/```json|```/g, '').trim();
+    var obj = JSON.parse(clean);
+    var res = {};
+    AI_FIELDS.forEach(function (f) {
+      var v = obj[f];
+      if (v === null || v === undefined || v === '') return;
+      res[f] = v;
+    });
+    res.__sent = sent;
+    return res;
+  } catch (e) { return null; }
+}
+
+// Split what the model returned into the main contract fields and the document settings.
+var AI_CORE = ['number', 'signDate', 'startDate', 'endDate', 'amount', 'currency', 'pricingType', 'templateType', 'direction'];
+function aiSplit_(ai) {
+  var core = {}, extras = {};
+  for (var k in ai) { if (AI_CORE.indexOf(k) >= 0) core[k] = ai[k]; else extras[k] = ai[k]; }
+  return { core: core, extras: extras };
+}
+
 function parseContractText_(text) {
   var f = {};
   var num = text.match(/(?:agreement|contract)\s*(?:no\.?|number|#|\u2116)\s*([A-Za-z0-9\/\-\._]{3,40})/i);
@@ -672,8 +789,18 @@ function adminExtractContract_(d) {
     if (!r.ok) { notes.push(a.FileName + ': ' + r.error); continue; }
     var text = String(r.text || '');
     if (text.replace(/\s/g, '').length < 40) { notes.push(a.FileName + ': no readable text'); continue; }
-    var f = parseContractText_(text);
-    parts.push({ docType: trim_(a.DocType), fileName: a.FileName, fields: f, extras: parseContractExtras_(text) });
+    var f = parseContractText_(text), ex = parseContractExtras_(text), used = 'rules', sentText = '';
+    var cpGuess = guessCounterparty_(text);                       // matched locally, before anything leaves
+    var ai = geminiExtract_(maskForAI_(text, cpGuess ? cpGuess.Name : ''));
+    if (ai) {
+      sentText = ai.__sent || ''; delete ai.__sent;
+      var sp = aiSplit_(ai);
+      for (var kc in sp.core) f[kc] = sp.core[kc];               // the model wins where it found something
+      for (var ke in sp.extras) ex[ke] = sp.extras[ke];
+      used = 'AI';
+    }
+    if (cpGuess) { f.counterpartyId = cpGuess.CounterpartyID; f.counterpartyName = cpGuess.Name; }
+    parts.push({ docType: trim_(a.DocType), fileName: a.FileName, fields: f, extras: ex, engine: used, sent: sentText });
     notes.push(a.FileName + ': ' + (Object.keys(f).length ? Object.keys(f).join(', ') : 'nothing recognised'));
   }
   if (!parts.length) return { ok: false, error: notes.join('; ') || 'Nothing could be read' };
@@ -681,7 +808,9 @@ function adminExtractContract_(d) {
   parts.forEach(function (p) { for (var k in (p.extras || {})) if (extras[k] === undefined) extras[k] = p.extras[k]; });
   var merged = mergeContractFields_(parts);
   if (!merged.number && !merged.amount && !merged.signDate) return { ok: false, error: 'Text was read, but no contract details were recognised' };
-  return { ok: true, fields: merged, extras: extras, notes: notes };
+  var engines = parts.map(function (p) { return p.engine; });
+  var sentAll = parts.map(function (p) { return p.sent ? ('--- ' + p.fileName + ' ---\n' + p.sent) : ''; }).filter(String).join('\n\n');
+  return { ok: true, fields: merged, extras: extras, notes: notes, engine: (engines.indexOf('AI') >= 0 ? 'AI' : 'rules'), sent: sentAll };
 }
 
 // Upload a file straight into Drive and OCR it before the contract record exists.
@@ -704,6 +833,16 @@ function adminExtractUpload_(d) {
   if (text.replace(/\s/g, '').length < 40) { res.warning = 'No readable text found in this file (a low-quality scan?)'; return res; }
   res.fields = parseContractText_(text);
   res.extras = parseContractExtras_(text);
+  var cpU = guessCounterparty_(text);
+  var aiU = geminiExtract_(maskForAI_(text, cpU ? cpU.Name : ''));
+  if (aiU) {
+    res.sent = aiU.__sent || ''; delete aiU.__sent;
+    var spU = aiSplit_(aiU);
+    for (var k1 in spU.core) res.fields[k1] = spU.core[k1];
+    for (var k2 in spU.extras) res.extras[k2] = spU.extras[k2];
+    res.engine = 'AI';
+  } else { res.engine = 'rules'; }
+  if (cpU) { res.fields.counterpartyId = cpU.CounterpartyID; res.fields.counterpartyName = cpU.Name; }
   if (!res.fields.number && !res.fields.amount && !res.fields.signDate) res.warning = 'Text was read, but no contract details were recognised';
   return res;
 }

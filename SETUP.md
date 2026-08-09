@@ -120,3 +120,23 @@ This uses the same Drive permission as attachments, so no extra authorization is
 
 ## ICA: report = acceptance = payment trigger
 Under an Independent Contractor Agreement the contractor issues no invoice. In the report the contractor may elect a payment currency (EUR / USD / AED / SGD; blank = the contract's base currency), converted at the rate of the bank or payment service the company uses on the payment date. In the project card the admin presses **Accept** on a submitted report and enters the name of the authorised representative — this is the countersignature that triggers payment. The generated PDF shows the amount due, the elected currency and an "Accepted on behalf of …" block (filled in once accepted, blank lines otherwise).
+
+## AI-assisted reading of contracts (Gemini)
+
+Recognition works in two stages: the file is OCR'd inside your own Google Drive, and the resulting text is
+then read by Google's Gemini API — the same Google account that already stores the documents, so no new
+third party is involved. If no key is configured, or the call fails, the built-in rule-based parser is used
+instead, so the feature never blocks you.
+
+**Setup (once):**
+
+1. Get an API key at https://aistudio.google.com/apikey and **enable billing on that project** — on the free tier Google may use the content you send to improve its products, which is not acceptable for contracts. On the paid tier it is not used for that.
+2. In the Apps Script editor run: `setGeminiKey('YOUR_KEY')` — it is stored in Script Properties, not in the
+   code, so it never ends up in the repository.
+3. Run `testGemini()` — the Execution log should show recognised test values.
+4. Publish a New version of the deployment.
+
+Before anything is sent, emails, phone numbers, IBANs, account and registration numbers, SWIFT codes and addresses are replaced with placeholders, and the party names are replaced with PARTY_US / PARTY_OTHER (the counterparty is matched locally against your directory). Amounts, dates and terms are kept — they are what is being extracted. The button **View text sent to AI** shows exactly what left the account.
+
+The message under "Read data from document" states which engine was used: *AI reading* or *rule-based reading*.
+Values are always only proposed — check them and press Save contract.

@@ -349,6 +349,12 @@
   </div>
 </div></div>
 
+<div id="sentModal" class="modal hidden"><div class="box">
+  <h2><span>Text sent to the AI</span><button class="x" onclick="closeModal('sentModal')">×</button></h2>
+  <p class="muted">Bank details, contacts, identifiers and addresses are masked; the parties are replaced by PARTY_US / PARTY_OTHER. Amounts, dates and terms are kept — they are what is being extracted.</p>
+  <pre id="sent_body" style="white-space:pre-wrap;font-size:12px;background:#F6F8FA;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:60vh;overflow:auto"></pre>
+</div></div>
+
 <div id="fltModal" class="modal hidden"><div class="box">
   <h2><span id="flt_title">Filter</span><button class="x" onclick="closeModal('fltModal')">×</button></h2>
   <div id="flt_body"></div>
@@ -408,6 +414,7 @@
         <div style="flex:2"><label>Source documents (Ctrl/Cmd-click to select several — e.g. the agreement and its SOW)</label><select id="ext_src" multiple size="4"></select></div>
         <div style="flex:0 0 auto"><button class="btn sm" id="ext_btn" onclick="extractFromDoc()">Read data from document</button></div>
         <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="previewSelected()">Preview</button></div>
+        <div style="flex:0 0 auto"><button class="btn ghost sm" id="ext_sentBtn" onclick="showSentText()" style="display:none">View text sent to AI</button></div>
         
       </div>
       <div id="ext_new" class="row hidden" style="align-items:end">
@@ -567,7 +574,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.18';
+const BUILD = '2026-08-08.20';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1364,7 +1371,7 @@ async function saveContract(){
   finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
 }
 // ── External contract form + OCR extraction ──
-let PENDING_DOCS = [], EXTRACTED_EXTRAS = null;   // files uploaded while creating a contract + values read from them
+let PENDING_DOCS = [], EXTRACTED_EXTRAS = null, AI_SENT_TEXT = '';   // files uploaded while creating a contract + values read from them
 // Fields always stay editable — recognition can be wrong, so the admin must be able to correct it.
 function extFormToggle(){
   const on = $('ct_externalForm').checked, creating = !EDIT_CT;
@@ -1374,12 +1381,19 @@ function extFormToggle(){
   $('ext_new').classList.toggle('hidden', !creating);
 }
 const EXTRA_LABEL = { paymentDays:'Payment days', acceptanceDays:'Acceptance days', remarksDays:'Days for remarks',
-  noticeDays:'Notice days', warrantyPeriod:'Warranty period', governingLaw:'Governing law',
-  jurisdictionPlace:'Place of jurisdiction', arbitrationBody:'Arbitration body',
-  percentagesFound:'Percentages found', parties:'Parties named in the text' };
+  noticeDays:'Notice days', disputeDays:'Dispute days', cureDays:'Cure days', termYears:'Term (years)',
+  warrantyPeriod:'Warranty period', governingLaw:'Governing law', jurisdictionPlace:'Place of jurisdiction',
+  arbitrationBody:'Arbitration body', arbitrationSeat:'Seat of arbitration', rateBasis:'Rate basis',
+  paymentBasis:'Payment basis', reportFrequency:'Report frequency', restrictedTerritories:'Restricted territories',
+  penaltyDelayPercent:'Penalty for delay %', penaltyFailurePercent:'Penalty for failure %', penaltyCapPercent:'Penalty cap %',
+  insuranceAmount:'Insurance amount', percentagesFound:'Percentages found', parties:'Parties named in the text' };
 const EXTRA_TO_DC = { paymentDays:'dc_paymentDays', acceptanceDays:'dc_acceptanceDays', remarksDays:'dc_remarksDays',
   noticeDays:'dc_noticeDays', warrantyPeriod:'dc_warrantyPeriod', governingLaw:'dc_governingLaw',
-  jurisdictionPlace:'dc_jurisdictionPlace', arbitrationBody:'dc_arbitrationBody' };
+  jurisdictionPlace:'dc_jurisdictionPlace', arbitrationBody:'dc_arbitrationBody', arbitrationSeat:'dc_arbitrationSeat',
+  disputeDays:'dc_disputeDays', cureDays:'dc_cureDays', termYears:'dc_termYears', rateBasis:'dc_rateBasis',
+  penaltyDelayPercent:'dc_penaltyDelayPercent', penaltyFailurePercent:'dc_penaltyFailurePercent',
+  penaltyCapPercent:'dc_penaltyCapPercent', insuranceAmount:'dc_insuranceAmount',
+  restrictedTerritories:'dc_restrictedTerritories', paymentBasis:'dc_paymentBasis', reportFrequency:'dc_reportFrequency' };
 function applyExtrasToDoc(x){
   if(!x) return [];
   const filled=[];
@@ -1390,6 +1404,14 @@ function applyExtrasToDoc(x){
   if(x.acceptanceDays && $('dc_evaluationDays') && !$('dc_evaluationDays').value){ $('dc_evaluationDays').value = x.acceptanceDays; }
   if(x.warrantyPeriod && $('dc_optWarranty')) $('dc_optWarranty').checked = true;
   return filled;
+}
+function showSentText(){
+  $('sent_body').textContent = AI_SENT_TEXT || 'Nothing has been sent yet.';
+  $('sentModal').classList.remove('hidden');
+}
+function rememberSent(t){
+  AI_SENT_TEXT = t||'';
+  const b=$('ext_sentBtn'); if(b) b.style.display = AI_SENT_TEXT ? '' : 'none';
 }
 function applyExtrasNow(){
   if(!EXTRACTED_EXTRAS || !Object.keys(EXTRACTED_EXTRAS).length){
@@ -1469,7 +1491,9 @@ async function extractFromDoc(){
     const dcFilled = applyExtrasToDoc(EXTRACTED_EXTRAS);
     previewSelected();
     const notes = (r.notes||[]).map(n=>esc(n)).join('<br>');
-    notice('ext_msg','ok','Recognised: '+got.join(', ')+(dcFilled.length?'; document settings filled: '+dcFilled.join(', '):'')+'. Check everything, then press <b>Save contract</b> and <b>Save document settings</b>. Anything not recognised is left empty.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
+    rememberSent(r.sent);
+    const eng = (r.engine==='AI') ? 'AI reading' : 'rule-based reading';
+    notice('ext_msg','ok',eng+' — recognised: '+got.join(', ')+(dcFilled.length?'; document settings filled: '+dcFilled.join(', '):'')+'. Check everything, then press <b>Save contract</b> and <b>Save document settings</b>. Anything not recognised is left empty.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
   }catch(e){ notice('ext_msg','err', esc(e.message)+' — you can still type the details in by hand.'); }
   finally{ b.disabled=false; b.textContent='Read data from document'; }
 }
@@ -1492,6 +1516,7 @@ function extFillFields(f){
   if(f.templateType && $('ct_template')){ $('ct_template').value=f.templateType; dcTemplateChange(); got.push('template ('+f.templateType.toUpperCase()+')'); }
   if(f.direction){ $('ct_role').value = (f.direction==='outgoing'?'customer':'supplier'); got.push('our role ('+(f.direction==='outgoing'?'we pay':'we receive')+')'); }
   if(f.counterpartyId){ $('ct_cp').innerHTML = ctCpOptions(f.counterpartyId); got.push('counterparty'+(f.counterpartyName?' ('+f.counterpartyName+')':'')); }
+  if(f.subject && $('dc_subject') && !$('dc_subject').value){ $('dc_subject').value=f.subject; got.push('subject'); }
   if(f.signDate){ $('ct_sign').value=f.signDate; got.push('sign date'); }
   if(f.startDate){ $('ct_start').value=f.startDate; got.push('start date'); }
   if(f.endDate){ $('ct_end').value=f.endDate; got.push('end date'); }
@@ -1512,13 +1537,14 @@ async function extractFromUpload(){
       const b64 = await fileToBase64(f);
       const r = await api('extract_upload',{fileName:f.name, mimeType:f.type||'application/octet-stream', dataBase64:b64, docType});
       PENDING_DOCS.push({ driveFileId:r.driveFileId, url:r.url, fileName:r.fileName, docType });
-      parts.push({ docType, fields:r.fields||{} });
+      parts.push({ docType, fields:r.fields||{}, engine:r.engine });
+      if(i===0) rememberSent(r.sent);
       if(i===0){ EXTRACTED_EXTRAS = r.extras||{}; showExtras(EXTRACTED_EXTRAS); showPreview(r.driveFileId); }
       notes.push(f.name+' → '+(Object.keys(r.fields||{}).length?Object.keys(r.fields).join(', '):(r.warning||'nothing recognised')));
     }
     const got = extFillFields(mergeFieldsClient(parts));
     const nHtml = '<div class="muted" style="font-size:12px;margin-top:6px">'+notes.map(n=>esc(n)).join('<br>')+'</div>';
-    if(got.length) notice('ext_msg','ok','Recognised: '+got.join(', ')+'. Check the values, then press <b>Create contract</b> — the files will be attached automatically.'+nHtml);
+    if(got.length) notice('ext_msg','ok',(parts[0]&&parts[0].engine==='AI'?'AI reading':'rule-based reading')+' — recognised: '+got.join(', ')+'. Check the values, then press <b>Create contract</b> — the files will be attached automatically.'+nHtml);
     else notice('ext_msg','info','Nothing recognised. Fill the fields by hand — the files are uploaded and will be attached on save.'+nHtml);
   }catch(e){ notice('ext_msg','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent='Upload & read data'; }
