@@ -60,13 +60,14 @@
   .spin.dark{border-color:var(--accent);border-top-color:transparent}
   @keyframes sp{to{transform:rotate(360deg)}}
   .modal{position:fixed;inset:0;background:rgba(20,30,40,.4);display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;z-index:10;overflow:auto}
+  .modal.top{z-index:30}
   .modal .box{background:#fff;border-radius:16px;max-width:680px;width:100%;margin:auto;padding:22px}
   .modal .box.wide{max-width:1180px}
   .ctgrid{display:flex;gap:18px;align-items:stretch}
   .ctmain{flex:1 1 520px;min-width:0}
   .ctgrid:not(:has(.ctside:not(.hidden))) .ctmain{flex:1 1 100%}
-  .ctside{flex:1 1 460px;min-width:0;display:flex;flex-direction:column;align-self:stretch}
-  .ctside object{flex:1 1 auto;width:100%;border:1px solid var(--line);border-radius:10px;min-height:75vh;background:#fff}
+  .ctside{flex:1 1 460px;min-width:0;display:flex;flex-direction:column;position:sticky;top:12px;align-self:flex-start;height:calc(100vh - 120px)}
+  .ctside object{flex:1 1 auto;width:100%;border:1px solid var(--line);border-radius:10px;min-height:0;background:#fff}
   .ctside .pv-head{position:sticky;top:0;background:#fff;z-index:1}
   @media(max-width:980px){ .ctgrid{flex-wrap:wrap} .ctside{position:static;max-height:none;flex:1 1 100%} }
   .modal h2{display:flex;justify-content:space-between;align-items:center;margin-top:0}
@@ -349,7 +350,13 @@
   </div>
 </div></div>
 
-<div id="sentModal" class="modal hidden"><div class="box">
+<div id="helpModal" class="modal top hidden"><div class="box" style="max-width:620px">
+  <h2><span id="help_title">Field</span><button class="x" onclick="closeModal('helpModal')">×</button></h2>
+  <p class="muted" id="help_sub"></p>
+  <pre id="help_body" style="white-space:pre-wrap;font-size:13px;background:#F6F8FA;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:55vh;overflow:auto"></pre>
+</div></div>
+
+<div id="sentModal" class="modal top hidden"><div class="box">
   <h2><span>Text sent to the AI</span><button class="x" onclick="closeModal('sentModal')">×</button></h2>
   <p class="muted">Bank details, contacts, identifiers and addresses are masked; the parties are replaced by PARTY_US / PARTY_OTHER. Amounts, dates and terms are kept — they are what is being extracted.</p>
   <pre id="sent_body" style="white-space:pre-wrap;font-size:12px;background:#F6F8FA;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:60vh;overflow:auto"></pre>
@@ -574,7 +581,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.22';
+const BUILD = '2026-08-08.23';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1550,6 +1557,95 @@ async function extractFromUpload(){
   finally{ b.disabled=false; b.textContent='Upload & read data'; }
 }
 
+// ── What each setting does to the generated document ──
+const DOC_HELP = {
+  paymentDays: ['Payment days', 'Inserted into the payment clause of the SOW.',
+    'The total price shall be paid within {value} calendar days after signature of the Acceptance Act, or the date on which the Deliverables are deemed accepted.\n\nICA: Fraktalex shall pay the amount confirmed by the countersigned report within {value} days of the date of countersignature.'],
+  advancePercent: ['Advance %', 'Used only with the payment terms "Advance + balance" and "100% advance".',
+    '{value}% of the total price shall be paid as an advance within {advanceDays} calendar days after signature of this Agreement; the remaining amount shall be paid after acceptance.'],
+  advanceDays: ['Advance days', 'Days allowed for the advance payment.', 'See the Advance % clause.'],
+  remarksDays: ['Days for remarks', 'Clause 8.1 of the B2B agreement.',
+    'Following initial submission of a report, the Customer shall provide its remarks (if any) within {value} calendar days.'],
+  acceptanceDays: ['Acceptance days', 'Clause 8.2 — the deadline after which work is deemed accepted.',
+    'The acceptance procedure shall not exceed {value} calendar days from submission of the report and the Acceptance Act.\nIf the Customer neither signs nor rejects within that period, the Deliverables are deemed accepted.'],
+  evaluationDays: ['Acceptance / evaluation days', 'ICA clause 3.3 — time to countersign the report or send comments.',
+    'Within {value} days of receiving a report, Fraktalex shall either countersign it or provide written reasoned comments.'],
+  cureDays: ['Cure days', 'Clause 15.2 — time to remedy a breach before termination.',
+    'The Customer may terminate if the Supplier has not remedied the failure within {value} calendar days of written notice.'],
+  noticeDays: ['Notice days', 'ICA clause 2.2 — termination for convenience.',
+    'Fraktalex may terminate this Agreement for its convenience at any time by giving the Service Provider {value} days written notice.'],
+  disputeDays: ['Dispute days', 'ICA clause 3.2 — time to dispute an amount.',
+    'Within {value} days after receipt of an invoice, Fraktalex shall either pay the undisputed amount or notify of any disputed fees.'],
+  termYears: ['Term (years)', 'ICA clause 2.1 — duration of the agreement.',
+    'This Agreement commences on the Effective Date and terminates {value} years later, or on completion of all SOWs, whichever is later.'],
+  warrantyPeriod: ['Warranty period', 'Only if the Warranty block is on.',
+    'Upon completion of the works, the Supplier shall provide a warranty for the performed works for a period of {value}.'],
+  governingLaw: ['Governing law', 'Clause 17.1 (B2B) / 9.2 (ICA).',
+    'This Agreement shall be governed by and interpreted in accordance with the substantive law in force in {value}.'],
+  jurisdictionPlace: ['Place of jurisdiction', 'B2B clause 17.2.',
+    '{value} shall be the place of jurisdiction for any disputes arising out of or in connection with this Agreement.'],
+  arbitrationBody: ['Arbitration body', 'ICA clause 9.2.',
+    'Any dispute shall be finally resolved by arbitration administered by the {value} under its rules in force at the time of submission.'],
+  arbitrationSeat: ['Seat of arbitration', 'ICA clause 9.2.',
+    'The seat of arbitration shall be {value}, the language English, and the tribunal shall consist of one arbitrator.'],
+  penaltyDelayPercent: ['Penalty for delay %', 'B2B clause 12.3 — only if the Penalties block is on.',
+    'In the event of delay, the Customer may claim a penalty of {value}% of the amount of the improperly performed obligation for each calendar day of delay.'],
+  penaltyFailurePercent: ['Penalty for failure %', 'B2B clause 12.4.',
+    'In the event of failure to provide the Deliverables, the Supplier shall pay a penalty of {value}% of the amount of the unfulfilled obligation.'],
+  penaltyCapPercent: ['Penalty cap %', 'B2B clause 12.5 — the ceiling on all penalties.',
+    'The aggregate amount of all penalties shall not exceed {value} per cent of the total price of this Agreement.'],
+  insuranceAmount: ['Insurance amount', 'ICA clause 8.2 — only if the Insurance block is on.',
+    'The Service Provider shall maintain professional indemnity insurance with a minimum cover of {value} {currency}.'],
+  restrictedTerritories: ['Restricted territories', 'ICA clause 1.5 and the SOW.',
+    'The Service Provider shall not perform any of the Services in the territory of {value}.'],
+  rateBasis: ['Rate basis', 'ICA SOW clause 3.1.', 'Fraktalex shall pay the Service Provider {amount} {currency} {value}.'],
+  paymentBasis: ['Payment basis', 'ICA SOW clause 3.2.', 'Payment shall be based on: {value}.'],
+  reportFrequency: ['Report frequency', 'ICA SOW clause 3.3.', 'The Service Provider shall submit reports {value}.'],
+  completionDate: ['Completion date', 'B2B SOW clause 2.1.',
+    'The Supplier shall perform the services no later than {value}, commencing from the date the Agreement is signed.'],
+  pMName: ['Project manager', 'B2B SOW clause 4.1.',
+    'For the period of performance, the Supplier shall designate {value} as Project Manager.'],
+  subject: ['Subject / scope summary', 'Short description of what the contract is about.', '{value}'],
+  sowScope: ['SOW scope', 'Becomes the list of services in the SOW (one item per line).', '{value}'],
+  optAcceptanceAct: ['Acceptance Act', 'B2B — ON: acceptance is evidenced by a signed act. OFF: written confirmation of the report is enough.',
+    'ON: "Acceptance shall be evidenced solely by an Acceptance Act signed by the authorised representatives of both Parties."\nOFF: "The Customer shall either confirm acceptance in writing or issue a written reasoned rejection. Confirmation by e-mail is sufficient."'],
+  optPenalties: ['Penalties', 'B2B clause 12.', 'ON: clauses 12.3–12.5 with the percentages above.\nOFF: "No contractual penalties apply. Remedies are limited to direct damages and termination."'],
+  optUsageRights: ['Usage rights', 'B2B clause 13.2.', 'ON: "Upon full payment, the Supplier grants the Customer a non-exclusive, perpetual, worldwide right to use the Deliverables."\nOFF: the clause is removed.'],
+  optInsurance: ['Insurance', 'ICA clause 8.2.', 'ON: professional indemnity insurance for the amount above.\nOFF: "No professional indemnity insurance is required, unless expressly required by an applicable SOW."'],
+  optDataSecurity: ['Data security', 'ICA section 6.', 'ON: full list — device encryption, MFA, no removable media, no third-party AI/cloud without consent, 48-hour breach notice.\nOFF: a single clause on reasonable measures and prompt notification.'],
+  optWarranty: ['Warranty', 'B2B SOW section 6 / ICA section 8A.', 'ON: warranty clause for the period above.\nOFF: "No warranty period applies to the works under this Attachment."'],
+  optPayoutCurrency: ['Contractor may elect payment currency', 'ICA clause 3.5.',
+    'ON: "In each work completion report the Service Provider may elect to be paid in EUR, USD, AED or SGD, converted at the rate of the bank used by Fraktalex on the date of payment."\nOFF: payment is always made in the base currency.']
+};
+function showDocHelp(key){
+  const h = DOC_HELP[key]; if(!h) return;
+  const el = $('dc_'+key);
+  let val = el ? (el.type==='checkbox' ? (el.checked?'ON':'OFF') : el.value) : '';
+  let body = h[2]
+    .replace(/\{value\}/g, val || '…')
+    .replace(/\{currency\}/g, ($('ct_currency')?$('ct_currency').value:'') || '…')
+    .replace(/\{amount\}/g, ($('ct_amount')?$('ct_amount').value:'') || '…')
+    .replace(/\{advanceDays\}/g, ($('dc_advanceDays')?$('dc_advanceDays').value:'') || '…');
+  $('help_title').textContent = h[0];
+  $('help_sub').textContent = h[1];
+  $('help_body').textContent = body;
+  $('helpModal').classList.remove('hidden');
+}
+// Turn the labels of Document settings into links to the wording they control.
+function wireDocHelp(){
+  Object.keys(DOC_HELP).forEach(k=>{
+    const el = $('dc_'+k); if(!el) return;
+    const wrap = el.closest('div,label'); if(!wrap) return;
+    const lab = (el.type==='checkbox') ? wrap : wrap.querySelector('label');
+    if(!lab || lab.dataset.helpWired) return;
+    lab.dataset.helpWired = '1';
+    lab.style.cursor = 'help';
+    lab.title = 'Show the wording this setting controls';
+    lab.insertAdjacentHTML('beforeend', ' <span style="color:var(--brand);font-size:12px">ⓘ</span>');
+    lab.addEventListener('click', ev=>{ if(ev.target.tagName!=='INPUT'){ ev.preventDefault(); showDocHelp(k); } });
+  });
+}
+
 // ── Document settings on a contract ──
 const DC_TEXT = ['ourRequisiteId','theirRequisiteId','subject','paymentOption','paymentDays',
   'advancePercent','advanceDays','governingLaw','jurisdictionPlace','arbitrationBody','arbitrationSeat','remarksDays',
@@ -1627,7 +1723,7 @@ async function openContractDoc(c){
     const raw = c[DC_KEY(f)];
     el.checked = (raw==='' || raw==null) ? (isNew && f!=='optWarranty' && (f!=='optPayoutCurrency' || tpl==='ica')) : String(raw).toLowerCase()==='yes';
   });
-  dcTemplateChange(); dcPayChange(); notice('dc_err','','');
+  dcTemplateChange(); dcPayChange(); wireDocHelp(); notice('dc_err','','');
   if(EXTRACTED_EXTRAS){
     const filled = applyExtrasToDoc(EXTRACTED_EXTRAS);
     if(filled.length) notice('dc_err','ok','Filled from the document: '+filled.join(', ')+'. Anything not recognised is left empty — check and press Save document settings.');
