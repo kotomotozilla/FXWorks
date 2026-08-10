@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.43';
+const BUILD = '2026-08-08.44';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -463,16 +463,30 @@ function v2BlocksChunk_(key, chunk, partNo, total) {
   } catch (e) { return { ok: false, error: 'Could not read the structure: ' + e }; }
 }
 
+// A part whose answer got cut off is split in half and retried — better a slower parse
+// than a document that silently loses two thirds of its clauses.
+function v2BlocksPart_(key, chunk, label, depth) {
+  var r = v2BlocksChunk_(key, chunk, label, 0);
+  if (r.ok) return { ok: true, blocks: r.blocks, notes: [label + ': ' + r.blocks.length + ' clauses'] };
+  if (depth >= 2 || chunk.length < 3000) return { ok: false, blocks: [], notes: [label + ': ' + r.error] };
+  var half = Math.floor(chunk.length / 2);
+  var cut = chunk.lastIndexOf('\n', half);
+  if (cut < 1000) cut = half;
+  var a = v2BlocksPart_(key, chunk.slice(0, cut), label + 'a', depth + 1);
+  var b = v2BlocksPart_(key, chunk.slice(cut), label + 'b', depth + 1);
+  return { ok: (a.ok || b.ok), blocks: a.blocks.concat(b.blocks), notes: a.notes.concat(b.notes) };
+}
+
 function v2Blocks_(text) {
   var key = geminiKey_();
   if (!key) return { ok: false, error: 'AI key is not configured — Contracts 2.0 needs it to split the text into clauses' };
-  var chunks = v2Chunks_(text, 14000);
+  var chunks = v2Chunks_(text, 9000);
   var all = [], notes = [], failed = 0;
   for (var i = 0; i < chunks.length; i++) {
-    var r = v2BlocksChunk_(key, chunks[i], i + 1, chunks.length);
-    if (!r.ok) { failed++; notes.push('part ' + (i + 1) + ': ' + r.error); continue; }
+    var r = v2BlocksPart_(key, chunks[i], 'part ' + (i + 1), 0);
     all = all.concat(r.blocks);
-    notes.push('part ' + (i + 1) + ': ' + r.blocks.length + ' clauses');
+    notes = notes.concat(r.notes);
+    if (!r.ok) failed++;
   }
   if (!all.length) return { ok: false, error: notes.join('; ') || 'The model returned no clauses' };
   return { ok: true, blocks: all, chunks: chunks.length, failedChunks: failed, notes: notes };

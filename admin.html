@@ -629,7 +629,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.43';
+const BUILD = '2026-08-08.44';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1242,10 +1242,14 @@ async function v2Parse(){
         lines.push(`<b>${esc(sandbox?files[i].name:'document '+(i+1))}</b>: connection dropped — the server may have finished`);
         continue;
       }
-      const t=r.timing||{};
-      done.push(r.blocks||0);
-      lines.push(`<b>${esc(sandbox?files[i].name:'document '+(i+1))}</b>: ${r.blocks} clauses · OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)}`
-        + (t.parts>1?` · ${t.parts} parts`:'') + (t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:''));
+      const t=r.timing||{}, name = esc(sandbox?files[i].name:'document '+(i+1));
+      const n = (r.blocks==null) ? 0 : r.blocks;
+      done.push(n);
+      lines.push(`<b>${name}</b>: ${n} clauses`
+        + (t.ocrMs!=null?` · OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)}`:'')
+        + (t.parts>1?` · ${t.parts} parts`:'')
+        + (t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:'')
+        + ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-left:12px">${r.notes.map(esc).join('<br>')}</div>`:''));
     }
     await v2LoadContract();
     const sum = done.reduce((a,c)=>a+c,0);
