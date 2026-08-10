@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.40';
+const BUILD = '2026-08-08.43';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -28,7 +28,7 @@ const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
   documents:   ['DocumentID', 'ContractID', 'Kind', 'Number', 'SignDate', 'EffectiveFrom', 'Status', 'Source',
                 'AttachmentID', 'FileName', 'CreatedAt'],
-  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
+  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
                 'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
@@ -98,6 +98,7 @@ function route_(action, d) {
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
     case 'v2_set_key':         return v2SetKey_(d);
+    case 'v2_set_replaces':    return v2SetReplaces_(d);
     case 'extract_contract':   return adminExtractContract_(d);
     case 'extract_upload':     return adminExtractUpload_(d);
     case 'attachment_data':    return adminAttachmentData_(d);
@@ -429,7 +430,12 @@ function v2BlocksChunk_(key, chunk, partNo, total) {
   var prompt =
     'Split this part of a contract into its clauses. Reply with ONE JSON object: {"blocks":[...]} and nothing else.\n' +
     'Each block: {"path":"3.2","level":2,"title":"Payment","text":"full text of the clause","semanticKey":"payment.term"}\n' +
-    '- path: the clause number as written ("3", "3.2", "8.4"); use "" if unnumbered\n' +
+    '- path: the full address of the item as written, including letter or roman sub-items:\n' +
+    '  "3", "3.2", "7.2.1", "9.3(b)", "IV.2", "2.1.a". Every numbered, lettered or bulleted item is its own block.\n' +
+    '  For an unnumbered bullet use the parent number plus its position: "9.1", "9.2" under section 9.\n' +
+    '- replacesPath: only for an amendment — the clause number of the ORIGINAL agreement that this text\n' +
+    '  replaces, taken from wording like "clause 3.2 shall be amended to read" or "Section 7 is replaced by".\n' +
+    '  Use "" when the clause is new or nothing is being replaced.\n' +
     '- level: 1 for a section heading, 2 for a clause, 3 for a sub-clause\n' +
     '- title: short heading if the clause has one, otherwise ""\n' +
     '- text: the complete wording of that clause, verbatim, no summarising\n' +
@@ -523,7 +529,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     var rec = {
       BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
       SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
-      Path: trim_(b.path), Level: num_(b.level) || 2, Title: trim_(b.title),
+      Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath), Level: num_(b.level) || 2, Title: trim_(b.title),
       Text: unmaskAI_(String(b.text || ''), cpName || ''), Params: '', Origin: 'external',
       SortOrder: i + 1, CreatedAt: now
     };
@@ -533,6 +539,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     var sh = getSheet_(SHEETS.blocks);
     var start = sh.getLastRow() + 1;
     sh.getRange(start, head.indexOf('Path') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(start, head.indexOf('ReplacesPath') + 1, rows.length, 1).setNumberFormat('@');
     sh.getRange(start, head.indexOf('SemanticKey') + 1, rows.length, 1).setNumberFormat('@');
     sh.getRange(start, 1, rows.length, head.length).setValues(rows);
   }
@@ -571,6 +578,15 @@ function v2SetKey_(d) {
   var b = findRow_(SHEETS.blocks, 'BlockID', trim_(d.blockId));
   if (!b) return { ok: false, error: 'Clause not found' };
   updateRow_(SHEETS.blocks, 'BlockID', b.BlockID, { SemanticKey: k });
+  return { ok: true };
+}
+
+// The address an amendment points at can be corrected by hand — the wording is not always explicit.
+function v2SetReplaces_(d) {
+  requireAdmin_(d);
+  var b = findRow_(SHEETS.blocks, 'BlockID', trim_(d.blockId));
+  if (!b) return { ok: false, error: 'Clause not found' };
+  updateRow_(SHEETS.blocks, 'BlockID', b.BlockID, { ReplacesPath: trim_(d.replacesPath) });
   return { ok: true };
 }
 
@@ -1862,7 +1878,7 @@ function readAll_(name) {
   for (var i = 1; i < values.length; i++) { var o = {}; for (var j = 0; j < head.length; j++) o[head[j]] = values[i][j]; out.push(o); }
   return out;
 }
-var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName', 'Path', 'SemanticKey'];
+var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName', 'Path', 'ReplacesPath', 'SemanticKey'];
 function appendRow_(name, obj) {
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
   var arr = head.map(function (h) { return obj[h] != null ? obj[h] : ''; });

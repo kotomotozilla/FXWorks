@@ -161,15 +161,15 @@
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Contracts 2.0 <span class="muted" style="font-size:12px">— clause-level structure, experimental</span></h2>
         </div>
-        <p class="muted">A contract as a set of clauses. Amendments replace clauses of the main agreement; the effective version shows what is in force. Nothing here touches the existing contract records — it is stored separately.</p>
+        <p class="muted">A contract as a set of clauses. An <b>annex / SOW adds</b> to the agreement (the same topic in both is detail, not conflict); an <b>amendment replaces</b> the clause it restates, matched by clause number. The effective version shows what is in force on a date. Whether the result is self-consistent is a separate question — this view does not decide it for you. Nothing here touches the existing contract records.</p>
         <div id="v2Err"></div>
         <div class="row" style="align-items:end">
           <div style="flex:2"><label>Contract</label><select id="v2_contract" onchange="v2LoadContract()"></select></div>
-          <div style="flex:2" id="v2_attWrap"><label>Document to parse</label><select id="v2_att"></select></div>
+          <div style="flex:2" id="v2_attWrap"><label>Documents to parse (Ctrl/Cmd-click for several — agreement, SOW, amendments)</label><select id="v2_att" multiple size="4"></select></div>
           <div style="flex:2 1 260px" class="hidden" id="v2_upWrap"><label>File to parse (not linked to any contract)</label>
             <div class="filebox">
-              <input type="file" class="hiddenfile" id="v2_file" accept="application/pdf,image/*" onchange="showFileName('v2_file','v2_fname')">
-              <button type="button" class="btn ghost sm" onclick="pickFile('v2_file')">Choose file</button>
+              <input type="file" class="hiddenfile" id="v2_file" accept="application/pdf,image/*" multiple onchange="showFileName('v2_file','v2_fname')">
+              <button type="button" class="btn ghost sm" onclick="pickFile('v2_file')">Choose files</button>
               <span class="fname" id="v2_fname">no file selected</span>
             </div></div>
           <div style="flex:0 0 auto"><button class="btn sm" id="v2_parseBtn" onclick="v2Parse()">Parse into clauses</button></div>
@@ -629,7 +629,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.40';
+const BUILD = '2026-08-08.43';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1217,37 +1217,42 @@ async function v2LoadContract(){
 }
 async function v2Parse(){
   const sandbox = V2.contractId==='__sandbox';
-  const attId = sandbox ? '' : $('v2_att').value;
-  const file = sandbox ? ($('v2_file').files||[])[0] : null;
+  const attIds = sandbox ? [] : Array.from($('v2_att').selectedOptions).map(o=>o.value).filter(Boolean);
+  const files = sandbox ? Array.from($('v2_file').files||[]) : [];
   if(!V2.contractId){ notice('v2Err','err','Pick a contract, or choose test parsing.'); return; }
-  if(sandbox && !file){ notice('v2Err','err','Choose a file to parse.'); return; }
-  if(!sandbox && !attId){ notice('v2Err','err','Pick one of the contract documents.'); return; }
-  if(file && file.size > 20*1024*1024){ notice('v2Err','err','File too large (max ~20 MB).'); return; }
+  if(sandbox && !files.length){ notice('v2Err','err','Choose at least one file.'); return; }
+  if(!sandbox && !attIds.length){ notice('v2Err','err','Pick at least one document of the contract.'); return; }
+  if(files.some(f=>f.size > 20*1024*1024)){ notice('v2Err','err','Each file must be under ~20 MB.'); return; }
+
+  const total = sandbox ? files.length : attIds.length;
   const b=$('v2_parseBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  notice('v2Err','info','Reading and splitting the document — this can take a minute…');
+  const done=[], lines=[];
+  const secs = ms => (ms==null?'—':(ms/1000).toFixed(1)+'s');
   try{
-    const r = sandbox
-      ? await api('v2_parse_upload',{ fileName:file.name, mimeType:file.type||'application/pdf',
-          dataBase64: await fileToBase64(file) })
-      : await api('v2_parse',{contractId:V2.contractId, attachmentId:attId});
+    for(let i=0;i<total;i++){
+      notice('v2Err','info',`Reading document ${i+1} of ${total} — this can take a minute…`
+        + (lines.length?`<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`:''));
+      let r;
+      try{
+        r = sandbox
+          ? await api('v2_parse_upload',{ fileName:files[i].name, mimeType:files[i].type||'application/pdf',
+              dataBase64: await fileToBase64(files[i]) })
+          : await api('v2_parse',{contractId:V2.contractId, attachmentId:attIds[i]});
+      }catch(err){
+        lines.push(`<b>${esc(sandbox?files[i].name:'document '+(i+1))}</b>: connection dropped — the server may have finished`);
+        continue;
+      }
+      const t=r.timing||{};
+      done.push(r.blocks||0);
+      lines.push(`<b>${esc(sandbox?files[i].name:'document '+(i+1))}</b>: ${r.blocks} clauses · OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)}`
+        + (t.parts>1?` · ${t.parts} parts`:'') + (t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:''));
+    }
     await v2LoadContract();
-    const t=r.timing||{};
-    const secs = ms => (ms==null?'—':(ms/1000).toFixed(1)+'s');
-    notice('v2Err','ok','Parsed into '+r.blocks+' clauses.'+
-      (t.ocrMs!=null?` <span class="muted">· OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)} · ${t.chars} characters · ${t.parts>1?t.parts+' parts':'one pass'}${t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:''} · ${esc(t.model||'')}</span>`:'')+
-      ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-top:6px">${r.notes.map(esc).join('<br>')}</div>`:''));
-  }catch(e){
-    // Parsing a long contract can outlast the connection — the server usually finishes anyway.
-    notice('v2Err','info','Connection dropped while waiting. Checking whether the server finished…');
-    await new Promise(r=>setTimeout(r,4000));
-    try{
-      await v2LoadContract();
-      notice('v2Err', V2.blocks.length?'ok':'err',
-        V2.blocks.length ? 'The server finished: '+V2.blocks.length+' clauses loaded.'
-                         : 'Parsing did not complete — try again, or split the document.');
-    }catch(_){ notice('v2Err','err', esc(e.message)); }
-  }
-  finally{ b.disabled=false; b.textContent='Parse into clauses'; }
+    const sum = done.reduce((a,c)=>a+c,0);
+    notice('v2Err', sum?'ok':'err',
+      (sum ? `Parsed ${total} document(s) into ${sum} clauses.` : 'Nothing was parsed — try again or split the document.')
+      + `<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`);
+  }finally{ b.disabled=false; b.textContent='Parse into clauses'; }
 }
 async function v2DeleteDoc(id){
   if(!confirm('Remove the parsed structure of this document? The file itself stays untouched.')) return;
@@ -1256,31 +1261,63 @@ async function v2DeleteDoc(id){
 }
 // The effective version: for each semantic key, the block from the latest signed
 // document that had come into force by the chosen date.
-// For each semantic key, find the latest signed document that covers that key and take
-// ALL of its clauses for that key — a key normally holds several clauses, so picking one
-// would wrongly mark the rest as superseded.
-function v2WinningDocByKey(asOf){
-  const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
-  const rank = k => (k==='amendment'?2:(k==='annex'?1:0));
-  const win={};
-  V2.blocks.forEach(b=>{
-    const d=docs[b.DocumentID]; if(!d) return;
-    if(String(d.Status).toLowerCase()!=='signed') return;
-    const from=String(d.EffectiveFrom||d.SignDate||'').slice(0,10);
-    if(asOf && from && from>asOf) return;
-    const cur=win[b.SemanticKey];
-    if(!cur){ win[b.SemanticKey]=d; return; }
-    const curFrom=String(cur.EffectiveFrom||cur.SignDate||'');
-    if(from>curFrom || (from===curFrom && rank(d.Kind)>rank(cur.Kind))) win[b.SemanticKey]=d;
-  });
-  return win;
+// Merge rules, deliberately different by document kind:
+//   agreement + annex  -> UNION. An annex details what the agreement frames; the same
+//                         semantic key in both is not a conflict, both clauses are in force.
+//   amendment          -> REPLACES, matched by clause number first (an amendment usually
+//                         restates one clause, not the whole topic), then by key + title.
+// Whether the resulting set is self-consistent is a separate question, answered before signing.
+function v2DocOf(b){ return (V2.docsById||{})[b.DocumentID] || {}; }
+const v2NormPath = p => String(p||'').trim().toLowerCase().replace(/[\s]+/g,'').replace(/[.)]+$/,'');
+// What a block occupies in the effective version: its own address.
+function v2SlotOf(b){
+  const p = v2NormPath(b.Path);
+  if(p) return 'path:'+p;
+  const t = String(b.Title||'').trim().toLowerCase();
+  return t ? ('kt:'+b.SemanticKey+'|'+t) : ('key:'+b.SemanticKey);
+}
+// What an amendment block targets: the stated clause of the original agreement, if any.
+function v2TargetOf(b){
+  const r = v2NormPath(b.ReplacesPath);
+  return r ? 'path:'+r : v2SlotOf(b);
 }
 function v2Effective(asOf){
-  const win=v2WinningDocByKey(asOf);
-  return V2.blocks.filter(b=>win[b.SemanticKey] && win[b.SemanticKey].DocumentID===b.DocumentID);
+  V2.docsById = {}; V2.documents.forEach(d=>V2.docsById[d.DocumentID]=d);
+  const inForce = b => {
+    const d = v2DocOf(b);
+    if(String(d.Status||'').toLowerCase()!=='signed') return false;
+    const from = String(d.EffectiveFrom||d.SignDate||'').slice(0,10);
+    return !(asOf && from && from > asOf);
+  };
+  const base = V2.blocks.filter(b=>inForce(b) && v2DocOf(b).Kind!=='amendment');
+  const amendments = V2.blocks.filter(b=>inForce(b) && v2DocOf(b).Kind==='amendment');
+
+  // later amendments win over earlier ones for the same clause
+  const byMatch = {};
+  amendments.forEach(b=>{
+    const k = v2TargetOf(b), d = v2DocOf(b);
+    const cur = byMatch[k];
+    if(!cur || String(d.EffectiveFrom||d.SignDate||'') >= String(v2DocOf(cur).EffectiveFrom||v2DocOf(cur).SignDate||'')) byMatch[k]=b;
+  });
+  const kept = base.filter(b=>!byMatch[v2SlotOf(b)]);
+  return kept.concat(Object.keys(byMatch).map(k=>byMatch[k]));
+}
+// Which blocks are superseded — used to dim them in the full list.
+function v2SupersededIds(asOf){
+  const eff = v2Effective(asOf), live = {};
+  eff.forEach(b=>live[b.BlockID]=1);
+  const out = {};
+  V2.blocks.forEach(b=>{ if(!live[b.BlockID]) out[b.BlockID]=1; });
+  return out;
 }
 function v2KeyOptions(sel){
   return (V2.keys||[]).map(k=>`<option value="${esc(k)}" ${k===sel?'selected':''}>${esc(k)}</option>`).join('');
+}
+async function v2SetReplaces(blockId, path){
+  try{ await api('v2_set_replaces',{blockId, replacesPath:path});
+    const b = V2.blocks.find(x=>String(x.BlockID)===String(blockId)); if(b) b.ReplacesPath = path;
+    v2Render();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
 async function v2SetKey(blockId, key, ev){
   if(ev) ev.stopPropagation();
@@ -1290,19 +1327,22 @@ async function v2SetKey(blockId, key, ev){
     v2Render();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
-function v2BlockRow(b, docs, eff, winDocs, showKey){
+function v2BlockRow(b, docs, eff, superseded, showKey){
   const d = docs[b.DocumentID]||{};
   const isOpen = !!V2.open[b.BlockID];
-  const w = winDocs[b.SemanticKey];
-  const active = eff ? true : (!w || w.DocumentID===b.DocumentID);
+  const active = eff ? true : !superseded[b.BlockID];
   const dim = active ? '' : 'opacity:.55';
-  const badge = (d.Kind==='amendment') ? ' <span class="tag draft">amendment</span>' : '';
+  const isAmd = (d.Kind==='amendment');
+  const badge = isAmd ? ' <span class="tag draft">amendment</span>' : '';
+  const repl = isAmd
+    ? ` <span class="muted" onclick="event.stopPropagation()">replaces <input value="${esc(b.ReplacesPath||'')}" placeholder="clause no." style="width:90px;display:inline-block;padding:2px 6px;font-size:12px" onchange="v2SetReplaces('${esc(b.BlockID)}',this.value)"></span>`
+    : '';
   const keyCell = showKey
     ? `<td onclick="event.stopPropagation()"><select style="font-size:12px;padding:4px 6px" onchange="v2SetKey('${esc(b.BlockID)}',this.value,event)">${v2KeyOptions(b.SemanticKey)}</select></td>`
     : '';
   return `<tr style="cursor:pointer;${dim}" onclick="v2Toggle('${esc(b.BlockID)}')">
       <td><b>${esc(b.Path||'—')}</b></td>
-      <td>${esc(b.Title||'(no heading)')}${badge}${(!eff&&!active)?' <span class="muted">· superseded</span>':''}</td>
+      <td>${esc(b.Title||'(no heading)')}${badge}${repl}${(!eff&&!active)?' <span class="muted">· superseded</span>':''}</td>
       ${keyCell}
       <td class="muted">${esc(d.FileName||'')}</td>
     </tr>
@@ -1318,7 +1358,7 @@ function v2Render(){
   if(!V2.blocks.length){ $('v2_cover').innerHTML=''; tb.innerHTML='<tr><td class="empty">Nothing parsed for this contract yet.</td></tr>'; return; }
 
   const eff = $('v2_effective').checked, grouped = $('v2_group').checked;
-  const winDocs = v2WinningDocByKey($('v2_asOf').value);
+  const superseded = v2SupersededIds($('v2_asOf').value);
   let rows = eff ? v2Effective($('v2_asOf').value) : V2.blocks.slice();
 
   // coverage summary — the quickest way to spot a bad mapping
@@ -1335,7 +1375,7 @@ function v2Render(){
     tb.innerHTML = '<tr><th style="width:70px">Clause</th><th>Title</th><th>From</th></tr>' + order.map(k=>{
       const inKey = rows.filter(b=>b.SemanticKey===k).sort((a,b)=>(+a.SortOrder||0)-(+b.SortOrder||0));
       return `<tr><td colspan="3" style="background:#EEF3F8;font-weight:600">${esc(k)} <span class="muted">· ${inKey.length}</span></td></tr>`
-        + inKey.map(b=>v2BlockRow(b, docs, eff, winDocs, false)).join('');
+        + inKey.map(b=>v2BlockRow(b, docs, eff, superseded, false)).join('');
     }).join('');
   }else{
     rows.sort((a,b)=>{
@@ -1346,7 +1386,7 @@ function v2Render(){
       return (+a.SortOrder||0)-(+b.SortOrder||0);
     });
     tb.innerHTML = '<tr><th style="width:70px">Clause</th><th>Title</th><th style="width:210px">Key</th><th>From</th></tr>'
-      + rows.map(b=>v2BlockRow(b, docs, eff, winDocs, true)).join('');
+      + rows.map(b=>v2BlockRow(b, docs, eff, superseded, true)).join('');
   }
 }
 function v2Export(){
