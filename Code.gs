@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.31';
+const BUILD = '2026-08-08.32';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -434,15 +434,20 @@ function v2Parse_(d) {
   var a = findRow_(SHEETS.attachments, 'AttachmentID', attId);
   if (!a || !a.DriveFileID) return { ok: false, error: 'Document not found' };
 
+  var t0 = Date.now();
   var r = ocrText_(a.DriveFileID);
   if (!r.ok) return { ok: false, error: r.error };
   var text = fixOcrText_(String(r.text || ''));
+  var tOcr = Date.now() - t0;
   if (text.replace(/\s/g, '').length < 40) return { ok: false, error: 'No readable text in this file' };
 
   var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
   var cpName = c ? cpName_(c.CounterpartyID) : '';
+  var t1 = Date.now();
   var res = v2Blocks_(maskForAI_(text, cpName));
+  var tAi = Date.now() - t1;
   if (!res.ok) return res;
+  var t2 = Date.now();
 
   // one Document row per parsed file; re-parsing replaces its blocks
   readAll_(SHEETS.documents).forEach(function (doc) {
@@ -470,7 +475,8 @@ function v2Parse_(d) {
     });
     n++;
   });
-  return { ok: true, documentId: docId, blocks: n };
+  return { ok: true, documentId: docId, blocks: n,
+           timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_() } };
 }
 
 // Reviewing the mapping is the point of step one, so it must be correctable on the spot.

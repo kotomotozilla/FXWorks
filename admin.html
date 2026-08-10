@@ -615,7 +615,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.31';
+const BUILD = '2026-08-08.32';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1180,7 +1180,10 @@ async function v2Parse(){
   try{
     const r = await api('v2_parse',{contractId:V2.contractId, attachmentId:attId});
     await v2LoadContract();
-    notice('v2Err','ok','Parsed into '+r.blocks+' clauses.');
+    const t=r.timing||{};
+    const secs = ms => (ms==null?'—':(ms/1000).toFixed(1)+'s');
+    notice('v2Err','ok','Parsed into '+r.blocks+' clauses.'+
+      (t.ocrMs!=null?` <span class="muted">· OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)} · ${t.chars} characters · ${esc(t.model||'')}</span>`:''));
   }catch(e){
     // Parsing a long contract can outlast the connection — the server usually finishes anyway.
     notice('v2Err','info','Connection dropped while waiting. Checking whether the server finished…');
