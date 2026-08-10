@@ -615,7 +615,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.30';
+const BUILD = '2026-08-08.31';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1181,7 +1181,17 @@ async function v2Parse(){
     const r = await api('v2_parse',{contractId:V2.contractId, attachmentId:attId});
     await v2LoadContract();
     notice('v2Err','ok','Parsed into '+r.blocks+' clauses.');
-  }catch(e){ notice('v2Err','err', esc(e.message)); }
+  }catch(e){
+    // Parsing a long contract can outlast the connection — the server usually finishes anyway.
+    notice('v2Err','info','Connection dropped while waiting. Checking whether the server finished…');
+    await new Promise(r=>setTimeout(r,4000));
+    try{
+      await v2LoadContract();
+      notice('v2Err', V2.blocks.length?'ok':'err',
+        V2.blocks.length ? 'The server finished: '+V2.blocks.length+' clauses loaded.'
+                         : 'Parsing did not complete — try again, or split the document.');
+    }catch(_){ notice('v2Err','err', esc(e.message)); }
+  }
   finally{ b.disabled=false; b.textContent='Parse into clauses'; }
 }
 async function v2DeleteDoc(id){
@@ -1191,26 +1201,28 @@ async function v2DeleteDoc(id){
 }
 // The effective version: for each semantic key, the block from the latest signed
 // document that had come into force by the chosen date.
+// For each semantic key, find the latest signed document that covers that key and take
+// ALL of its clauses for that key — a key normally holds several clauses, so picking one
+// would wrongly mark the rest as superseded.
+function v2WinningDocByKey(asOf){
+  const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
+  const rank = k => (k==='amendment'?2:(k==='annex'?1:0));
+  const win={};
+  V2.blocks.forEach(b=>{
+    const d=docs[b.DocumentID]; if(!d) return;
+    if(String(d.Status).toLowerCase()!=='signed') return;
+    const from=String(d.EffectiveFrom||d.SignDate||'').slice(0,10);
+    if(asOf && from && from>asOf) return;
+    const cur=win[b.SemanticKey];
+    if(!cur){ win[b.SemanticKey]=d; return; }
+    const curFrom=String(cur.EffectiveFrom||cur.SignDate||'');
+    if(from>curFrom || (from===curFrom && rank(d.Kind)>rank(cur.Kind))) win[b.SemanticKey]=d;
+  });
+  return win;
+}
 function v2Effective(asOf){
-  const docs = {};
-  V2.documents.forEach(d=>docs[d.DocumentID]=d);
-  const eligible = V2.blocks.filter(b=>{
-    const d = docs[b.DocumentID]; if(!d) return false;
-    if(String(d.Status).toLowerCase()!=='signed') return false;
-    const from = String(d.EffectiveFrom||d.SignDate||'').slice(0,10);
-    return !asOf || !from || from <= asOf;
-  });
-  const best = {};
-  eligible.forEach(b=>{
-    const d = docs[b.DocumentID];
-    const when = String(d.EffectiveFrom||d.SignDate||'');
-    const cur = best[b.SemanticKey];
-    const rank = k => (k==='amendment'?2:(k==='annex'?1:0));
-    if(!cur) { best[b.SemanticKey]=b; return; }
-    const dc = docs[cur.DocumentID], curWhen = String(dc.EffectiveFrom||dc.SignDate||'');
-    if(when > curWhen || (when===curWhen && rank(d.Kind) > rank(dc.Kind))) best[b.SemanticKey]=b;
-  });
-  return Object.keys(best).map(k=>best[k]);
+  const win=v2WinningDocByKey(asOf);
+  return V2.blocks.filter(b=>win[b.SemanticKey] && win[b.SemanticKey].DocumentID===b.DocumentID);
 }
 function v2KeyOptions(sel){
   return (V2.keys||[]).map(k=>`<option value="${esc(k)}" ${k===sel?'selected':''}>${esc(k)}</option>`).join('');
@@ -1223,10 +1235,11 @@ async function v2SetKey(blockId, key, ev){
     v2Render();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
-function v2BlockRow(b, docs, eff, supersededKeys, showKey){
+function v2BlockRow(b, docs, eff, winDocs, showKey){
   const d = docs[b.DocumentID]||{};
   const isOpen = !!V2.open[b.BlockID];
-  const active = eff ? true : (supersededKeys[b.SemanticKey]===b.BlockID);
+  const w = winDocs[b.SemanticKey];
+  const active = eff ? true : (!w || w.DocumentID===b.DocumentID);
   const dim = active ? '' : 'opacity:.55';
   const badge = (d.Kind==='amendment') ? ' <span class="tag draft">amendment</span>' : '';
   const keyCell = showKey
@@ -1250,7 +1263,7 @@ function v2Render(){
   if(!V2.blocks.length){ $('v2_cover').innerHTML=''; tb.innerHTML='<tr><td class="empty">Nothing parsed for this contract yet.</td></tr>'; return; }
 
   const eff = $('v2_effective').checked, grouped = $('v2_group').checked;
-  const supersededKeys = (()=>{ const m={}; v2Effective($('v2_asOf').value).forEach(b=>m[b.SemanticKey]=b.BlockID); return m; })();
+  const winDocs = v2WinningDocByKey($('v2_asOf').value);
   let rows = eff ? v2Effective($('v2_asOf').value) : V2.blocks.slice();
 
   // coverage summary — the quickest way to spot a bad mapping
@@ -1267,7 +1280,7 @@ function v2Render(){
     tb.innerHTML = '<tr><th style="width:70px">Clause</th><th>Title</th><th>From</th></tr>' + order.map(k=>{
       const inKey = rows.filter(b=>b.SemanticKey===k).sort((a,b)=>(+a.SortOrder||0)-(+b.SortOrder||0));
       return `<tr><td colspan="3" style="background:#EEF3F8;font-weight:600">${esc(k)} <span class="muted">· ${inKey.length}</span></td></tr>`
-        + inKey.map(b=>v2BlockRow(b, docs, eff, supersededKeys, false)).join('');
+        + inKey.map(b=>v2BlockRow(b, docs, eff, winDocs, false)).join('');
     }).join('');
   }else{
     rows.sort((a,b)=>{
@@ -1278,7 +1291,7 @@ function v2Render(){
       return (+a.SortOrder||0)-(+b.SortOrder||0);
     });
     tb.innerHTML = '<tr><th style="width:70px">Clause</th><th>Title</th><th style="width:210px">Key</th><th>From</th></tr>'
-      + rows.map(b=>v2BlockRow(b, docs, eff, supersededKeys, true)).join('');
+      + rows.map(b=>v2BlockRow(b, docs, eff, winDocs, true)).join('');
   }
 }
 function v2Export(){

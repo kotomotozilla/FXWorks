@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.30';
+const BUILD = '2026-08-08.31';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -460,7 +460,7 @@ function v2Parse_(d) {
     Source: 'external', AttachmentID: attId, FileName: trim_(a.FileName), CreatedAt: now
   });
   var n = 0;
-  res.blocks.forEach(function (b, i) {
+  dedupeBlocks_(res.blocks).forEach(function (b, i) {
     var k = trim_(b.semanticKey);
     appendRow_(SHEETS.blocks, {
       BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
@@ -781,11 +781,42 @@ var AI_FIELDS = [
 // "Konstan<n" = ti, "Interna]onal" = ti, "Rai\\eisen" = ff. Repair before anything else.
 function fixOcrText_(t) {
   t = String(t || '');
+  // Drive OCR loses ligatures: ti -> "<" "]" "}", ff -> "\\", fi -> "|" or "a", tt -> "e", ft -> "o".
   t = t.replace(/([A-Za-z])[<\]\}](?=[a-z])/g, '$1ti');
   t = t.replace(/([A-Za-z])\\(?=[a-z])/g, '$1ff');
   t = t.replace(/([A-Za-z])\|(?=[a-z])/g, '$1ti');
+  // The "fi"/"tt"/"ft" losses cannot be repaired by pattern — repair the words they produce.
+  var WORDS = {
+    'aoer':'after','aoerwards':'afterwards','wrieen':'written','aeached':'attached','aeachment':'Attachment',
+    'aeachments':'attachments','aeempt':'attempt','aeempts':'attempts','maeer':'matter','maeers':'matters',
+    'beeer':'better','seeng':'setting','sesng':'setting','lecer':'letter','wrisng':'writing',
+    'identiaed':'identified','identiaes':'identifies','modiaed':'modified','modiaca':'modifica',
+    'speciaca':'specifica','speciac':'specific','conaden':'confiden','notiaed':'notified','notiaca':'notifica',
+    'veriaed':'verified','certiaed':'certified','clariaca':'clarifica','beneat':'benefit','beneats':'benefits',
+    'arst':'first','ave':'five','agy':'fifty','ale':'file','ales':'files','aled':'filed','aling':'filing',
+    'anal':'final','anally':'finally','ananc':'financ','axed':'fixed','aoen':'often','proat':'profit',
+    'proats':'profits','sucient':'sufficient','oer':'offer','oered':'offered','eect':'effect','eective':'effective',
+    'jood':'flood','jow':'flow','conjict':'conflict','func]ons':'functions','are':'fire'
+  };
+  Object.keys(WORDS).forEach(function (bad) {
+    t = t.replace(new RegExp('\\b' + bad + '\\b', 'g'), WORDS[bad]);
+    t = t.replace(new RegExp('\\b' + bad.charAt(0).toUpperCase() + bad.slice(1) + '\\b', 'g'),
+                  WORDS[bad].charAt(0).toUpperCase() + WORDS[bad].slice(1));
+  });
   t = t.replace(/\u00ad/g, '');
   return t;
+}
+
+// Drive OCR often emits the same page twice (text layer + rendered layer).
+function dedupeBlocks_(blocks) {
+  var seen = {}, out = [];
+  blocks.forEach(function (b) {
+    var k = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 160).toLowerCase();
+    if (!k) return;
+    if (seen[k]) return;
+    seen[k] = 1; out.push(b);
+  });
+  return out;
 }
 
 // Names of everyone we know (counterparties and signatories) plus bank lines are masked,
@@ -839,7 +870,9 @@ function maskForAI_(text, counterpartyName) {
   t = t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]');
   t = t.replace(/(?:\+\d[\d ()\-]{7,}\d)/g, '[PHONE]');
   t = t.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/g, '[IBAN]');
-  t = t.replace(/\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b/g, '[SWIFT]');
+  // A SWIFT code must be labelled or contain digits — otherwise plain capitalised words match.
+  t = t.replace(/(SWIFT|BIC)(\s*(?:code)?\s*:?\s*)([A-Z0-9]{8,11})/gi, '$1$2[SWIFT]');
+  t = t.replace(/\b(?=[A-Z0-9]{8,11}\b)(?=[A-Z0-9]*\d)[A-Z0-9]{8,11}\b/g, '[SWIFT]');
   t = t.replace(/\b\d{8,20}\b/g, '[ACCOUNT]');
   t = t.replace(/\b\d{2,4}(?:[-. ]\d{2,4}){2,}\b/g, '[ACCOUNT]');
   t = t.replace(/(Account\s*(?:No\.?|number)?\s*:?\s*)([^\n,]{4,40})/gi, '$1[ACCOUNT]');
