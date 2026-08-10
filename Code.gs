@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.44';
+const BUILD = '2026-08-08.45';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -99,6 +99,7 @@ function route_(action, d) {
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
     case 'v2_set_key':         return v2SetKey_(d);
     case 'v2_set_replaces':    return v2SetReplaces_(d);
+    case 'v2_set_doc':         return v2SetDoc_(d);
     case 'extract_contract':   return adminExtractContract_(d);
     case 'extract_upload':     return adminExtractUpload_(d);
     case 'attachment_data':    return adminAttachmentData_(d);
@@ -601,6 +602,23 @@ function v2SetReplaces_(d) {
   var b = findRow_(SHEETS.blocks, 'BlockID', trim_(d.blockId));
   if (!b) return { ok: false, error: 'Clause not found' };
   updateRow_(SHEETS.blocks, 'BlockID', b.BlockID, { ReplacesPath: trim_(d.replacesPath) });
+  return { ok: true };
+}
+
+// The kind of a document decides how it merges, so it must be correctable —
+// especially for files parsed in test mode, where there is no attachment to take it from.
+function v2SetDoc_(d) {
+  requireAdmin_(d);
+  var doc = findRow_(SHEETS.documents, 'DocumentID', trim_(d.documentId));
+  if (!doc) return { ok: false, error: 'Document not found' };
+  var upd = {};
+  if (d.kind !== undefined) {
+    var k = trim_(d.kind);
+    upd.Kind = (k === 'annex' || k === 'amendment') ? k : 'agreement';
+  }
+  if (d.signDate !== undefined) { upd.SignDate = trim_(d.signDate); upd.EffectiveFrom = trim_(d.signDate); }
+  if (d.status !== undefined) upd.Status = (trim_(d.status) === 'draft') ? 'draft' : 'signed';
+  updateRow_(SHEETS.documents, 'DocumentID', doc.DocumentID, upd);
   return { ok: true };
 }
 

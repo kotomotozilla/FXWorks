@@ -629,7 +629,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.44';
+const BUILD = '2026-08-08.45';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1303,7 +1303,15 @@ function v2Effective(asOf){
     const cur = byMatch[k];
     if(!cur || String(d.EffectiveFrom||d.SignDate||'') >= String(v2DocOf(cur).EffectiveFrom||v2DocOf(cur).SignDate||'')) byMatch[k]=b;
   });
-  const kept = base.filter(b=>!byMatch[v2SlotOf(b)]);
+  // An amendment addresses the agreement's numbering, so a clause of the agreement is
+  // replaced before an identically numbered clause of an annex.
+  const claimed = {};
+  Object.keys(byMatch).forEach(k=>{
+    const target = base.filter(b=>v2SlotOf(b)===k);
+    const pick = target.find(b=>v2DocOf(b).Kind==='agreement') || target[0];
+    if(pick) claimed[pick.BlockID]=1;
+  });
+  const kept = base.filter(b=>!claimed[b.BlockID]);
   return kept.concat(Object.keys(byMatch).map(k=>byMatch[k]));
 }
 // Which blocks are superseded — used to dim them in the full list.
@@ -1316,6 +1324,15 @@ function v2SupersededIds(asOf){
 }
 function v2KeyOptions(sel){
   return (V2.keys||[]).map(k=>`<option value="${esc(k)}" ${k===sel?'selected':''}>${esc(k)}</option>`).join('');
+}
+async function v2SetDoc(documentId, field, value){
+  const payload = { documentId }; payload[field] = value;
+  try{
+    await api('v2_set_doc', payload);
+    const d = V2.documents.find(x=>String(x.DocumentID)===String(documentId));
+    if(d){ if(field==='kind') d.Kind=value; else if(field==='signDate'){ d.SignDate=value; d.EffectiveFrom=value; } else d.Status=value; }
+    v2Render();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
 async function v2SetReplaces(blockId, path){
   try{ await api('v2_set_replaces',{blockId, replacesPath:path});
@@ -1357,7 +1374,19 @@ function v2Render(){
   const tb=$('v2Table').querySelector('tbody');
   const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
   $('v2_docs').innerHTML = V2.documents.length
-    ? V2.documents.map(d=>`<span style="margin-right:14px">${esc(V2_KIND[d.Kind]||d.Kind)}: <b>${esc(d.FileName||d.Number||'')}</b>${d.SignDate?' · '+esc(fmtDate(d.SignDate)):''} <span class="tag ${String(d.Status).toLowerCase()==='signed'?'submitted':'draft'}">${esc(d.Status)}</span> <a href="#" onclick="v2DeleteDoc('${esc(d.DocumentID)}');return false;">remove</a></span>`).join('')
+    ? V2.documents.map(d=>`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0">
+        <b>${esc(d.FileName||d.Number||'')}</b>
+        <select style="width:auto;font-size:12px;padding:3px 6px" onchange="v2SetDoc('${esc(d.DocumentID)}','kind',this.value)">
+          ${['agreement','annex','amendment'].map(k=>`<option value="${k}" ${d.Kind===k?'selected':''}>${V2_KIND[k]}</option>`).join('')}
+        </select>
+        <input type="date" style="width:auto;font-size:12px;padding:3px 6px" value="${esc(d.SignDate?fmtDate(d.SignDate):'')}" title="Signed / effective from"
+               onchange="v2SetDoc('${esc(d.DocumentID)}','signDate',this.value)">
+        <select style="width:auto;font-size:12px;padding:3px 6px" onchange="v2SetDoc('${esc(d.DocumentID)}','status',this.value)">
+          <option value="signed" ${String(d.Status).toLowerCase()==='signed'?'selected':''}>signed</option>
+          <option value="draft" ${String(d.Status).toLowerCase()==='draft'?'selected':''}>draft</option>
+        </select>
+        <a href="#" onclick="v2DeleteDoc('${esc(d.DocumentID)}');return false;">remove</a>
+      </div>`).join('')
     : 'No documents parsed yet.';
   if(!V2.blocks.length){ $('v2_cover').innerHTML=''; tb.innerHTML='<tr><td class="empty">Nothing parsed for this contract yet.</td></tr>'; return; }
 
