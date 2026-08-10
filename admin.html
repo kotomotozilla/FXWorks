@@ -104,6 +104,7 @@
       <button id="tab-contracts" onclick="switchTab('contracts')">Contracts</button>
       <button id="tab-invoices" onclick="switchTab('invoices')">Invoices</button>
       <button id="tab-counterparties" onclick="switchTab('counterparties')">Counterparties</button>
+      <button id="tab-v2" onclick="switchTab('v2')">Contracts 2.0</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
     </div>
 
@@ -148,6 +149,38 @@
         </div>
         <div id="invErr"></div>
         <div class="scroll"><table id="invTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- CONTRACTS 2.0 (experimental) -->
+    <section id="view-v2" class="hidden">
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2>Contracts 2.0 <span class="muted" style="font-size:12px">— clause-level structure, experimental</span></h2>
+        </div>
+        <p class="muted">A contract as a set of clauses. Amendments replace clauses of the main agreement; the effective version shows what is in force. Nothing here touches the existing contract records — it is stored separately.</p>
+        <div id="v2Err"></div>
+        <div class="row" style="align-items:end">
+          <div style="flex:2"><label>Contract</label><select id="v2_contract" onchange="v2LoadContract()"></select></div>
+          <div style="flex:2"><label>Document to parse</label><select id="v2_att"></select></div>
+          <div style="flex:0 0 auto"><button class="btn sm" id="v2_parseBtn" onclick="v2Parse()">Parse into clauses</button></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2 style="font-size:16px">Clauses</h2>
+          <div class="acts">
+            <label style="display:flex;align-items:center;gap:6px;font-size:14px;width:auto">
+              <input type="checkbox" id="v2_group" style="width:auto" checked onchange="v2Render()"> Group by key</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:14px;width:auto">
+              <input type="checkbox" id="v2_effective" style="width:auto" onchange="v2Render()"> Effective version only</label>
+            <input id="v2_asOf" type="date" style="max-width:170px" onchange="v2Render()" title="Effective as of">
+          </div>
+        </div>
+        <div id="v2_docs" class="muted" style="margin:6px 0"></div>
+        <div id="v2_cover" style="margin:6px 0"></div>
+        <div class="scroll"><table id="v2Table"><tbody><tr><td class="empty">Pick a contract.</td></tr></tbody></table></div>
       </div>
     </section>
 
@@ -581,7 +614,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.27';
+const BUILD = '2026-08-08.29';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -639,8 +672,8 @@ function enterApp(){
 }
 function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){
-  ['projects','contracts','invoices','counterparties','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices();
+  ['projects','contracts','invoices','counterparties','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init();
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
 function ctNumber(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?c.Number:''; }
@@ -1110,6 +1143,144 @@ async function reqSetDefault(id, btn){
   try{ await api('set_default_requisite',{id}); await loadRequisites(RQ_CP); }
   catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Make default'; }
 }
+
+// ── Contracts 2.0: clause blocks ──
+let V2 = { contractId:'', documents:[], blocks:[], keys:[], open:{} };
+const V2_KIND = { agreement:'Agreement', annex:'Annex / SOW', amendment:'Amendment' };
+
+function v2Init(){
+  const sel=$('v2_contract');
+  sel.innerHTML = '<option value="">— select a contract —</option>'+CONTRACTS.map(c=>
+    `<option value="${esc(c.ContractID)}" ${String(V2.contractId)===String(c.ContractID)?'selected':''}>${esc(c.Number)} — ${esc(cpName(c.CounterpartyID))}</option>`).join('');
+  if(!$('v2_asOf').value) $('v2_asOf').value = todayISO();
+  if(V2.contractId) v2LoadContract();
+}
+async function v2LoadContract(){
+  V2.contractId = $('v2_contract').value;
+  $('v2_att').innerHTML = '<option value="">—</option>';
+  if(!V2.contractId){ $('v2Table').querySelector('tbody').innerHTML='<tr><td class="empty">Pick a contract.</td></tr>'; return; }
+  notice('v2Err','','');
+  try{
+    const at = await api('list_attachments',{parentType:'contract', parentId:V2.contractId});
+    const items = at.attachments||[];
+    $('v2_att').innerHTML = items.length
+      ? items.map(a=>`<option value="${esc(a.AttachmentID)}">${esc(a.FileName)}${a.DocType?' · '+esc(DOC_TYPE_LABEL[a.DocType]||''):''}</option>`).join('')
+      : '<option value="">— no documents attached —</option>';
+    const r = await api('v2_list',{contractId:V2.contractId});
+    V2.documents = r.documents||[]; V2.blocks = r.blocks||[]; V2.keys = r.keys||[];
+    v2Render();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+async function v2Parse(){
+  const attId = $('v2_att').value;
+  if(!V2.contractId || !attId){ notice('v2Err','err','Pick a contract and one of its documents.'); return; }
+  const b=$('v2_parseBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  notice('v2Err','info','Reading and splitting the document — this can take a minute…');
+  try{
+    const r = await api('v2_parse',{contractId:V2.contractId, attachmentId:attId});
+    await v2LoadContract();
+    notice('v2Err','ok','Parsed into '+r.blocks+' clauses.');
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Parse into clauses'; }
+}
+async function v2DeleteDoc(id){
+  if(!confirm('Remove the parsed structure of this document? The file itself stays untouched.')) return;
+  try{ await api('v2_delete_doc',{documentId:id}); await v2LoadContract(); }
+  catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+// The effective version: for each semantic key, the block from the latest signed
+// document that had come into force by the chosen date.
+function v2Effective(asOf){
+  const docs = {};
+  V2.documents.forEach(d=>docs[d.DocumentID]=d);
+  const eligible = V2.blocks.filter(b=>{
+    const d = docs[b.DocumentID]; if(!d) return false;
+    if(String(d.Status).toLowerCase()!=='signed') return false;
+    const from = String(d.EffectiveFrom||d.SignDate||'').slice(0,10);
+    return !asOf || !from || from <= asOf;
+  });
+  const best = {};
+  eligible.forEach(b=>{
+    const d = docs[b.DocumentID];
+    const when = String(d.EffectiveFrom||d.SignDate||'');
+    const cur = best[b.SemanticKey];
+    const rank = k => (k==='amendment'?2:(k==='annex'?1:0));
+    if(!cur) { best[b.SemanticKey]=b; return; }
+    const dc = docs[cur.DocumentID], curWhen = String(dc.EffectiveFrom||dc.SignDate||'');
+    if(when > curWhen || (when===curWhen && rank(d.Kind) > rank(dc.Kind))) best[b.SemanticKey]=b;
+  });
+  return Object.keys(best).map(k=>best[k]);
+}
+function v2KeyOptions(sel){
+  return (V2.keys||[]).map(k=>`<option value="${esc(k)}" ${k===sel?'selected':''}>${esc(k)}</option>`).join('');
+}
+async function v2SetKey(blockId, key, ev){
+  if(ev) ev.stopPropagation();
+  try{
+    await api('v2_set_key',{blockId, semanticKey:key});
+    const b = V2.blocks.find(x=>String(x.BlockID)===String(blockId)); if(b) b.SemanticKey = key;
+    v2Render();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+function v2BlockRow(b, docs, eff, supersededKeys, showKey){
+  const d = docs[b.DocumentID]||{};
+  const isOpen = !!V2.open[b.BlockID];
+  const active = eff ? true : (supersededKeys[b.SemanticKey]===b.BlockID);
+  const dim = active ? '' : 'opacity:.55';
+  const badge = (d.Kind==='amendment') ? ' <span class="tag draft">amendment</span>' : '';
+  const keyCell = showKey
+    ? `<td onclick="event.stopPropagation()"><select style="font-size:12px;padding:4px 6px" onchange="v2SetKey('${esc(b.BlockID)}',this.value,event)">${v2KeyOptions(b.SemanticKey)}</select></td>`
+    : '';
+  return `<tr style="cursor:pointer;${dim}" onclick="v2Toggle('${esc(b.BlockID)}')">
+      <td><b>${esc(b.Path||'—')}</b></td>
+      <td>${esc(b.Title||'(no heading)')}${badge}${(!eff&&!active)?' <span class="muted">· superseded</span>':''}</td>
+      ${keyCell}
+      <td class="muted">${esc(d.FileName||'')}</td>
+    </tr>
+    <tr${isOpen?'':' class="hidden"'}><td colspan="${showKey?4:3}" style="background:#F6F8FA">
+      <div style="white-space:pre-wrap;font-size:13px;padding:6px 2px">${esc(b.Text||'')}</div></td></tr>`;
+}
+function v2Render(){
+  const tb=$('v2Table').querySelector('tbody');
+  const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
+  $('v2_docs').innerHTML = V2.documents.length
+    ? V2.documents.map(d=>`<span style="margin-right:14px">${esc(V2_KIND[d.Kind]||d.Kind)}: <b>${esc(d.FileName||d.Number||'')}</b>${d.SignDate?' · '+esc(fmtDate(d.SignDate)):''} <span class="tag ${String(d.Status).toLowerCase()==='signed'?'submitted':'draft'}">${esc(d.Status)}</span> <a href="#" onclick="v2DeleteDoc('${esc(d.DocumentID)}');return false;">remove</a></span>`).join('')
+    : 'No documents parsed yet.';
+  if(!V2.blocks.length){ $('v2_cover').innerHTML=''; tb.innerHTML='<tr><td class="empty">Nothing parsed for this contract yet.</td></tr>'; return; }
+
+  const eff = $('v2_effective').checked, grouped = $('v2_group').checked;
+  const supersededKeys = (()=>{ const m={}; v2Effective($('v2_asOf').value).forEach(b=>m[b.SemanticKey]=b.BlockID); return m; })();
+  let rows = eff ? v2Effective($('v2_asOf').value) : V2.blocks.slice();
+
+  // coverage summary — the quickest way to spot a bad mapping
+  const used = {}; rows.forEach(b=>used[b.SemanticKey]=(used[b.SemanticKey]||0)+1);
+  const misc = used['misc']||0;
+  const unused = (V2.keys||[]).filter(k=>!used[k]);
+  $('v2_cover').innerHTML = `<span class="muted">${rows.length} clauses · ${Object.keys(used).length} keys used`
+    + (misc?` · <b style="color:var(--warn)">${misc} in "misc"</b> — check these first`:'')
+    + (unused.length?` · not present: ${unused.slice(0,8).map(esc).join(', ')}${unused.length>8?'…':''}`:'')
+    + `</span>`;
+
+  if(grouped){
+    const order = (V2.keys||[]).filter(k=>used[k]);
+    tb.innerHTML = '<tr><th style="width:70px">Clause</th><th>Title</th><th>From</th></tr>' + order.map(k=>{
+      const inKey = rows.filter(b=>b.SemanticKey===k).sort((a,b)=>(+a.SortOrder||0)-(+b.SortOrder||0));
+      return `<tr><td colspan="3" style="background:#EEF3F8;font-weight:600">${esc(k)} <span class="muted">· ${inKey.length}</span></td></tr>`
+        + inKey.map(b=>v2BlockRow(b, docs, eff, supersededKeys, false)).join('');
+    }).join('');
+  }else{
+    rows.sort((a,b)=>{
+      if(a.DocumentID!==b.DocumentID){
+        const da=docs[a.DocumentID]||{}, db=docs[b.DocumentID]||{};
+        return String(da.SignDate||'').localeCompare(String(db.SignDate||''));
+      }
+      return (+a.SortOrder||0)-(+b.SortOrder||0);
+    });
+    tb.innerHTML = '<tr><th style="width:70px">Clause</th><th>Title</th><th style="width:210px">Key</th><th>From</th></tr>'
+      + rows.map(b=>v2BlockRow(b, docs, eff, supersededKeys, true)).join('');
+  }
+}
+function v2Toggle(id){ V2.open[id] = !V2.open[id]; v2Render(); }
 
 // ── Sorting & filtering engine (shared by all lists) ──
 const SORT = { contracts:{key:'',dir:1}, invoices:{key:'',dir:1}, projects:{key:'',dir:1}, counterparties:{key:'',dir:1} };

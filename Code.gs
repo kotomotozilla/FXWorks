@@ -19,13 +19,16 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.27';
+const BUILD = '2026-08-08.29';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
+  documents:   ['DocumentID', 'ContractID', 'Kind', 'Number', 'SignDate', 'EffectiveFrom', 'Status', 'Source',
+                'AttachmentID', 'FileName', 'CreatedAt'],
+  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
                 'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
@@ -89,6 +92,11 @@ function route_(action, d) {
     case 'update_contract':    return adminUpdateContract_(d);
     case 'delete_contract':    return adminDeleteContract_(d);
     case 'save_contract_doc':  return adminSaveContractDoc_(d);
+    // Contracts 2.0 — clause-level structure (experimental, separate sheets)
+    case 'v2_parse':           return v2Parse_(d);
+    case 'v2_list':            requireAdmin_(d); return v2List_(d);
+    case 'v2_delete_doc':      return v2DeleteDoc_(d);
+    case 'v2_set_key':         return v2SetKey_(d);
     case 'extract_contract':   return adminExtractContract_(d);
     case 'extract_upload':     return adminExtractUpload_(d);
     case 'attachment_data':    return adminAttachmentData_(d);
@@ -375,6 +383,121 @@ function addOneYear_(dateStr) {
   return (Number(p[0]) + 1) + '-' + p[1] + '-' + p[2];
 }
 function cpName_(id) { var c = findRow_(SHEETS.counterparties, 'CounterpartyID', trim_(id)); return c ? (c.Name || c.Email || '') : ''; }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Contracts 2.0 — a contract as an ordered set of clause blocks.
+// Amendments carry the full new text of a clause; the effective version is the
+// latest signed block for each semantic key. Stored in its own sheets, so the
+// existing contract module is untouched.
+// ─────────────────────────────────────────────────────────────────────────────
+var SEMANTIC_KEYS = ['parties', 'definitions', 'documents', 'scope', 'reporting', 'schedule',
+  'acceptance.procedure', 'acceptance.deemed', 'documentation', 'payment.term', 'payment.currency',
+  'force_majeure', 'liability.general', 'liability.penalties', 'liability.cap', 'ip.ownership', 'ip.usage',
+  'infringement', 'termination', 'confidentiality', 'data.security', 'insurance', 'compliance',
+  'law.governing', 'law.forum', 'misc', 'effectiveness', 'signatures'];
+
+function v2Blocks_(text) {
+  var key = geminiKey_();
+  if (!key) return { ok: false, error: 'AI key is not configured — Contracts 2.0 needs it to split the text into clauses' };
+  var prompt =
+    'Split this contract into its clauses. Reply with ONE JSON object: {"blocks":[...]} and nothing else.\n' +
+    'Each block: {"path":"3.2","level":2,"title":"Payment","text":"full text of the clause","semanticKey":"payment.term"}\n' +
+    '- path: the clause number as written ("3", "3.2", "8.4"); use "" if unnumbered\n' +
+    '- level: 1 for a section heading, 2 for a clause, 3 for a sub-clause\n' +
+    '- title: short heading if the clause has one, otherwise ""\n' +
+    '- text: the complete wording of that clause, verbatim, no summarising\n' +
+    '- semanticKey: exactly one of: ' + SEMANTIC_KEYS.join(', ') + '\n' +
+    'Keep the original order. Do not merge clauses. Do not invent clauses.\n' +
+    'The parties appear as PARTY_US and PARTY_OTHER; personal data is masked — keep those tokens as they are.\n\n' +
+    'CONTRACT TEXT:\n' + String(text).slice(0, 120000);
+  var call = geminiCall_(key, JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+  }));
+  if (!call.ok) return { ok: false, error: call.error };
+  try {
+    var data = JSON.parse(call.body);
+    var out = data.candidates[0].content.parts[0].text;
+    var obj = JSON.parse(String(out).replace(/```json|```/g, '').trim());
+    var arr = obj.blocks || [];
+    if (!arr.length) return { ok: false, error: 'The model returned no clauses' };
+    return { ok: true, blocks: arr };
+  } catch (e) { return { ok: false, error: 'Could not read the structure: ' + e }; }
+}
+
+function v2Parse_(d) {
+  requireAdmin_(d);
+  var contractId = trim_(d.contractId);
+  var attId = trim_(d.attachmentId);
+  if (!contractId || !attId) return { ok: false, error: 'Pick a contract and one of its documents' };
+  var a = findRow_(SHEETS.attachments, 'AttachmentID', attId);
+  if (!a || !a.DriveFileID) return { ok: false, error: 'Document not found' };
+
+  var r = ocrText_(a.DriveFileID);
+  if (!r.ok) return { ok: false, error: r.error };
+  var text = fixOcrText_(String(r.text || ''));
+  if (text.replace(/\s/g, '').length < 40) return { ok: false, error: 'No readable text in this file' };
+
+  var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
+  var cpName = c ? cpName_(c.CounterpartyID) : '';
+  var res = v2Blocks_(maskForAI_(text, cpName));
+  if (!res.ok) return res;
+
+  // one Document row per parsed file; re-parsing replaces its blocks
+  readAll_(SHEETS.documents).forEach(function (doc) {
+    if (String(doc.ContractID) === contractId && String(doc.AttachmentID) === attId) {
+      deleteRowsWhere_(SHEETS.blocks, 'DocumentID', doc.DocumentID);
+      deleteRowsWhere_(SHEETS.documents, 'DocumentID', doc.DocumentID);
+    }
+  });
+  var kind = (trim_(a.DocType) === 'amendment') ? 'amendment' : (trim_(a.DocType) === 'annex' ? 'annex' : 'agreement');
+  var docId = Utilities.getUuid(), now = new Date().toISOString();
+  appendRow_(SHEETS.documents, {
+    DocumentID: docId, ContractID: contractId, Kind: kind, Number: trim_(a.Description) || trim_(a.FileName),
+    SignDate: trim_(a.DocDate), EffectiveFrom: trim_(a.DocDate),
+    Status: (trim_(a.DocType) === 'draft') ? 'draft' : 'signed',
+    Source: 'external', AttachmentID: attId, FileName: trim_(a.FileName), CreatedAt: now
+  });
+  var n = 0;
+  res.blocks.forEach(function (b, i) {
+    var k = trim_(b.semanticKey);
+    appendRow_(SHEETS.blocks, {
+      BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
+      SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
+      Path: trim_(b.path), Level: num_(b.level) || 2, Title: trim_(b.title),
+      Text: unmaskAI_(String(b.text || ''), cpName), Params: '', Origin: 'external', SortOrder: i + 1, CreatedAt: now
+    });
+    n++;
+  });
+  return { ok: true, documentId: docId, blocks: n };
+}
+
+// Reviewing the mapping is the point of step one, so it must be correctable on the spot.
+function v2SetKey_(d) {
+  requireAdmin_(d);
+  var k = trim_(d.semanticKey);
+  if (SEMANTIC_KEYS.indexOf(k) < 0) return { ok: false, error: 'Unknown key' };
+  var b = findRow_(SHEETS.blocks, 'BlockID', trim_(d.blockId));
+  if (!b) return { ok: false, error: 'Clause not found' };
+  updateRow_(SHEETS.blocks, 'BlockID', b.BlockID, { SemanticKey: k });
+  return { ok: true };
+}
+
+function v2List_(d) {
+  var contractId = trim_(d.contractId);
+  var docs = readAll_(SHEETS.documents).filter(function (x) { return String(x.ContractID) === contractId; });
+  var blocks = readAll_(SHEETS.blocks).filter(function (x) { return String(x.ContractID) === contractId; });
+  return { ok: true, documents: docs, blocks: blocks, keys: SEMANTIC_KEYS };
+}
+
+function v2DeleteDoc_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.documentId);
+  deleteRowsWhere_(SHEETS.blocks, 'DocumentID', id);
+  deleteRowsWhere_(SHEETS.documents, 'DocumentID', id);
+  return { ok: true };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Contracts
@@ -1676,7 +1799,7 @@ function testFx() {
 }
 
 function setup() {
-  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
+  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.documents); getSheet_(SHEETS.blocks); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
   ensureCounterparties_();
   SpreadsheetApp.getActive().toast('Sheets created.');
 }
