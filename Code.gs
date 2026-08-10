@@ -8,7 +8,7 @@
 // SETTINGS — fill in before deployment
 // ─────────────────────────────────────────────────────────────────────────────
 const CONFIG = {
-  ADMIN_PASSCODE: '12345',
+  ADMIN_PASSCODE: 'Z@p15Duny',
   EMPLOYEE_BASE_URL: 'https://kotomotozilla.github.io/FXWorks/employee.html',
   ADMIN_BASE_URL:    'https://kotomotozilla.github.io/FXWorks/admin.html',
   // Admin email for "report ready" notifications.
@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.33';
+const BUILD = '2026-08-08.35';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -464,17 +464,30 @@ function v2Parse_(d) {
     Status: (trim_(a.DocType) === 'draft') ? 'draft' : 'signed',
     Source: 'external', AttachmentID: attId, FileName: trim_(a.FileName), CreatedAt: now
   });
-  var n = 0;
-  dedupeBlocks_(res.blocks).forEach(function (b, i) {
+  // One batch write instead of a row-per-clause: 70+ appends took ~90 seconds.
+  var list = dedupeBlocks_(res.blocks);
+  var head = HEADERS.blocks;
+  var rows = list.map(function (b, i) {
     var k = trim_(b.semanticKey);
-    appendRow_(SHEETS.blocks, {
+    var rec = {
       BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
       SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
       Path: trim_(b.path), Level: num_(b.level) || 2, Title: trim_(b.title),
-      Text: unmaskAI_(String(b.text || ''), cpName), Params: '', Origin: 'external', SortOrder: i + 1, CreatedAt: now
-    });
-    n++;
+      Text: unmaskAI_(String(b.text || ''), cpName), Params: '', Origin: 'external',
+      SortOrder: i + 1, CreatedAt: now
+    };
+    return head.map(function (h) { return rec[h] != null ? rec[h] : ''; });
   });
+  var n = rows.length;
+  if (n) {
+    var sh = getSheet_(SHEETS.blocks);
+    var start = sh.getLastRow() + 1;
+    // Clause numbers like "4.1" must stay text, otherwise Sheets turns them into dates.
+    var pathCol = head.indexOf('Path') + 1, keyCol = head.indexOf('SemanticKey') + 1;
+    sh.getRange(start, pathCol, n, 1).setNumberFormat('@');
+    sh.getRange(start, keyCol, n, 1).setNumberFormat('@');
+    sh.getRange(start, 1, n, head.length).setValues(rows);
+  }
   return { ok: true, documentId: docId, blocks: n,
            timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_() } };
 }
@@ -490,8 +503,23 @@ function v2SetKey_(d) {
   return { ok: true };
 }
 
+// Blocks whose document row is gone would otherwise keep showing up and be counted.
+function v2PurgeOrphans_(contractId) {
+  var docIds = {};
+  readAll_(SHEETS.documents).forEach(function (x) { docIds[x.DocumentID] = 1; });
+  var sh = getSheet_(SHEETS.blocks), values = sh.getDataRange().getValues();
+  var head = values[0], cDoc = head.indexOf('DocumentID'), cContract = head.indexOf('ContractID');
+  var removed = 0;
+  for (var i = values.length - 1; i >= 1; i--) {
+    var did = values[i][cDoc];
+    if ((!contractId || String(values[i][cContract]) === String(contractId)) && !docIds[did]) { sh.deleteRow(i + 1); removed++; }
+  }
+  return removed;
+}
+
 function v2List_(d) {
   var contractId = trim_(d.contractId);
+  v2PurgeOrphans_(contractId);
   var docs = readAll_(SHEETS.documents).filter(function (x) { return String(x.ContractID) === contractId; });
   var blocks = readAll_(SHEETS.blocks).filter(function (x) { return String(x.ContractID) === contractId; });
   return { ok: true, documents: docs, blocks: blocks, keys: SEMANTIC_KEYS };
