@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.32';
+const BUILD = '2026-08-08.33';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -437,7 +437,7 @@ function v2Parse_(d) {
   var t0 = Date.now();
   var r = ocrText_(a.DriveFileID);
   if (!r.ok) return { ok: false, error: r.error };
-  var text = fixOcrText_(String(r.text || ''));
+  var text = dedupePages_(fixOcrText_(String(r.text || '')));
   var tOcr = Date.now() - t0;
   if (text.replace(/\s/g, '').length < 40) return { ok: false, error: 'No readable text in this file' };
 
@@ -791,6 +791,8 @@ function fixOcrText_(t) {
   t = t.replace(/([A-Za-z])[<\]\}](?=[a-z])/g, '$1ti');
   t = t.replace(/([A-Za-z])\\(?=[a-z])/g, '$1ff');
   t = t.replace(/([A-Za-z])\|(?=[a-z])/g, '$1ti');
+  t = t.replace(/([a-z])U(?=[a-z])/g, '$1fi');        // DeUnitions -> Definitions, beneUt -> benefit
+  t = t.replace(/([A-Za-z]):(?=[a-z])/g, '$1ff');     // E:ective -> Effective
   // The "fi"/"tt"/"ft" losses cannot be repaired by pattern — repair the words they produce.
   var WORDS = {
     'aoer':'after','aoerwards':'afterwards','wrieen':'written','aeached':'attached','aeachment':'Attachment',
@@ -814,13 +816,36 @@ function fixOcrText_(t) {
 }
 
 // Drive OCR often emits the same page twice (text layer + rendered layer).
+// Drive OCR frequently returns each page twice; drop the repeated half before the model sees it.
+function dedupePages_(text) {
+  var t = String(text || '');
+  var half = Math.floor(t.length / 2);
+  if (half > 500) {
+    var a = t.slice(0, half).replace(/\s+/g, ' ').trim();
+    var b = t.slice(half).replace(/\s+/g, ' ').trim();
+    if (a && b && (a === b || (a.length > 400 && b.indexOf(a.slice(0, 400)) === 0))) return t.slice(0, half);
+  }
+  var lines = t.split(/\n/), seen = {}, out = [], run = 0;
+  for (var i = 0; i < lines.length; i++) {
+    var k = lines[i].replace(/\s+/g, ' ').trim().toLowerCase();
+    if (k.length > 60 && seen[k]) { run++; continue; }
+    if (k.length > 60) seen[k] = 1;
+    out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
 function dedupeBlocks_(blocks) {
   var seen = {}, out = [];
   blocks.forEach(function (b) {
-    var k = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 160).toLowerCase();
-    if (!k) return;
-    if (seen[k]) return;
-    seen[k] = 1; out.push(b);
+    var txt = String(b.text || '').replace(/\s+/g, ' ').trim();
+    if (!txt) return;
+    var kFull = txt.toLowerCase();
+    var kHead = kFull.slice(0, 200);
+    var kPath = (String(b.path || '') + '|' + String(b.title || '')).trim().toLowerCase();
+    if (seen[kFull] || seen[kHead] || (kPath !== '|' && seen['p:' + kPath])) return;
+    seen[kFull] = 1; seen[kHead] = 1; if (kPath !== '|') seen['p:' + kPath] = 1;
+    out.push(b);
   });
   return out;
 }
@@ -1729,7 +1754,7 @@ function readAll_(name) {
   for (var i = 1; i < values.length; i++) { var o = {}; for (var j = 0; j < head.length; j++) o[head[j]] = values[i][j]; out.push(o); }
   return out;
 }
-var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName'];
+var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName', 'Path', 'SemanticKey'];
 function appendRow_(name, obj) {
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
   var arr = head.map(function (h) { return obj[h] != null ? obj[h] : ''; });
