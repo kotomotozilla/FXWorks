@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.39';
+const BUILD = '2026-08-08.40';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -94,6 +94,7 @@ function route_(action, d) {
     case 'save_contract_doc':  return adminSaveContractDoc_(d);
     // Contracts 2.0 — clause-level structure (experimental, separate sheets)
     case 'v2_parse':           return v2Parse_(d);
+    case 'v2_parse_upload':    return v2ParseUpload_(d);
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
     case 'v2_set_key':         return v2SetKey_(d);
@@ -399,6 +400,7 @@ var SEMANTIC_KEYS = ['parties', 'definitions', 'documents', 'scope', 'reporting'
   // The "Miscellaneous" section is where amendments most often bite, so it gets its own keys
   // instead of being dumped into misc.
   'notices', 'amendment', 'assignment', 'publicity', 'severability', 'entire_agreement', 'costs',
+  'information_review', 'other_engagements',
   'misc', 'effectiveness', 'signatures'];
 
 // Long contracts blow past the model output limit, because it returns the full text of
@@ -470,45 +472,50 @@ function v2Blocks_(text) {
   return { ok: true, blocks: all, chunks: chunks.length, failedChunks: failed, notes: notes };
 }
 
-function v2Parse_(d) {
+// Test mode: parse any file without linking it to a contract. Everything lands under the
+// pseudo-contract "__sandbox", so the real contracts stay clean.
+function v2ParseUpload_(d) {
   requireAdmin_(d);
-  var contractId = trim_(d.contractId);
-  var attId = trim_(d.attachmentId);
-  if (!contractId || !attId) return { ok: false, error: 'Pick a contract and one of its documents' };
-  var a = findRow_(SHEETS.attachments, 'AttachmentID', attId);
-  if (!a || !a.DriveFileID) return { ok: false, error: 'Document not found' };
+  var fileName = trim_(d.fileName) || 'test document';
+  if (!d.dataBase64) return { ok: false, error: 'No file data' };
+  var file;
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), trim_(d.mimeType) || 'application/pdf', fileName);
+    file = attachmentsFolder_().createFile(blob);
+  } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
+  return v2ParseFile_('__sandbox', file.getId(), fileName, '', 'agreement', trim_(d.counterpartyName));
+}
 
+// Shared by both entry points: OCR -> mask -> split into clauses -> store.
+function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpName) {
   var t0 = Date.now();
-  var r = ocrText_(a.DriveFileID);
+  var r = ocrText_(driveFileId);
   if (!r.ok) return { ok: false, error: r.error };
   var text = dedupePages_(fixOcrText_(String(r.text || '')));
   var tOcr = Date.now() - t0;
   if (text.replace(/\s/g, '').length < 40) return { ok: false, error: 'No readable text in this file' };
 
-  var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
-  var cpName = c ? cpName_(c.CounterpartyID) : '';
   var t1 = Date.now();
-  var res = v2Blocks_(maskForAI_(text, cpName));
+  var res = v2Blocks_(maskForAI_(text, cpName || ''));
   var tAi = Date.now() - t1;
   if (!res.ok) return res;
   var t2 = Date.now();
 
-  // one Document row per parsed file; re-parsing replaces its blocks
   readAll_(SHEETS.documents).forEach(function (doc) {
-    if (String(doc.ContractID) === contractId && String(doc.AttachmentID) === attId) {
+    var same = attachmentId ? (String(doc.AttachmentID) === attachmentId) : (String(doc.FileName) === fileName);
+    if (String(doc.ContractID) === contractId && same) {
       deleteRowsWhere_(SHEETS.blocks, 'DocumentID', doc.DocumentID);
       deleteRowsWhere_(SHEETS.documents, 'DocumentID', doc.DocumentID);
     }
   });
-  var kind = (trim_(a.DocType) === 'amendment') ? 'amendment' : (trim_(a.DocType) === 'annex' ? 'annex' : 'agreement');
+
   var docId = Utilities.getUuid(), now = new Date().toISOString();
   appendRow_(SHEETS.documents, {
-    DocumentID: docId, ContractID: contractId, Kind: kind, Number: trim_(a.Description) || trim_(a.FileName),
-    SignDate: trim_(a.DocDate), EffectiveFrom: trim_(a.DocDate),
-    Status: (trim_(a.DocType) === 'draft') ? 'draft' : 'signed',
-    Source: 'external', AttachmentID: attId, FileName: trim_(a.FileName), CreatedAt: now
+    DocumentID: docId, ContractID: contractId, Kind: kind || 'agreement', Number: fileName,
+    SignDate: '', EffectiveFrom: '', Status: 'signed', Source: 'external',
+    AttachmentID: attachmentId || '', FileName: fileName, CreatedAt: now
   });
-  // One batch write instead of a row-per-clause: 70+ appends took ~90 seconds.
+
   var list = dedupeBlocks_(res.blocks);
   var head = HEADERS.blocks;
   var rows = list.map(function (b, i) {
@@ -517,25 +524,43 @@ function v2Parse_(d) {
       BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
       SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
       Path: trim_(b.path), Level: num_(b.level) || 2, Title: trim_(b.title),
-      Text: unmaskAI_(String(b.text || ''), cpName), Params: '', Origin: 'external',
+      Text: unmaskAI_(String(b.text || ''), cpName || ''), Params: '', Origin: 'external',
       SortOrder: i + 1, CreatedAt: now
     };
     return head.map(function (h) { return rec[h] != null ? rec[h] : ''; });
   });
-  var n = rows.length;
-  if (n) {
+  if (rows.length) {
     var sh = getSheet_(SHEETS.blocks);
     var start = sh.getLastRow() + 1;
-    // Clause numbers like "4.1" must stay text, otherwise Sheets turns them into dates.
-    var pathCol = head.indexOf('Path') + 1, keyCol = head.indexOf('SemanticKey') + 1;
-    sh.getRange(start, pathCol, n, 1).setNumberFormat('@');
-    sh.getRange(start, keyCol, n, 1).setNumberFormat('@');
-    sh.getRange(start, 1, n, head.length).setValues(rows);
+    sh.getRange(start, head.indexOf('Path') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(start, head.indexOf('SemanticKey') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(start, 1, rows.length, head.length).setValues(rows);
   }
-  return { ok: true, documentId: docId, blocks: n,
+  return { ok: true, documentId: docId, blocks: rows.length,
            timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_(),
                      parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
            notes: res.notes || [] };
+}
+
+function v2Parse_(d) {
+  requireAdmin_(d);
+  var contractId = trim_(d.contractId);
+  var attId = trim_(d.attachmentId);
+  if (!contractId || !attId) return { ok: false, error: 'Pick a contract and one of its documents' };
+  var a = findRow_(SHEETS.attachments, 'AttachmentID', attId);
+  if (!a || !a.DriveFileID) return { ok: false, error: 'Document not found' };
+  var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
+  var kind = (trim_(a.DocType) === 'amendment') ? 'amendment' : (trim_(a.DocType) === 'annex' ? 'annex' : 'agreement');
+  var res = v2ParseFile_(contractId, a.DriveFileID, trim_(a.FileName), attId, kind, c ? cpName_(c.CounterpartyID) : '');
+  if (res.ok) {
+    // keep the dates and status of the source attachment on the document row
+    updateRow_(SHEETS.documents, 'DocumentID', res.documentId, {
+      Number: trim_(a.Description) || trim_(a.FileName),
+      SignDate: trim_(a.DocDate), EffectiveFrom: trim_(a.DocDate),
+      Status: (trim_(a.DocType) === 'draft') ? 'draft' : 'signed'
+    });
+  }
+  return res;
 }
 
 // Reviewing the mapping is the point of step one, so it must be correctable on the spot.

@@ -165,7 +165,13 @@
         <div id="v2Err"></div>
         <div class="row" style="align-items:end">
           <div style="flex:2"><label>Contract</label><select id="v2_contract" onchange="v2LoadContract()"></select></div>
-          <div style="flex:2"><label>Document to parse</label><select id="v2_att"></select></div>
+          <div style="flex:2" id="v2_attWrap"><label>Document to parse</label><select id="v2_att"></select></div>
+          <div style="flex:2 1 260px" class="hidden" id="v2_upWrap"><label>File to parse (not linked to any contract)</label>
+            <div class="filebox">
+              <input type="file" class="hiddenfile" id="v2_file" accept="application/pdf,image/*" onchange="showFileName('v2_file','v2_fname')">
+              <button type="button" class="btn ghost sm" onclick="pickFile('v2_file')">Choose file</button>
+              <span class="fname" id="v2_fname">no file selected</span>
+            </div></div>
           <div style="flex:0 0 auto"><button class="btn sm" id="v2_parseBtn" onclick="v2Parse()">Parse into clauses</button></div>
         </div>
       </div>
@@ -623,7 +629,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.39';
+const BUILD = '2026-08-08.40';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1173,13 +1179,28 @@ const V2_KIND = { agreement:'Agreement', annex:'Annex / SOW', amendment:'Amendme
 
 function v2Init(){
   const sel=$('v2_contract');
-  sel.innerHTML = '<option value="">— select a contract —</option>'+CONTRACTS.map(c=>
+  sel.innerHTML = '<option value="">— select a contract —</option>'
+    + '<option value="__sandbox"'+(V2.contractId==='__sandbox'?' selected':'')+'>— test parsing: upload any file —</option>'
+    + CONTRACTS.map(c=>
     `<option value="${esc(c.ContractID)}" ${String(V2.contractId)===String(c.ContractID)?'selected':''}>${esc(c.Number)} — ${esc(cpName(c.CounterpartyID))}</option>`).join('');
   if(!$('v2_asOf').value) $('v2_asOf').value = todayISO();
   if(V2.contractId) v2LoadContract();
 }
+function v2ModeToggle(){
+  const sandbox = V2.contractId==='__sandbox';
+  $('v2_attWrap').classList.toggle('hidden', sandbox);
+  $('v2_upWrap').classList.toggle('hidden', !sandbox);
+}
 async function v2LoadContract(){
   V2.contractId = $('v2_contract').value;
+  v2ModeToggle();
+  if(V2.contractId==='__sandbox'){
+    notice('v2Err','','');
+    try{ const r = await api('v2_list',{contractId:'__sandbox'});
+      V2.documents=r.documents||[]; V2.blocks=r.blocks||[]; V2.keys=r.keys||[]; v2Render();
+    }catch(e){ notice('v2Err','err', esc(e.message)); }
+    return;
+  }
   $('v2_att').innerHTML = '<option value="">—</option>';
   if(!V2.contractId){ $('v2Table').querySelector('tbody').innerHTML='<tr><td class="empty">Pick a contract.</td></tr>'; return; }
   notice('v2Err','','');
@@ -1195,12 +1216,20 @@ async function v2LoadContract(){
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
 async function v2Parse(){
-  const attId = $('v2_att').value;
-  if(!V2.contractId || !attId){ notice('v2Err','err','Pick a contract and one of its documents.'); return; }
+  const sandbox = V2.contractId==='__sandbox';
+  const attId = sandbox ? '' : $('v2_att').value;
+  const file = sandbox ? ($('v2_file').files||[])[0] : null;
+  if(!V2.contractId){ notice('v2Err','err','Pick a contract, or choose test parsing.'); return; }
+  if(sandbox && !file){ notice('v2Err','err','Choose a file to parse.'); return; }
+  if(!sandbox && !attId){ notice('v2Err','err','Pick one of the contract documents.'); return; }
+  if(file && file.size > 20*1024*1024){ notice('v2Err','err','File too large (max ~20 MB).'); return; }
   const b=$('v2_parseBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   notice('v2Err','info','Reading and splitting the document — this can take a minute…');
   try{
-    const r = await api('v2_parse',{contractId:V2.contractId, attachmentId:attId});
+    const r = sandbox
+      ? await api('v2_parse_upload',{ fileName:file.name, mimeType:file.type||'application/pdf',
+          dataBase64: await fileToBase64(file) })
+      : await api('v2_parse',{contractId:V2.contractId, attachmentId:attId});
     await v2LoadContract();
     const t=r.timing||{};
     const secs = ms => (ms==null?'—':(ms/1000).toFixed(1)+'s');
@@ -1322,7 +1351,7 @@ function v2Render(){
 }
 function v2Export(){
   if(!V2.blocks.length){ notice('v2Err','err','Nothing parsed yet.'); return; }
-  const c = CONTRACTS.find(x=>String(x.ContractID)===String(V2.contractId)) || {};
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(V2.contractId)) || (V2.contractId==='__sandbox' ? {Number:'test parsing'} : {});
   const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
   const used={}; V2.blocks.forEach(b=>used[b.SemanticKey]=(used[b.SemanticKey]||0)+1);
   const unused=(V2.keys||[]).filter(k=>!used[k]);
