@@ -629,7 +629,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.45';
+const BUILD = '2026-08-08.46';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1283,7 +1283,21 @@ function v2SlotOf(b){
 // What an amendment block targets: the stated clause of the original agreement, if any.
 function v2TargetOf(b){
   const r = v2NormPath(b.ReplacesPath);
-  return r ? 'path:'+r : v2SlotOf(b);
+  if(!r) return v2SlotOf(b);
+  const where = (String(b.ReplacesIn||'').toLowerCase()==='annex') ? 'annex' : 'agreement';
+  return where+':path:'+r;
+}
+// A base clause can be addressed as belonging to the agreement or to the annex.
+function v2BaseSlots(b){
+  const kind = v2DocOf(b).Kind==='annex' ? 'annex' : 'agreement';
+  const p = v2NormPath(b.Path);
+  const slots = [];
+  if(p){
+    slots.push(kind+':path:'+p);
+    const top = p.split('.')[0];
+    if(top && top!==p) slots.push(kind+':path:'+top);   // "Section 5 is replaced" covers 5.1, 5.2 …
+  }
+  return slots;
 }
 function v2Effective(asOf){
   V2.docsById = {}; V2.documents.forEach(d=>V2.docsById[d.DocumentID]=d);
@@ -1305,13 +1319,9 @@ function v2Effective(asOf){
   });
   // An amendment addresses the agreement's numbering, so a clause of the agreement is
   // replaced before an identically numbered clause of an annex.
-  const claimed = {};
-  Object.keys(byMatch).forEach(k=>{
-    const target = base.filter(b=>v2SlotOf(b)===k);
-    const pick = target.find(b=>v2DocOf(b).Kind==='agreement') || target[0];
-    if(pick) claimed[pick.BlockID]=1;
-  });
-  const kept = base.filter(b=>!claimed[b.BlockID]);
+  // Replacing a whole section removes all of its clauses; replacing one clause removes only it.
+  const targets = Object.keys(byMatch);
+  const kept = base.filter(b=>!v2BaseSlots(b).some(sl=>targets.indexOf(sl)>=0));
   return kept.concat(Object.keys(byMatch).map(k=>byMatch[k]));
 }
 // Which blocks are superseded — used to dim them in the full list.
@@ -1334,9 +1344,9 @@ async function v2SetDoc(documentId, field, value){
     v2Render();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
-async function v2SetReplaces(blockId, path){
-  try{ await api('v2_set_replaces',{blockId, replacesPath:path});
-    const b = V2.blocks.find(x=>String(x.BlockID)===String(blockId)); if(b) b.ReplacesPath = path;
+async function v2SetReplaces(blockId, path, where){
+  try{ await api('v2_set_replaces',{blockId, replacesPath:path, replacesIn:where||'agreement'});
+    const b = V2.blocks.find(x=>String(x.BlockID)===String(blockId)); if(b){ b.ReplacesPath = path; b.ReplacesIn = where||'agreement'; }
     v2Render();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
@@ -1356,7 +1366,12 @@ function v2BlockRow(b, docs, eff, superseded, showKey){
   const isAmd = (d.Kind==='amendment');
   const badge = isAmd ? ' <span class="tag draft">amendment</span>' : '';
   const repl = isAmd
-    ? ` <span class="muted" onclick="event.stopPropagation()">replaces <input value="${esc(b.ReplacesPath||'')}" placeholder="clause no." style="width:90px;display:inline-block;padding:2px 6px;font-size:12px" onchange="v2SetReplaces('${esc(b.BlockID)}',this.value)"></span>`
+    ? ` <span class="muted" onclick="event.stopPropagation()">replaces
+        <input value="${esc(b.ReplacesPath||'')}" placeholder="clause no." style="width:80px;display:inline-block;padding:2px 6px;font-size:12px" onchange="v2SetReplaces('${esc(b.BlockID)}',this.value,'${esc(b.ReplacesIn||'agreement')}')">
+        <select style="width:auto;display:inline-block;padding:2px 6px;font-size:12px" onchange="v2SetReplaces('${esc(b.BlockID)}',this.previousElementSibling.value,this.value)">
+          <option value="agreement" ${String(b.ReplacesIn||'agreement')!=='annex'?'selected':''}>in agreement</option>
+          <option value="annex" ${String(b.ReplacesIn||'')==='annex'?'selected':''}>in annex</option>
+        </select></span>`
     : '';
   const keyCell = showKey
     ? `<td onclick="event.stopPropagation()"><select style="font-size:12px;padding:4px 6px" onchange="v2SetKey('${esc(b.BlockID)}',this.value,event)">${v2KeyOptions(b.SemanticKey)}</select></td>`
@@ -1466,7 +1481,7 @@ function v2Export(){
   L.push('```json');
   L.push(JSON.stringify({ contract:{number:c.Number, templateType:c.TemplateType, pricingType:c.PricingType},
     documents:V2.documents.map(d=>({id:d.DocumentID, kind:d.Kind, file:d.FileName, signDate:d.SignDate, status:d.Status})),
-    blocks:V2.blocks.map(b=>({doc:b.DocumentID, key:b.SemanticKey, path:b.Path, level:b.Level, title:b.Title, text:b.Text}))
+    blocks:V2.blocks.map(b=>({doc:b.DocumentID, key:b.SemanticKey, path:b.Path, replacesPath:b.ReplacesPath||'', replacesIn:b.ReplacesIn||'', level:b.Level, title:b.Title, text:b.Text, replacementText:b.ReplacementText||''}))
   }, null, 1));
   L.push('```');
 

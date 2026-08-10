@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.45';
+const BUILD = '2026-08-08.46';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -28,7 +28,7 @@ const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
   documents:   ['DocumentID', 'ContractID', 'Kind', 'Number', 'SignDate', 'EffectiveFrom', 'Status', 'Source',
                 'AttachmentID', 'FileName', 'CreatedAt'],
-  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
+  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
                 'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
@@ -434,9 +434,13 @@ function v2BlocksChunk_(key, chunk, partNo, total) {
     '- path: the full address of the item as written, including letter or roman sub-items:\n' +
     '  "3", "3.2", "7.2.1", "9.3(b)", "IV.2", "2.1.a". Every numbered, lettered or bulleted item is its own block.\n' +
     '  For an unnumbered bullet use the parent number plus its position: "9.1", "9.2" under section 9.\n' +
-    '- replacesPath: only for an amendment — the clause number of the ORIGINAL agreement that this text\n' +
-    '  replaces, taken from wording like "clause 3.2 shall be amended to read" or "Section 7 is replaced by".\n' +
-    '  Use "" when the clause is new or nothing is being replaced.\n' +
+    '- replacesPath: only for an amendment — the clause or section number of the ORIGINAL document that this\n' +
+    '  text replaces: "Clause 3.2 of the Agreement is deleted and replaced" -> "3.2";\n' +
+    '  "Section 5 of the Agreement is deleted and replaced" -> "5". Use "" when nothing is being replaced.\n' +
+    '- replacesIn: which document it targets — "agreement" for "of the Agreement",\n' +
+    '  "annex" for "of Statement of Work No. 1" / "of the SOW". Use "" when replacesPath is empty.\n' +
+    '- replacementText: only for an amendment — the new wording it inserts, i.e. the text quoted after\n' +
+    '  "replaced with the following", without the introductory sentence and without the quotation marks.\n' +
     '- level: 1 for a section heading, 2 for a clause, 3 for a sub-clause\n' +
     '- title: short heading if the clause has one, otherwise ""\n' +
     '- text: the complete wording of that clause, verbatim, no summarising\n' +
@@ -544,7 +548,10 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     var rec = {
       BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
       SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
-      Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath), Level: num_(b.level) || 2, Title: trim_(b.title),
+      Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath),
+      ReplacesIn: (trim_(b.replacesIn) === 'annex' ? 'annex' : (trim_(b.replacesPath) ? 'agreement' : '')),
+      ReplacementText: unmaskAI_(String(b.replacementText || ''), cpName || ''),
+      Level: num_(b.level) || 2, Title: trim_(b.title),
       Text: unmaskAI_(String(b.text || ''), cpName || ''), Params: '', Origin: 'external',
       SortOrder: i + 1, CreatedAt: now
     };
@@ -555,6 +562,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     var start = sh.getLastRow() + 1;
     sh.getRange(start, head.indexOf('Path') + 1, rows.length, 1).setNumberFormat('@');
     sh.getRange(start, head.indexOf('ReplacesPath') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(start, head.indexOf('ReplacesIn') + 1, rows.length, 1).setNumberFormat('@');
     sh.getRange(start, head.indexOf('SemanticKey') + 1, rows.length, 1).setNumberFormat('@');
     sh.getRange(start, 1, rows.length, head.length).setValues(rows);
   }
@@ -601,7 +609,9 @@ function v2SetReplaces_(d) {
   requireAdmin_(d);
   var b = findRow_(SHEETS.blocks, 'BlockID', trim_(d.blockId));
   if (!b) return { ok: false, error: 'Clause not found' };
-  updateRow_(SHEETS.blocks, 'BlockID', b.BlockID, { ReplacesPath: trim_(d.replacesPath) });
+  var upd2 = { ReplacesPath: trim_(d.replacesPath) };
+  if (d.replacesIn !== undefined) upd2.ReplacesIn = (trim_(d.replacesIn) === 'annex' ? 'annex' : 'agreement');
+  updateRow_(SHEETS.blocks, 'BlockID', b.BlockID, upd2);
   return { ok: true };
 }
 
@@ -922,6 +932,7 @@ var AI_FIELDS = [
   'termYears', 'warrantyPeriod', 'governingLaw', 'jurisdictionPlace', 'arbitrationBody', 'arbitrationSeat',
   'penaltyDelayPercent', 'penaltyFailurePercent', 'penaltyCapPercent', 'insuranceAmount',
   'restrictedTerritories', 'paymentBasis', 'reportFrequency',
+  'replacesIn', 'replacementText',
   'hasAcceptanceAct', 'hasPenalties', 'hasUsageRights', 'hasInsurance', 'hasDataSecurity', 'hasWarranty', 'hasPayoutCurrency'
 ];
 
@@ -1910,7 +1921,7 @@ function readAll_(name) {
   for (var i = 1; i < values.length; i++) { var o = {}; for (var j = 0; j < head.length; j++) o[head[j]] = values[i][j]; out.push(o); }
   return out;
 }
-var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName', 'Path', 'ReplacesPath', 'SemanticKey'];
+var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName', 'Path', 'ReplacesPath', 'ReplacesIn', 'SemanticKey'];
 function appendRow_(name, obj) {
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
   var arr = head.map(function (h) { return obj[h] != null ? obj[h] : ''; });
