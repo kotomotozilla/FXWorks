@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.38';
+const BUILD = '2026-08-08.39';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -395,7 +395,11 @@ var SEMANTIC_KEYS = ['parties', 'definitions', 'documents', 'scope', 'reporting'
   'acceptance.procedure', 'acceptance.deemed', 'documentation', 'payment.term', 'payment.currency',
   'force_majeure', 'liability.general', 'liability.penalties', 'liability.cap', 'ip.ownership', 'ip.usage',
   'infringement', 'termination', 'confidentiality', 'data.security', 'insurance', 'compliance',
-  'law.governing', 'law.forum', 'misc', 'effectiveness', 'signatures'];
+  'law.governing', 'law.forum',
+  // The "Miscellaneous" section is where amendments most often bite, so it gets its own keys
+  // instead of being dumped into misc.
+  'notices', 'amendment', 'assignment', 'publicity', 'severability', 'entire_agreement', 'costs',
+  'misc', 'effectiveness', 'signatures'];
 
 // Long contracts blow past the model output limit, because it returns the full text of
 // every clause. Split the document into parts on section boundaries and parse part by part.
