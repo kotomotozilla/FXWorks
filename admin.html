@@ -623,7 +623,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.37';
+const BUILD = '2026-08-08.38';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1205,7 +1205,8 @@ async function v2Parse(){
     const t=r.timing||{};
     const secs = ms => (ms==null?'—':(ms/1000).toFixed(1)+'s');
     notice('v2Err','ok','Parsed into '+r.blocks+' clauses.'+
-      (t.ocrMs!=null?` <span class="muted">· OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)} · ${t.chars} characters · ${esc(t.model||'')}</span>`:''));
+      (t.ocrMs!=null?` <span class="muted">· OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)} · ${t.chars} characters · ${t.parts>1?t.parts+' parts':'one pass'}${t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:''} · ${esc(t.model||'')}</span>`:'')+
+      ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-top:6px">${r.notes.map(esc).join('<br>')}</div>`:''));
   }catch(e){
     // Parsing a long contract can outlast the connection — the server usually finishes anyway.
     notice('v2Err','info','Connection dropped while waiting. Checking whether the server finished…');

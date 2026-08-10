@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.37';
+const BUILD = '2026-08-08.38';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -397,33 +397,73 @@ var SEMANTIC_KEYS = ['parties', 'definitions', 'documents', 'scope', 'reporting'
   'infringement', 'termination', 'confidentiality', 'data.security', 'insurance', 'compliance',
   'law.governing', 'law.forum', 'misc', 'effectiveness', 'signatures'];
 
-function v2Blocks_(text) {
-  var key = geminiKey_();
-  if (!key) return { ok: false, error: 'AI key is not configured — Contracts 2.0 needs it to split the text into clauses' };
+// Long contracts blow past the model output limit, because it returns the full text of
+// every clause. Split the document into parts on section boundaries and parse part by part.
+function v2Chunks_(text, maxLen) {
+  var t = String(text || '');
+  if (t.length <= maxLen) return [t];
+  var parts = t.split(/\n(?=\s*\d{1,2}\.\s+[A-Z])/);        // "1. DEFINITIONS", "11. PRICE AND ..."
+  if (parts.length < 2) parts = t.split(/\n(?=[A-Z][A-Z \-]{6,}\n)/);
+  var out = [], cur = '';
+  parts.forEach(function (p) {
+    if (cur && (cur.length + p.length) > maxLen) { out.push(cur); cur = p; }
+    else { cur = cur ? (cur + '\n' + p) : p; }
+  });
+  if (cur) out.push(cur);
+  // a single section longer than the limit still has to be cut
+  var safe = [];
+  out.forEach(function (c) {
+    while (c.length > maxLen) { safe.push(c.slice(0, maxLen)); c = c.slice(maxLen); }
+    if (c) safe.push(c);
+  });
+  return safe;
+}
+
+function v2BlocksChunk_(key, chunk, partNo, total) {
   var prompt =
-    'Split this contract into its clauses. Reply with ONE JSON object: {"blocks":[...]} and nothing else.\n' +
+    'Split this part of a contract into its clauses. Reply with ONE JSON object: {"blocks":[...]} and nothing else.\n' +
     'Each block: {"path":"3.2","level":2,"title":"Payment","text":"full text of the clause","semanticKey":"payment.term"}\n' +
     '- path: the clause number as written ("3", "3.2", "8.4"); use "" if unnumbered\n' +
     '- level: 1 for a section heading, 2 for a clause, 3 for a sub-clause\n' +
     '- title: short heading if the clause has one, otherwise ""\n' +
     '- text: the complete wording of that clause, verbatim, no summarising\n' +
     '- semanticKey: exactly one of: ' + SEMANTIC_KEYS.join(', ') + '\n' +
-    'Keep the original order. Do not merge clauses. Do not invent clauses.\n' +
-    'The parties appear as PARTY_US and PARTY_OTHER; personal data is masked — keep those tokens as they are.\n\n' +
-    'CONTRACT TEXT:\n' + String(text).slice(0, 120000);
+    'Keep the original order. Do not merge clauses. Do not invent clauses. Skip tables of contents.\n' +
+    'The parties appear as PARTY_US and PARTY_OTHER; personal data is masked — keep those tokens as they are.\n' +
+    (total > 1 ? ('This is part ' + partNo + ' of ' + total + ' — parse only what is here.\n') : '') +
+    '\nCONTRACT TEXT:\n' + chunk;
+
   var call = geminiCall_(key, JSON.stringify({
     contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+    generationConfig: { temperature: 0, responseMimeType: 'application/json', maxOutputTokens: 65536 }
   }));
   if (!call.ok) return { ok: false, error: call.error };
   try {
     var data = JSON.parse(call.body);
-    var out = data.candidates[0].content.parts[0].text;
+    var cand = data.candidates && data.candidates[0];
+    if (!cand) return { ok: false, error: 'Empty answer from the model' };
+    if (cand.finishReason && cand.finishReason !== 'STOP') {
+      return { ok: false, error: 'The answer was cut off (' + cand.finishReason + ') — the part is still too long' };
+    }
+    var out = cand.content.parts[0].text;
     var obj = JSON.parse(String(out).replace(/```json|```/g, '').trim());
-    var arr = obj.blocks || [];
-    if (!arr.length) return { ok: false, error: 'The model returned no clauses' };
-    return { ok: true, blocks: arr };
+    return { ok: true, blocks: obj.blocks || [] };
   } catch (e) { return { ok: false, error: 'Could not read the structure: ' + e }; }
+}
+
+function v2Blocks_(text) {
+  var key = geminiKey_();
+  if (!key) return { ok: false, error: 'AI key is not configured — Contracts 2.0 needs it to split the text into clauses' };
+  var chunks = v2Chunks_(text, 14000);
+  var all = [], notes = [], failed = 0;
+  for (var i = 0; i < chunks.length; i++) {
+    var r = v2BlocksChunk_(key, chunks[i], i + 1, chunks.length);
+    if (!r.ok) { failed++; notes.push('part ' + (i + 1) + ': ' + r.error); continue; }
+    all = all.concat(r.blocks);
+    notes.push('part ' + (i + 1) + ': ' + r.blocks.length + ' clauses');
+  }
+  if (!all.length) return { ok: false, error: notes.join('; ') || 'The model returned no clauses' };
+  return { ok: true, blocks: all, chunks: chunks.length, failedChunks: failed, notes: notes };
 }
 
 function v2Parse_(d) {
@@ -489,7 +529,9 @@ function v2Parse_(d) {
     sh.getRange(start, 1, n, head.length).setValues(rows);
   }
   return { ok: true, documentId: docId, blocks: n,
-           timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_() } };
+           timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_(),
+                     parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
+           notes: res.notes || [] };
 }
 
 // Reviewing the mapping is the point of step one, so it must be correctable on the spot.
