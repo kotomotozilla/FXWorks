@@ -24,6 +24,9 @@
   label{display:block;font-size:13px;color:var(--muted);margin:0 0 6px}
   input,textarea,select{width:100%;font-family:inherit;font-size:15px;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
   input[type=date]{-webkit-appearance:none;appearance:none;min-width:0}
+  input[type=file].hiddenfile{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;padding:0;border:0}
+  .filebox{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .filebox .fname{font-size:13px;color:var(--muted);word-break:break-all}
   input[type=date]::-webkit-date-and-time-value{text-align:left}
   input[type=date]::-webkit-calendar-picker-indicator{opacity:.6}
   input[type=number]{font-family:var(--mono)} textarea{resize:vertical;min-height:48px}
@@ -458,7 +461,12 @@
         
       </div>
       <div id="ext_new" class="row hidden" style="align-items:end">
-        <div style="flex:2"><label>Signed documents (PDF or photo — you can pick several: agreement, SOW, annexes)</label><input type="file" id="ext_file" accept="application/pdf,image/*" multiple></div>
+        <div style="flex:2"><label>Signed documents (PDF or photo — you can pick several: agreement, SOW, annexes)</label>
+          <div class="filebox">
+            <input type="file" class="hiddenfile" id="ext_file" accept="application/pdf,image/*" multiple onchange="showFileName('ext_file','ext_fname')">
+            <button type="button" class="btn ghost sm" onclick="pickFile('ext_file')">Choose files</button>
+            <span class="fname" id="ext_fname">no files selected</span>
+          </div></div>
         <div style="flex:0 0 auto"><button class="btn sm" id="ext_upbtn" onclick="extractFromUpload()">Upload &amp; read data</button></div>
       </div>
       <div style="margin-top:8px"><button class="btn ghost sm" id="ext_sentBtn" onclick="showSentText()" style="display:none">View text sent to AI</button></div>
@@ -615,7 +623,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.36';
+const BUILD = '2026-08-08.37';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1007,7 +1015,12 @@ async function renderAttachments(elId, parentType, parentId){
       </div>`;
     }).join('') : '<div class="muted" style="padding:7px 0">No files.</div>';
     el.innerHTML = `<div class="row" style="align-items:end">
-        <div style="flex:2 1 190px"><label>File</label><input type="file" id="${elId}_file" accept="application/pdf,image/*"></div>
+        <div style="flex:2 1 220px"><label>File</label>
+          <div class="filebox">
+            <input type="file" class="hiddenfile" id="${elId}_file" accept="application/pdf,image/*" onchange="showFileName('${elId}_file','${elId}_fname')">
+            <button type="button" class="btn ghost sm" onclick="pickFile('${elId}_file')">Choose file</button>
+            <span class="fname" id="${elId}_fname">no file selected</span>
+          </div></div>
         <div><label>Type</label><select id="${elId}_type" onchange="curByType('${elId}')">${docTypeOptions(parentType==='contract'?'signed':'other')}</select></div>
         <div><label>Document date</label><input type="date" id="${elId}_date" value="${todayISO()}"></div>
         <div style="flex:2 1 180px"><label>Description</label><input type="text" id="${elId}_desc" placeholder="optional"></div>
@@ -1019,6 +1032,15 @@ async function renderAttachments(elId, parentType, parentId){
       <div style="height:6px"></div>${list}
       <p class="muted" style="font-size:11px">Stored privately in your Google Drive (folder "FXWorks Attachments") — only you, the Drive owner, can open them. Files are never removed automatically. Max ~20 MB per file.</p>`;
   }catch(e){ el.innerHTML='<div class="notice err">'+esc(e.message)+'</div>'; }
+}
+// Safari is unreliable with a styled native file input, so the real one is hidden
+// and opened from a normal button.
+function pickFile(id){ const el=$(id); if(el) el.click(); }
+function showFileName(inputId, labelId){
+  const el=$(inputId), out=$(labelId); if(!el||!out) return;
+  const f=el.files;
+  out.textContent = !f || !f.length ? 'no file selected'
+    : (f.length===1 ? f[0].name : f.length+' files selected');
 }
 function curByType(elId){ const t=$(elId+'_type').value, c=$(elId+'_cur'); if(c) c.checked = (t==='signed'); }
 function toggleAttEdit(id){ const el=$('ae_'+id); if(el) el.classList.toggle('hidden'); }
