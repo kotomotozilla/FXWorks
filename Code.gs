@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.46';
+const BUILD = '2026-08-08.47';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -482,6 +482,37 @@ function v2BlocksPart_(key, chunk, label, depth) {
   return { ok: (a.ok || b.ok), blocks: a.blocks.concat(b.blocks), notes: a.notes.concat(b.notes) };
 }
 
+// The document says what it is: "Amendment No. 1 to ... Agreement No. 2402-1",
+// "executed as of 28 February 2025". Read it instead of asking the user to retype it.
+function v2DocMeta_(key, head) {
+  var prompt =
+    'Read the opening of a contract document and reply with ONE JSON object, nothing else:\n' +
+    '{"kind":"agreement|annex|amendment","number":"","date":"YYYY-MM-DD","parentNumber":"","title":""}\n' +
+    '- kind: "amendment" for an amendment / addendum / supplementary agreement;\n' +
+    '  "annex" for a statement of work, attachment, appendix, schedule; otherwise "agreement"\n' +
+    '- number: the document number as written ("2402-1", "Amendment No. 1")\n' +
+    '- date: the date it was signed or executed ("as of 28 February 2025" -> 2025-02-28); "" if absent\n' +
+    '- parentNumber: for an amendment or annex — the number of the agreement it belongs to; "" otherwise\n' +
+    '- title: the heading of the document\n\n' +
+    'TEXT:\n' + String(head).slice(0, 6000);
+  var call = geminiCall_(key, JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+  }));
+  if (!call.ok) return null;
+  try {
+    var data = JSON.parse(call.body);
+    var out = data.candidates[0].content.parts[0].text;
+    var o = JSON.parse(String(out).replace(/```json|```/g, '').trim());
+    var k = trim_(o.kind).toLowerCase();
+    return {
+      kind: (k === 'amendment' || k === 'annex') ? k : 'agreement',
+      number: trim_(o.number), date: /^\d{4}-\d{2}-\d{2}$/.test(trim_(o.date)) ? trim_(o.date) : '',
+      parentNumber: trim_(o.parentNumber), title: trim_(o.title)
+    };
+  } catch (e) { return null; }
+}
+
 function v2Blocks_(text) {
   var key = geminiKey_();
   if (!key) return { ok: false, error: 'AI key is not configured — Contracts 2.0 needs it to split the text into clauses' };
@@ -521,7 +552,9 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   if (text.replace(/\s/g, '').length < 40) return { ok: false, error: 'No readable text in this file' };
 
   var t1 = Date.now();
-  var res = v2Blocks_(maskForAI_(text, cpName || ''));
+  var masked = maskForAI_(text, cpName || '');
+  var meta = v2DocMeta_(geminiKey_(), masked);       // what this document is, from the document itself
+  var res = v2Blocks_(masked);
   var tAi = Date.now() - t1;
   if (!res.ok) return res;
   var t2 = Date.now();
@@ -535,9 +568,12 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   });
 
   var docId = Utilities.getUuid(), now = new Date().toISOString();
+  var kindFinal = (meta && meta.kind) ? meta.kind : (kind || 'agreement');
+  var dateFinal = (meta && meta.date) ? meta.date : '';
   appendRow_(SHEETS.documents, {
-    DocumentID: docId, ContractID: contractId, Kind: kind || 'agreement', Number: fileName,
-    SignDate: '', EffectiveFrom: '', Status: 'signed', Source: 'external',
+    DocumentID: docId, ContractID: contractId, Kind: kindFinal,
+    Number: (meta && meta.number) ? meta.number : fileName,
+    SignDate: dateFinal, EffectiveFrom: dateFinal, Status: 'signed', Source: 'external',
     AttachmentID: attachmentId || '', FileName: fileName, CreatedAt: now
   });
 
@@ -566,7 +602,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     sh.getRange(start, head.indexOf('SemanticKey') + 1, rows.length, 1).setNumberFormat('@');
     sh.getRange(start, 1, rows.length, head.length).setValues(rows);
   }
-  return { ok: true, documentId: docId, blocks: rows.length,
+  return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null,
            timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_(),
                      parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
            notes: res.notes || [] };
@@ -584,11 +620,10 @@ function v2Parse_(d) {
   var res = v2ParseFile_(contractId, a.DriveFileID, trim_(a.FileName), attId, kind, c ? cpName_(c.CounterpartyID) : '');
   if (res.ok) {
     // keep the dates and status of the source attachment on the document row
-    updateRow_(SHEETS.documents, 'DocumentID', res.documentId, {
-      Number: trim_(a.Description) || trim_(a.FileName),
-      SignDate: trim_(a.DocDate), EffectiveFrom: trim_(a.DocDate),
-      Status: (trim_(a.DocType) === 'draft') ? 'draft' : 'signed'
-    });
+    var upd = { Status: (trim_(a.DocType) === 'draft') ? 'draft' : 'signed' };
+    if (!res.meta || !res.meta.date) { upd.SignDate = trim_(a.DocDate); upd.EffectiveFrom = trim_(a.DocDate); }
+    if (!res.meta || !res.meta.number) upd.Number = trim_(a.Description) || trim_(a.FileName);
+    updateRow_(SHEETS.documents, 'DocumentID', res.documentId, upd);
   }
   return res;
 }

@@ -629,7 +629,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.46';
+const BUILD = '2026-08-08.47';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1249,6 +1249,7 @@ async function v2Parse(){
         + (t.ocrMs!=null?` · OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)}`:'')
         + (t.parts>1?` · ${t.parts} parts`:'')
         + (t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:'')
+        + (r.meta?` · recognised as <b>${esc(V2_KIND[r.meta.kind]||r.meta.kind)}</b>${r.meta.number?' '+esc(r.meta.number):''}${r.meta.date?' of '+esc(r.meta.date):''}${r.meta.parentNumber?` (to agreement ${esc(r.meta.parentNumber)})`:''}`:'')
         + ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-left:12px">${r.notes.map(esc).join('<br>')}</div>`:''));
     }
     await v2LoadContract();
