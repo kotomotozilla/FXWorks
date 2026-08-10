@@ -176,6 +176,7 @@
             <label style="display:flex;align-items:center;gap:6px;font-size:14px;width:auto">
               <input type="checkbox" id="v2_effective" style="width:auto" onchange="v2Render()"> Effective version only</label>
             <input id="v2_asOf" type="date" style="max-width:170px" onchange="v2Render()" title="Effective as of">
+            <button class="btn ghost sm" onclick="v2Export()">Export for review</button>
           </div>
         </div>
         <div id="v2_docs" class="muted" style="margin:6px 0"></div>
@@ -614,7 +615,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.29';
+const BUILD = '2026-08-08.30';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1279,6 +1280,60 @@ function v2Render(){
     tb.innerHTML = '<tr><th style="width:70px">Clause</th><th>Title</th><th style="width:210px">Key</th><th>From</th></tr>'
       + rows.map(b=>v2BlockRow(b, docs, eff, supersededKeys, true)).join('');
   }
+}
+function v2Export(){
+  if(!V2.blocks.length){ notice('v2Err','err','Nothing parsed yet.'); return; }
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(V2.contractId)) || {};
+  const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
+  const used={}; V2.blocks.forEach(b=>used[b.SemanticKey]=(used[b.SemanticKey]||0)+1);
+  const unused=(V2.keys||[]).filter(k=>!used[k]);
+  const L=[];
+  L.push('# Clause mapping for review');
+  L.push('');
+  L.push('Contract: '+(c.Number||'')+' — '+cpName(c.CounterpartyID));
+  L.push('Type: '+(c.TemplateType==='ica'?'Independent Contractor Agreement':'B2B agreement')
+        +' · '+(c.PricingType==='hourly'?'hourly rate':'lump sum')
+        +' · '+(c.Amount||'')+' '+(c.Currency||''));
+  L.push('Exported: '+todayISO()+' · build '+BUILD);
+  L.push('');
+  L.push('## Documents');
+  V2.documents.forEach(d=>L.push('- '+(V2_KIND[d.Kind]||d.Kind)+': '+(d.FileName||d.Number||'')
+        +(d.SignDate?' · signed '+fmtDate(d.SignDate):'')+' · '+d.Status));
+  L.push('');
+  L.push('## Coverage');
+  L.push('- clauses: '+V2.blocks.length);
+  L.push('- keys used: '+Object.keys(used).length+' of '+(V2.keys||[]).length);
+  L.push('- in "misc": '+(used['misc']||0));
+  if(unused.length) L.push('- keys not present: '+unused.join(', '));
+  L.push('');
+  L.push('## Clauses grouped by key');
+  (V2.keys||[]).filter(k=>used[k]).forEach(k=>{
+    L.push('');
+    L.push('### '+k+'  ('+used[k]+')');
+    V2.blocks.filter(b=>b.SemanticKey===k)
+      .sort((a,b)=>(+a.SortOrder||0)-(+b.SortOrder||0))
+      .forEach(b=>{
+        const d=docs[b.DocumentID]||{};
+        L.push('');
+        L.push('**'+(b.Path||'—')+'. '+(b.Title||'(no heading)')+'**  _['+(d.FileName||'')+' · level '+(b.Level||'')+']_');
+        L.push('');
+        L.push(String(b.Text||'').trim());
+      });
+  });
+  L.push('');
+  L.push('## Raw JSON');
+  L.push('```json');
+  L.push(JSON.stringify({ contract:{number:c.Number, templateType:c.TemplateType, pricingType:c.PricingType},
+    documents:V2.documents.map(d=>({id:d.DocumentID, kind:d.Kind, file:d.FileName, signDate:d.SignDate, status:d.Status})),
+    blocks:V2.blocks.map(b=>({doc:b.DocumentID, key:b.SemanticKey, path:b.Path, level:b.Level, title:b.Title, text:b.Text}))
+  }, null, 1));
+  L.push('```');
+
+  const name = 'clause-mapping-'+String(c.Number||'contract').replace(/[^A-Za-z0-9._-]+/g,'_')+'.md';
+  const url = URL.createObjectURL(new Blob([L.join('\n')], {type:'text/markdown'}));
+  const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 500);
+  notice('v2Err','ok','Exported '+esc(name)+' — the file contains the full clause texts, so share it only where that is fine.');
 }
 function v2Toggle(id){ V2.open[id] = !V2.open[id]; v2Render(); }
 
