@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.35';
+const BUILD = '2026-08-08.36';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -834,10 +834,19 @@ function fixOcrText_(t) {
     'proats':'profits','sucient':'sufficient','oer':'offer','oered':'offered','eect':'effect','eective':'effective',
     'jood':'flood','jow':'flow','conjict':'conflict','func]ons':'functions','are':'fire'
   };
+  // Stems are repaired without a trailing boundary: "modiaca" also fixes "modiacation".
+  var STEMS = { 'modiaca':'modifica', 'speciaca':'specifica', 'notiaca':'notifica', 'clariaca':'clarifica',
+                'conaden':'confiden', 'certiaca':'certifica', 'veriaca':'verifica', 'ananc':'financ',
+                'identiac':'identific', 'jexib':'flexib', 'proat':'profit', 'beneat':'benefit' };
   Object.keys(WORDS).forEach(function (bad) {
     t = t.replace(new RegExp('\\b' + bad + '\\b', 'g'), WORDS[bad]);
     t = t.replace(new RegExp('\\b' + bad.charAt(0).toUpperCase() + bad.slice(1) + '\\b', 'g'),
                   WORDS[bad].charAt(0).toUpperCase() + WORDS[bad].slice(1));
+  });
+  Object.keys(STEMS).forEach(function (bad) {
+    t = t.replace(new RegExp('\\b' + bad, 'g'), STEMS[bad]);
+    t = t.replace(new RegExp('\\b' + bad.charAt(0).toUpperCase() + bad.slice(1), 'g'),
+                  STEMS[bad].charAt(0).toUpperCase() + STEMS[bad].slice(1));
   });
   t = t.replace(/\u00ad/g, '');
   return t;
