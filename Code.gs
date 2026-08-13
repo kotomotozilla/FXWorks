@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.54';
+const BUILD = '2026-08-08.55';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -455,6 +455,24 @@ function v2Chunks_(text, maxLen) {
   return safe;
 }
 
+// A single malformed string should not cost a whole part: repair the usual damage and,
+// failing that, salvage the block objects that are intact.
+function salvageBlocks_(raw) {
+  var t = String(raw || '').replace(/```json|```/g, '').trim();
+  try { return (JSON.parse(t).blocks) || []; } catch (e) {}
+  // unescaped quotes inside a "text": "..." value
+  var fixed = t.replace(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g, function (m, inner) {
+    return '"text": "' + inner.replace(/\n/g, ' ') + '"';
+  });
+  try { return (JSON.parse(fixed).blocks) || []; } catch (e) {}
+  var out = [];
+  var re = /\{[^{}]*"semanticKey"\s*:\s*"[^"]*"[^{}]*\}/g, m;
+  while ((m = re.exec(t))) {
+    try { out.push(JSON.parse(m[0])); } catch (e) {}
+  }
+  return out;
+}
+
 function v2BlocksChunk_(key, chunk, partNo, total, profile) {
   var prompt =
     'Split this part of a contract into its clauses. Reply with ONE JSON object: {"blocks":[...]} and nothing else.\n' +
@@ -474,6 +492,7 @@ function v2BlocksChunk_(key, chunk, partNo, total, profile) {
     '- text: the complete wording of that clause, verbatim, no summarising\n' +
     '- semanticKey: exactly one of: ' + SEMANTIC_KEYS.join(', ') + '\n' +
     'Keep the original order. Do not merge clauses. Do not invent clauses. Skip tables of contents.\n' +
+    'Inside the text use plain straight quotes only; escape them properly so the JSON stays valid.\n' +
     'The parties appear as PARTY_US and PARTY_OTHER; personal data is masked — keep those tokens as they are.\n' +
     ((PARSE_PROFILES[profile || ''] || '') ? (PARSE_PROFILES[profile] + '\n') : '') +
     (total > 1 ? ('This is part ' + partNo + ' of ' + total + ' — parse only what is here.\n') : '') +
@@ -492,8 +511,9 @@ function v2BlocksChunk_(key, chunk, partNo, total, profile) {
       return { ok: false, error: 'The answer was cut off (' + cand.finishReason + ') — the part is still too long' };
     }
     var out = cand.content.parts[0].text;
-    var obj = JSON.parse(String(out).replace(/```json|```/g, '').trim());
-    return { ok: true, blocks: obj.blocks || [] };
+    var blocks = salvageBlocks_(out);
+    if (!blocks.length) return { ok: false, error: 'Could not read the structure of this part' };
+    return { ok: true, blocks: blocks };
   } catch (e) { return { ok: false, error: 'Could not read the structure: ' + e }; }
 }
 
@@ -1458,6 +1478,8 @@ function fixOcrText_(t) {
                   STEMS[bad].charAt(0).toUpperCase() + STEMS[bad].slice(1));
   });
   t = t.replace(/\u00ad/g, '');
+  // Typographic quotes inside clause text end up inside JSON strings and break the answer.
+  t = t.replace(/[\u201C\u201D\u201E\u201F\u00AB\u00BB]/g, '"').replace(/[\u2018\u2019\u201A\u201B]/g, "'");
   return t;
 }
 
