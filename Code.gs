@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.53';
+const BUILD = '2026-08-08.54';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -1552,8 +1552,13 @@ function maskForAI_(text, counterpartyName) {
   t = t.replace(/\b(?=[A-Z0-9]{8,11}\b)(?=[A-Z0-9]*\d)[A-Z0-9]{8,11}\b/g, '[SWIFT]');
   t = t.replace(/\b\d{8,20}\b/g, '[ACCOUNT]');
   t = t.replace(/\b\d{2,4}(?:[-. ]\d{2,4}){2,}\b/g, '[ACCOUNT]');
-  t = t.replace(/(Account\s*(?:No\.?|number)?\s*:?\s*)([^\n,]{4,40})/gi, '$1[ACCOUNT]');
-  t = t.replace(/(Address\s*:?\s*)([^\n]{5,120})/gi, '$1[ADDRESS]');
+  // Only mask an account when what follows really looks like an account number —
+  // otherwise "to the bank account of the Supplier upon receipt of a corresponding invoice"
+  // gets eaten and the clause text is destroyed.
+  t = t.replace(/(Account\s*(?:No\.?|number)\s*:?\s*)([A-Z]{0,2}[\d][\d\-. ]{5,30})/gi, '$1[ACCOUNT]');
+  // Same for addresses: only when the line is a labelled address field, not any sentence
+  // that happens to contain the word.
+  t = t.replace(/^([ \t]*(?:Bank\s+)?Address\s*:\s*)([^\n]{5,120})$/gim, '$1[ADDRESS]');
   t = t.replace(/(having its (?:principal )?place of business at\s+)([^\n,]{5,120})/gi, '$1[ADDRESS]');
   return t;
 }

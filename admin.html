@@ -651,7 +651,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.53';
+const BUILD = '2026-08-08.54';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1422,7 +1422,7 @@ function v2BlockRow(b, docs, eff, superseded, showKey){
         ${(eff && b.ReplacementText)?'<div class="muted" style="font-size:11px">wording inserted by the amendment</div>':''}
         <div style="height:8px"></div>
         <div class="acts">
-          <button class="btn sm" onclick="v2SaveBlock('${esc(b.BlockID)}',this)">Save clause</button>
+          <button class="btn sm" onclick="v2SaveBlock('${esc(b.BlockID)}',this)" title="Saves into this contract's structure — not into the source PDF and not into any template">Save clause</button>
           <button class="btn ghost sm" onclick="v2AddBlock('${esc(b.DocumentID)}',${(+b.SortOrder||0)})">Add clause after</button>
           <button class="btn warn sm" onclick="v2DeleteBlock('${esc(b.BlockID)}')">Delete clause</button>
         </div>
