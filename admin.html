@@ -174,7 +174,7 @@
             </div></div>
           <div style="flex:0 0 200px"><label>Document shape</label>
             <select id="v2_profile">
-              <option value="">standard layout</option>
+              <option value="">detect automatically</option>
               <option value="bilingual">bilingual / two columns</option>
               <option value="unnumbered">few or no clause numbers</option>
               <option value="articles">Article / Section numbering</option>
@@ -206,6 +206,9 @@
               <input type="checkbox" id="v2_effective" style="width:auto" onchange="v2Render()"> Effective version only</label>
             <input id="v2_asOf" type="date" style="max-width:170px" onchange="v2Render()" title="Effective as of">
             <button class="btn ghost sm" onclick="v2Export()">Export for review</button>
+            <button class="btn ghost sm" onclick="v2ExtractParams()" title="Read the values out of the clauses in force">Read values</button>
+            <button class="btn ghost sm" onclick="v2BuildHistory(this)" title="Record what each document established, dated by that document">Build full history</button>
+            <button class="btn sm" onclick="v2Generate()" title="Assemble the clauses in force into a Google Doc, PDF and Word">Assemble document</button>
           </div>
         </div>
         <div id="v2_docs" class="muted" style="margin:6px 0"></div>
@@ -651,7 +654,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.55';
+const BUILD = '2026-08-08.57';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1274,6 +1277,7 @@ async function v2Parse(){
         + (t.parts>1?` · ${t.parts} parts`:'')
         + (t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:'')
         + ((r.diff&&r.diff.length)?`<div class="muted" style="font-size:12px;margin-left:12px">vs previous parse: ${r.diff.map(esc).join(' · ')}</div>`:'')
+        + (r.profile?` · shape: <b>${esc(r.profile)}</b>`:'')
         + (r.meta?` · recognised as <b>${esc(V2_KIND[r.meta.kind]||r.meta.kind)}</b>${r.meta.number?' '+esc(r.meta.number):''}${r.meta.date?' of '+esc(r.meta.date):''}${r.meta.parentNumber?` (to agreement ${esc(r.meta.parentNumber)})`:''}`:'')
         + ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-left:12px">${r.notes.map(esc).join('<br>')}</div>`:''));
     }

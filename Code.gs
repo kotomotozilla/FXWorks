@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.55';
+const BUILD = '2026-08-08.57';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -562,6 +562,29 @@ function v2DocMeta_(key, head) {
   } catch (e) { return null; }
 }
 
+// The shape of a document can be read off the text itself — no need to ask the user.
+function detectProfile_(text) {
+  var t = String(text || ''), sample = t.slice(0, 20000);
+  var lines = sample.split('\n').filter(function (l) { return l.trim().length > 20; });
+  var latin = (sample.match(/[A-Za-z]/g) || []).length;
+  var other = (sample.match(/[\u0400-\u04FF\u0600-\u06FF\u4E00-\u9FFF]/g) || []).length;
+  if (other > latin * 0.25) return 'bilingual';
+
+  if (/\bArticle\s+[IVXLC]+\b/i.test(sample) || /\bSection\s+\d+(\.\d+)*\b/.test(sample)) {
+    if (!/^\s*\d+\.\d+\.?\s/m.test(sample)) return 'articles';
+  }
+  var numbered = lines.filter(function (l) { return /^\s*(\d+(\.\d+)*[.)]|\([a-z0-9]+\)|[a-z][.)])\s/i.test(l); }).length;
+  if (lines.length > 20 && numbered / lines.length < 0.12) return 'unnumbered';
+
+  // OCR damage that survives the repair pass points at a scan
+  var broken = (sample.match(/[A-Za-z][<\]\}|\\][a-z]/g) || []).length;
+  if (broken > sample.length / 900) return 'scanned';
+
+  var tabbish = lines.filter(function (l) { return /\t|\s{4,}\S+\s{4,}/.test(l); }).length;
+  if (lines.length > 15 && tabbish / lines.length > 0.35) return 'table';
+  return '';
+}
+
 function v2Blocks_(text, profile) {
   var key = geminiKey_();
   if (!key) return { ok: false, error: 'AI key is not configured — Contracts 2.0 needs it to split the text into clauses' };
@@ -603,7 +626,9 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   var t1 = Date.now();
   var masked = maskForAI_(text, cpName || '');
   var meta = v2DocMeta_(geminiKey_(), masked);       // what this document is, from the document itself
-  var res = v2Blocks_(masked, profile);
+  var autoProfile = trim_(profile);
+  if (!autoProfile) autoProfile = detectProfile_(text);   // ask the document, not the user
+  var res = v2Blocks_(masked, autoProfile);
   var tAi = Date.now() - t1;
   if (!res.ok) return res;
   var t2 = Date.now();
@@ -659,7 +684,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   var counts = {};
   list.forEach(function (bl) { var k = trim_(bl.semanticKey) || 'misc'; counts[k] = (counts[k] || 0) + 1; });
   var snap = JSON.stringify({ total: rows.length, keys: counts });
-  updateRow_(SHEETS.documents, 'DocumentID', docId, { Snapshot: snap, Profile: profile || '' });
+  updateRow_(SHEETS.documents, 'DocumentID', docId, { Snapshot: snap, Profile: autoProfile || '' });
 
   var diff = null;
   if (prevSnap) {
@@ -677,7 +702,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     } catch (e) {}
   }
 
-  return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null, diff: diff,
+  return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null, diff: diff, profile: autoProfile,
            timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_(),
                      parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
            notes: res.notes || [] };
