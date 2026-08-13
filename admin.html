@@ -172,7 +172,27 @@
               <button type="button" class="btn ghost sm" onclick="pickFile('v2_file')">Choose files</button>
               <span class="fname" id="v2_fname">no file selected</span>
             </div></div>
+          <div style="flex:0 0 200px"><label>Document shape</label>
+            <select id="v2_profile">
+              <option value="">standard layout</option>
+              <option value="bilingual">bilingual / two columns</option>
+              <option value="unnumbered">few or no clause numbers</option>
+              <option value="articles">Article / Section numbering</option>
+              <option value="scanned">scan or photo</option>
+              <option value="table">mostly tables</option>
+            </select></div>
           <div style="flex:0 0 auto"><button class="btn sm" id="v2_parseBtn" onclick="v2Parse()">Parse into clauses</button></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="row" style="align-items:end" id="v2_tplRow">
+          <div style="flex:2"><label>…or start from a template</label><select id="v2_tpl"></select></div>
+          <div style="flex:0 0 190px"><label>Add as</label>
+            <select id="v2_tplKind">
+              <option value="agreement">Agreement</option>
+              <option value="annex">Annex / SOW</option>
+              <option value="amendment">Amendment</option>
+            </select></div>
+          <div style="flex:0 0 auto"><button class="btn sm" onclick="v2FromTemplate(this)">Fill from template</button></div>
         </div>
       </div>
 
@@ -190,6 +210,8 @@
         </div>
         <div id="v2_docs" class="muted" style="margin:6px 0"></div>
         <div id="v2_cover" style="margin:6px 0"></div>
+        <div id="v2_params"></div>
+        <div id="v2_terms"></div>
         <div class="scroll"><table id="v2Table"><tbody><tr><td class="empty">Pick a contract.</td></tr></tbody></table></div>
       </div>
     </section>
@@ -629,7 +651,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.47';
+const BUILD = '2026-08-08.53';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1184,6 +1206,7 @@ function v2Init(){
     + CONTRACTS.map(c=>
     `<option value="${esc(c.ContractID)}" ${String(V2.contractId)===String(c.ContractID)?'selected':''}>${esc(c.Number)} — ${esc(cpName(c.CounterpartyID))}</option>`).join('');
   if(!$('v2_asOf').value) $('v2_asOf').value = todayISO();
+  v2LoadTemplates();
   if(V2.contractId) v2LoadContract();
 }
 function v2ModeToggle(){
@@ -1212,6 +1235,7 @@ async function v2LoadContract(){
       : '<option value="">— no documents attached —</option>';
     const r = await api('v2_list',{contractId:V2.contractId});
     V2.documents = r.documents||[]; V2.blocks = r.blocks||[]; V2.keys = r.keys||[];
+    v2LoadTerms();
     v2Render();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
@@ -1236,8 +1260,8 @@ async function v2Parse(){
       try{
         r = sandbox
           ? await api('v2_parse_upload',{ fileName:files[i].name, mimeType:files[i].type||'application/pdf',
-              dataBase64: await fileToBase64(files[i]) })
-          : await api('v2_parse',{contractId:V2.contractId, attachmentId:attIds[i]});
+              profile: $('v2_profile').value, dataBase64: await fileToBase64(files[i]) })
+          : await api('v2_parse',{contractId:V2.contractId, attachmentId:attIds[i], profile: $('v2_profile').value});
       }catch(err){
         lines.push(`<b>${esc(sandbox?files[i].name:'document '+(i+1))}</b>: connection dropped — the server may have finished`);
         continue;
@@ -1249,6 +1273,7 @@ async function v2Parse(){
         + (t.ocrMs!=null?` · OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)}`:'')
         + (t.parts>1?` · ${t.parts} parts`:'')
         + (t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:'')
+        + ((r.diff&&r.diff.length)?`<div class="muted" style="font-size:12px;margin-left:12px">vs previous parse: ${r.diff.map(esc).join(' · ')}</div>`:'')
         + (r.meta?` · recognised as <b>${esc(V2_KIND[r.meta.kind]||r.meta.kind)}</b>${r.meta.number?' '+esc(r.meta.number):''}${r.meta.date?' of '+esc(r.meta.date):''}${r.meta.parentNumber?` (to agreement ${esc(r.meta.parentNumber)})`:''}`:'')
         + ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-left:12px">${r.notes.map(esc).join('<br>')}</div>`:''));
     }
@@ -1341,7 +1366,7 @@ async function v2SetDoc(documentId, field, value){
   try{
     await api('v2_set_doc', payload);
     const d = V2.documents.find(x=>String(x.DocumentID)===String(documentId));
-    if(d){ if(field==='kind') d.Kind=value; else if(field==='signDate'){ d.SignDate=value; d.EffectiveFrom=value; } else d.Status=value; }
+    if(d){ if(field==='kind') d.Kind=value; else if(field==='signDate'){ d.SignDate=value; d.EffectiveFrom=value; } else if(field==='notes') d.Notes=value; else if(field==='profile') d.Profile=value; else d.Status=value; }
     v2Render();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
@@ -1384,8 +1409,239 @@ function v2BlockRow(b, docs, eff, superseded, showKey){
       <td class="muted">${esc(d.FileName||'')}</td>
     </tr>
     <tr${isOpen?'':' class="hidden"'}><td colspan="${showKey?4:3}" style="background:#F6F8FA">
-      <div style="white-space:pre-wrap;font-size:13px;padding:6px 2px">${esc(b.Text||'')}</div></td></tr>`;
+      <div style="padding:8px 2px">
+        <div class="row" style="align-items:end">
+          <div style="flex:0 0 120px"><label>Clause no.</label><input id="be_p_${esc(b.BlockID)}" value="${esc(b.Path||'')}"></div>
+          <div style="flex:0 0 100px"><label>Level</label><input id="be_l_${esc(b.BlockID)}" type="number" min="1" max="3" value="${esc(b.Level||2)}"></div>
+          <div style="flex:2 1 200px"><label>Title</label><input id="be_t_${esc(b.BlockID)}" value="${esc(b.Title||'')}"></div>
+          <div style="flex:1 1 180px"><label>Key</label><select id="be_k_${esc(b.BlockID)}">${v2KeyOptions(b.SemanticKey)}</select></div>
+        </div>
+        <div style="height:8px"></div>
+        <label>Text${b.Origin==='external'?' <span class="muted">— reconstructed from the signed PDF; editing marks it as edited</span>':''}${b.Origin==='external-edited'?' <span class="tag draft">edited</span>':''}${b.Origin==='manual'?' <span class="tag draft">added by hand</span>':''}</label>
+        <textarea id="be_x_${esc(b.BlockID)}" style="min-height:120px">${esc((eff && b.ReplacementText) ? b.ReplacementText : (b.Text||''))}</textarea>
+        ${(eff && b.ReplacementText)?'<div class="muted" style="font-size:11px">wording inserted by the amendment</div>':''}
+        <div style="height:8px"></div>
+        <div class="acts">
+          <button class="btn sm" onclick="v2SaveBlock('${esc(b.BlockID)}',this)">Save clause</button>
+          <button class="btn ghost sm" onclick="v2AddBlock('${esc(b.DocumentID)}',${(+b.SortOrder||0)})">Add clause after</button>
+          <button class="btn warn sm" onclick="v2DeleteBlock('${esc(b.BlockID)}')">Delete clause</button>
+        </div>
+      </div></td></tr>`;
 }
+async function v2SaveBlock(id, btn){
+  const g = p => { const e=$(p+id); return e ? e.value : undefined; };
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    await api('v2_save_block',{ blockId:id, path:g('be_p_'), level:g('be_l_'), title:g('be_t_'),
+      semanticKey:g('be_k_'), text:g('be_x_') });
+    const b = V2.blocks.find(x=>String(x.BlockID)===String(id));
+    if(b){ b.Path=g('be_p_'); b.Level=g('be_l_'); b.Title=g('be_t_'); b.SemanticKey=g('be_k_');
+           if(b.ReplacementText) b.ReplacementText=g('be_x_'); else b.Text=g('be_x_');
+           if(b.Origin==='external') b.Origin='external-edited'; }
+    v2Render();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Save clause'; }
+}
+async function v2AddBlock(documentId, afterSort){
+  try{
+    const r = await api('v2_add_block',{ documentId, afterSort, title:'New clause', text:'', semanticKey:'misc', level:2 });
+    V2.blocks.push(r.block); V2.open[r.block.BlockID]=true; v2Render();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+async function v2DeleteBlock(id){
+  if(!confirm('Delete this clause from the structure? The source document is not touched.')) return;
+  try{ await api('v2_delete_block',{blockId:id});
+    V2.blocks = V2.blocks.filter(x=>String(x.BlockID)!==String(id)); v2Render();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+// Values derived from the clauses in force. Nothing is written to the contract record
+// until you tick the rows and press Apply — the clauses stay the source of truth.
+const V2_CORE_FIELDS = ['amount','currency','pricingType','signDate','startDate','endDate'];
+const V2_FIELD_LABEL = { amount:'Amount / rate', currency:'Currency', pricingType:'Pricing', rateBasis:'Rate basis',
+  signDate:'Sign date', startDate:'Start date', endDate:'End date', paymentDays:'Payment days',
+  acceptanceDays:'Acceptance days', remarksDays:'Days for remarks', noticeDays:'Notice days',
+  disputeDays:'Dispute days', cureDays:'Cure days', termYears:'Term (years)', warrantyPeriod:'Warranty period',
+  penaltyDelayPercent:'Penalty for delay %', penaltyFailurePercent:'Penalty for failure %',
+  penaltyCapPercent:'Penalty cap %', insuranceAmount:'Insurance amount', restrictedTerritories:'Restricted territories',
+  paymentBasis:'Payment basis', reportFrequency:'Report frequency', governingLaw:'Governing law',
+  jurisdictionPlace:'Place of jurisdiction', arbitrationBody:'Arbitration body', arbitrationSeat:'Seat of arbitration',
+  subject:'Subject' };
+let V2_PARAMS = null, V2_TERMS = [];
+
+// A template is a parsed document kept aside: the library grows out of real agreements.
+async function v2LoadTemplates(){
+  const sel = $('v2_tpl'); if(!sel) return;
+  try{
+    const r = await api('v2_templates');
+    const list = r.templates||[];
+    sel.innerHTML = list.length
+      ? '<option value="">— pick a template —</option>' + list.map(t=>
+          `<option value="${esc(t.DocumentID)}">${esc(t.Number)} · ${esc(V2_KIND[t.Kind]||t.Kind)}</option>`).join('')
+      : '<option value="">— no templates yet: parse a document and press "save as template" —</option>';
+  }catch(e){ sel.innerHTML='<option value="">— could not load templates —</option>'; }
+}
+async function v2SaveTemplate(documentId){
+  const d = V2.documents.find(x=>String(x.DocumentID)===String(documentId)) || {};
+  const name = prompt('Name for this template:', d.Number || d.FileName || 'Template');
+  if(name===null) return;
+  try{
+    const r = await api('v2_save_template',{documentId, name:name.trim()});
+    await v2LoadTemplates();
+    notice('v2Err','ok','Saved as template "'+esc(r.name)+'" — '+r.blocks+' clauses.');
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+async function v2FromTemplate(btn){
+  const tplId = $('v2_tpl').value;
+  if(!V2.contractId || V2.contractId==='__sandbox'){ notice('v2Err','err','Pick a real contract to fill.'); return; }
+  if(!tplId){ notice('v2Err','err','Pick a template.'); return; }
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    const r = await api('v2_from_template',{contractId:V2.contractId, templateId:tplId, kind:$('v2_tplKind').value});
+    await v2LoadContract();
+    notice('v2Err','ok','Filled from the template: '+r.blocks+' clauses. Edit them, then assemble the document.');
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Fill from template'; }
+}
+
+// Read every document in turn and record what each of them established — the agreement's
+// original terms and every change an amendment made, each dated by its own document.
+async function v2BuildHistory(btn){
+  if(!V2.contractId || V2.contractId==='__sandbox'){ notice('v2Err','err','Pick a real contract.'); return; }
+  if(!V2.documents.length){ notice('v2Err','err','Parse the documents first.'); return; }
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  notice('v2Err','info','Reading each document in turn — one pass per document…');
+  try{
+    const r = await api('v2_build_history',{contractId:V2.contractId});
+    await v2LoadTerms();
+    notice('v2Err','ok',`History built: ${r.added} new entries.`
+      + ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-top:6px">${r.notes.map(esc).join('<br>')}</div>`:''));
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Build full history'; }
+}
+async function v2LoadTerms(){
+  const el=$('v2_terms'); if(!el) return;
+  if(!V2.contractId || V2.contractId==='__sandbox'){ el.innerHTML=''; V2_TERMS=[]; return; }
+  try{
+    const r = await api('v2_terms',{contractId:V2.contractId});
+    V2_TERMS = r.terms||[];
+  }catch(e){ V2_TERMS=[]; }
+  if(!V2_TERMS.length){ el.innerHTML=''; return; }
+  const rows = V2_TERMS.slice().sort((a,b)=> String(a.Field).localeCompare(String(b.Field))
+    || String(a.ValidFrom).localeCompare(String(b.ValidFrom)));
+  el.innerHTML = `<div style="margin:10px 0;padding:12px;border:1px dashed var(--line);border-radius:10px">
+    <b style="font-size:13px">History of terms</b>
+    <p class="muted" style="font-size:11px;margin:4px 0 8px">What applied and from when. Work already reported keeps the rate it was created with; this is what lets you check the terms of any past period.</p>
+    <div class="scroll"><table><tr><th>Field</th><th>Value</th><th>In force from</th><th>From clause</th><th></th></tr>
+    ${rows.map(t=>`<tr>
+      <td>${esc(V2_FIELD_LABEL[t.Field]||t.Field)}</td>
+      <td>${esc(t.Value)}</td>
+      <td class="muted">${esc(t.ValidFrom?fmtDate(t.ValidFrom):'—')}</td>
+      <td class="muted">${esc(t.FromClause||'—')}</td>
+      <td class="muted">${esc(t.Note||'')}</td></tr>`).join('')}
+    </table></div></div>`;
+}
+async function v2ExtractParams(){
+  const rows = v2Effective($('v2_asOf').value);
+  if(!rows.length){ notice('v2Err','err','Nothing in force to read.'); return; }
+  notice('v2Err','info','Reading the values out of the clauses in force…');
+  try{
+    const r = await api('v2_extract_params',{ contractId:V2.contractId, blockIds: rows.map(b=>b.BlockID) });
+    V2_PARAMS = r.fields||{};
+    v2RenderParams();
+    notice('v2Err','ok','Read '+Object.keys(V2_PARAMS).length+' values from the effective version.');
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+function v2RenderParams(){
+  const el=$('v2_params'); if(!el) return;
+  const keys = Object.keys(V2_PARAMS||{});
+  if(!keys.length){ el.innerHTML=''; return; }
+  const sandbox = V2.contractId==='__sandbox';
+  el.innerHTML = `<div style="margin:10px 0;padding:12px;border:1px dashed var(--line);border-radius:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <b style="font-size:13px">Values behind the clauses in force</b>
+      ${sandbox?'<span class="muted">test parsing — nothing to write to</span>'
+               :'<button class="btn sm" onclick="v2ApplyParams(this)">Apply ticked to the contract record</button>'}
+    </div>
+    <p class="muted" style="font-size:11px;margin:4px 0 8px">Taken from the amended wording where an amendment applies. Check each value against the clause it came from.</p>
+    <div class="scroll"><table><tr><th style="width:34px"></th><th>Field</th><th>Value</th><th>From clause</th></tr>
+    ${keys.map(k=>`<tr>
+      <td><input type="checkbox" id="pf_${esc(k)}" style="width:auto" ${sandbox?'disabled':'checked'}></td>
+      <td>${esc(V2_FIELD_LABEL[k]||k)}</td>
+      <td><input id="pv_${esc(k)}" value="${esc(String(V2_PARAMS[k].value))}" style="font-size:13px;padding:4px 6px"></td>
+      <td class="muted">${esc(V2_PARAMS[k].from||'—')}</td></tr>`).join('')}
+    </table></div></div>`;
+}
+async function v2ApplyParams(btn){
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(V2.contractId));
+  if(!c){ notice('v2Err','err','Pick a real contract to write to.'); return; }
+  const picked = {};
+  Object.keys(V2_PARAMS||{}).forEach(k=>{ if($('pf_'+k) && $('pf_'+k).checked) picked[k] = $('pv_'+k).value; });
+  if(!Object.keys(picked).length){ notice('v2Err','err','Nothing ticked.'); return; }
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    // core fields live on the contract itself; the rest are document settings
+    const core = {};
+    V2_CORE_FIELDS.forEach(k=>{ if(picked[k]!==undefined) core[k]=picked[k]; });
+    if(Object.keys(core).length){
+      await api('update_contract', { id:c.ContractID, number:c.Number, counterpartyId:c.CounterpartyID,
+        direction:c.Direction, parentContractId:c.ParentContractID||'', description:c.Description||'',
+        signDate: core.signDate!==undefined?core.signDate:(c.SignDate?fmtDate(c.SignDate):''),
+        startDate: core.startDate!==undefined?core.startDate:(c.StartDate?fmtDate(c.StartDate):''),
+        endDate: core.endDate!==undefined?core.endDate:(c.EndDate?fmtDate(c.EndDate):''),
+        amount: core.amount!==undefined?core.amount:c.Amount,
+        currency: core.currency!==undefined?core.currency:c.Currency,
+        pricingType: core.pricingType!==undefined?core.pricingType:(c.PricingType||'lump') });
+    }
+    const doc = { id:c.ContractID };
+    let n = 0;
+    Object.keys(picked).forEach(k=>{ if(V2_CORE_FIELDS.indexOf(k)<0){ doc[k]=picked[k]; n++; } });
+    if(n) await api('save_contract_doc', doc);
+
+    // record the same values in the term history, dated by the document they came from,
+    // so past work can still be priced by the terms that applied back then
+    const docs={}; V2.documents.forEach(x=>docs[x.DocumentID]=x);
+    const byPath = {};
+    V2.blocks.forEach(b=>{ const p=String(b.Path||'').trim(); if(p && !byPath[p]) byPath[p]=b; });
+    const items = Object.keys(picked).map(k=>{
+      const from = (V2_PARAMS[k]||{}).from || '';
+      const b = byPath[String(from).trim()];
+      const d0 = b ? (docs[b.DocumentID]||{}) : {};
+      return { field:k, value:picked[k], fromClause:from, documentId:b?b.DocumentID:'',
+               validFrom: String(d0.EffectiveFrom||d0.SignDate||'').slice(0,10) || ($('v2_asOf').value||todayISO()),
+               note: d0.Kind==='amendment' ? ('changed by '+(d0.Number||'amendment')) : '' };
+    });
+    let logged = 0;
+    try{ const lr = await api('v2_log_terms',{contractId:c.ContractID, items}); logged = lr.added||0; }catch(_){}
+
+    await loadContracts();
+    await v2LoadTerms();
+    notice('v2Err','ok','Written to contract '+esc(c.Number)+': '+Object.keys(picked).length+' value(s)'
+      + (logged?`; ${logged} recorded in the term history`:'') + '.');
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Apply ticked to the contract record'; }
+}
+
+// Assemble the clauses in force into a document: Google Doc + PDF + Word.
+async function v2Generate(){
+  const rows = v2Effective($('v2_asOf').value);
+  if(!rows.length){ notice('v2Err','err','Nothing in force to assemble.'); return; }
+  const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
+  const rank = b => ((docs[b.DocumentID]||{}).Kind==='annex' ? 1 : 0);
+  const ordered = rows.slice().sort((a,b)=> (rank(a)-rank(b)) || ((+a.SortOrder||0)-(+b.SortOrder||0)));
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(V2.contractId)) || {};
+  const title = (c.Number ? 'Agreement '+c.Number : 'Contract') + ' — effective as of ' + ($('v2_asOf').value||todayISO());
+  notice('v2Err','info','Assembling the document…');
+  try{
+    const r = await api('v2_generate',{ contractId:V2.contractId, title,
+      subtitle: c.CounterpartyID ? cpName(c.CounterpartyID) : '', blockIds: ordered.map(b=>b.BlockID) });
+    notice('v2Err','ok',`Assembled ${r.clauses} clauses. `
+      + `<a href="${esc(r.docUrl)}" target="_blank" rel="noopener">Google Doc</a> · `
+      + `<a href="${esc(r.pdfUrl)}" target="_blank" rel="noopener">PDF</a>`
+      + (r.docxUrl?` · <a href="${esc(r.docxUrl)}" target="_blank" rel="noopener">Word</a>`:'')
+      + (V2.contractId!=='__sandbox'?' · attached to the contract as a draft':''));
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+
 function v2Render(){
   const tb=$('v2Table').querySelector('tbody');
   const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
@@ -1401,7 +1657,11 @@ function v2Render(){
           <option value="signed" ${String(d.Status).toLowerCase()==='signed'?'selected':''}>signed</option>
           <option value="draft" ${String(d.Status).toLowerCase()==='draft'?'selected':''}>draft</option>
         </select>
+        <a href="#" onclick="v2SaveTemplate('${esc(d.DocumentID)}');return false;" title="Keep these clauses as a reusable template">save as template</a>
         <a href="#" onclick="v2DeleteDoc('${esc(d.DocumentID)}');return false;">remove</a>
+        <input value="${esc(d.Notes||'')}" placeholder="notes on this document shape…" style="flex:1 1 220px;font-size:12px;padding:3px 6px"
+               onchange="v2SetDoc('${esc(d.DocumentID)}','notes',this.value)">
+        ${d.Profile?`<span class="tag draft">${esc(d.Profile)}</span>`:''}
       </div>`).join('')
     : 'No documents parsed yet.';
   if(!V2.blocks.length){ $('v2_cover').innerHTML=''; tb.innerHTML='<tr><td class="empty">Nothing parsed for this contract yet.</td></tr>'; return; }

@@ -19,15 +19,16 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.47';
+const BUILD = '2026-08-08.53';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
   documents:   ['DocumentID', 'ContractID', 'Kind', 'Number', 'SignDate', 'EffectiveFrom', 'Status', 'Source',
-                'AttachmentID', 'FileName', 'CreatedAt'],
+                'AttachmentID', 'FileName', 'Profile', 'Notes', 'Snapshot', 'CreatedAt'],
+  terms:       ['TermID', 'ContractID', 'Field', 'Value', 'ValidFrom', 'FromClause', 'DocumentID', 'Note', 'CreatedAt'],
   blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
@@ -100,6 +101,17 @@ function route_(action, d) {
     case 'v2_set_key':         return v2SetKey_(d);
     case 'v2_set_replaces':    return v2SetReplaces_(d);
     case 'v2_set_doc':         return v2SetDoc_(d);
+    case 'v2_save_block':      return v2SaveBlock_(d);
+    case 'v2_add_block':       return v2AddBlock_(d);
+    case 'v2_delete_block':    return v2DeleteBlock_(d);
+    case 'v2_generate':        return v2Generate_(d);
+    case 'v2_extract_params':  return v2ExtractParams_(d);
+    case 'v2_log_terms':       return v2LogTerms_(d);
+    case 'v2_build_history':   return v2BuildHistory_(d);
+    case 'v2_save_template':   return v2SaveTemplate_(d);
+    case 'v2_templates':       requireAdmin_(d); return { ok: true, templates: v2Templates_() };
+    case 'v2_from_template':   return v2FromTemplate_(d);
+    case 'v2_terms':           requireAdmin_(d); return { ok: true, terms: v2TermsOf_(trim_(d.contractId)) };
     case 'extract_contract':   return adminExtractContract_(d);
     case 'extract_upload':     return adminExtractUpload_(d);
     case 'attachment_data':    return adminAttachmentData_(d);
@@ -394,6 +406,22 @@ function cpName_(id) { var c = findRow_(SHEETS.counterparties, 'CounterpartyID',
 // latest signed block for each semantic key. Stored in its own sheets, so the
 // existing contract module is untouched.
 // ─────────────────────────────────────────────────────────────────────────────
+// Parsing profiles: hints for document shapes the plain prompt handles badly.
+// Not model training — the model is fixed; this is accumulated knowledge about layouts.
+var PARSE_PROFILES = {
+  '': '',
+  bilingual: 'The document is bilingual, often in two columns or with paired paragraphs. ' +
+             'Parse the ENGLISH text only; ignore the other language entirely. ' +
+             'OCR may interleave the columns — reassemble each clause from the English fragments.',
+  unnumbered: 'The document has few or no clause numbers. Derive the address from the section heading ' +
+              'and the position of the item inside it: "3.1", "3.2" under the third heading.',
+  articles: 'Numbering uses "Article IV", "Section 2.3" or roman numerals. Keep that exact form in path.',
+  scanned: 'This is a scan: expect broken characters and stray line breaks. Repair obvious OCR damage ' +
+           'in the text you return, but never invent wording that is not there.',
+  table: 'Much of the content sits in tables. Turn each table row that carries an obligation into its own ' +
+         'clause; keep the row label as the title.'
+};
+
 var SEMANTIC_KEYS = ['parties', 'definitions', 'documents', 'scope', 'reporting', 'schedule',
   'acceptance.procedure', 'acceptance.deemed', 'documentation', 'payment.term', 'payment.currency',
   'force_majeure', 'liability.general', 'liability.penalties', 'liability.cap', 'ip.ownership', 'ip.usage',
@@ -427,7 +455,7 @@ function v2Chunks_(text, maxLen) {
   return safe;
 }
 
-function v2BlocksChunk_(key, chunk, partNo, total) {
+function v2BlocksChunk_(key, chunk, partNo, total, profile) {
   var prompt =
     'Split this part of a contract into its clauses. Reply with ONE JSON object: {"blocks":[...]} and nothing else.\n' +
     'Each block: {"path":"3.2","level":2,"title":"Payment","text":"full text of the clause","semanticKey":"payment.term"}\n' +
@@ -447,6 +475,7 @@ function v2BlocksChunk_(key, chunk, partNo, total) {
     '- semanticKey: exactly one of: ' + SEMANTIC_KEYS.join(', ') + '\n' +
     'Keep the original order. Do not merge clauses. Do not invent clauses. Skip tables of contents.\n' +
     'The parties appear as PARTY_US and PARTY_OTHER; personal data is masked — keep those tokens as they are.\n' +
+    ((PARSE_PROFILES[profile || ''] || '') ? (PARSE_PROFILES[profile] + '\n') : '') +
     (total > 1 ? ('This is part ' + partNo + ' of ' + total + ' — parse only what is here.\n') : '') +
     '\nCONTRACT TEXT:\n' + chunk;
 
@@ -470,15 +499,15 @@ function v2BlocksChunk_(key, chunk, partNo, total) {
 
 // A part whose answer got cut off is split in half and retried — better a slower parse
 // than a document that silently loses two thirds of its clauses.
-function v2BlocksPart_(key, chunk, label, depth) {
-  var r = v2BlocksChunk_(key, chunk, label, 0);
+function v2BlocksPart_(key, chunk, label, depth, profile) {
+  var r = v2BlocksChunk_(key, chunk, label, 0, profile);
   if (r.ok) return { ok: true, blocks: r.blocks, notes: [label + ': ' + r.blocks.length + ' clauses'] };
   if (depth >= 2 || chunk.length < 3000) return { ok: false, blocks: [], notes: [label + ': ' + r.error] };
   var half = Math.floor(chunk.length / 2);
   var cut = chunk.lastIndexOf('\n', half);
   if (cut < 1000) cut = half;
-  var a = v2BlocksPart_(key, chunk.slice(0, cut), label + 'a', depth + 1);
-  var b = v2BlocksPart_(key, chunk.slice(cut), label + 'b', depth + 1);
+  var a = v2BlocksPart_(key, chunk.slice(0, cut), label + 'a', depth + 1, profile);
+  var b = v2BlocksPart_(key, chunk.slice(cut), label + 'b', depth + 1, profile);
   return { ok: (a.ok || b.ok), blocks: a.blocks.concat(b.blocks), notes: a.notes.concat(b.notes) };
 }
 
@@ -513,13 +542,13 @@ function v2DocMeta_(key, head) {
   } catch (e) { return null; }
 }
 
-function v2Blocks_(text) {
+function v2Blocks_(text, profile) {
   var key = geminiKey_();
   if (!key) return { ok: false, error: 'AI key is not configured — Contracts 2.0 needs it to split the text into clauses' };
   var chunks = v2Chunks_(text, 9000);
   var all = [], notes = [], failed = 0;
   for (var i = 0; i < chunks.length; i++) {
-    var r = v2BlocksPart_(key, chunks[i], 'part ' + (i + 1), 0);
+    var r = v2BlocksPart_(key, chunks[i], 'part ' + (i + 1), 0, profile);
     all = all.concat(r.blocks);
     notes = notes.concat(r.notes);
     if (!r.ok) failed++;
@@ -539,11 +568,11 @@ function v2ParseUpload_(d) {
     var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), trim_(d.mimeType) || 'application/pdf', fileName);
     file = attachmentsFolder_().createFile(blob);
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
-  return v2ParseFile_('__sandbox', file.getId(), fileName, '', 'agreement', trim_(d.counterpartyName));
+  return v2ParseFile_('__sandbox', file.getId(), fileName, '', 'agreement', trim_(d.counterpartyName), trim_(d.profile));
 }
 
 // Shared by both entry points: OCR -> mask -> split into clauses -> store.
-function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpName) {
+function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpName, profile) {
   var t0 = Date.now();
   var r = ocrText_(driveFileId);
   if (!r.ok) return { ok: false, error: r.error };
@@ -554,7 +583,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   var t1 = Date.now();
   var masked = maskForAI_(text, cpName || '');
   var meta = v2DocMeta_(geminiKey_(), masked);       // what this document is, from the document itself
-  var res = v2Blocks_(masked);
+  var res = v2Blocks_(masked, profile);
   var tAi = Date.now() - t1;
   if (!res.ok) return res;
   var t2 = Date.now();
@@ -602,7 +631,33 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     sh.getRange(start, head.indexOf('SemanticKey') + 1, rows.length, 1).setNumberFormat('@');
     sh.getRange(start, 1, rows.length, head.length).setValues(rows);
   }
-  return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null,
+  // Snapshot of the previous parse of the same file, so a prompt change shows its effect.
+  var prevSnap = '';
+  readAll_(SHEETS.documents).forEach(function (x) {
+    if (String(x.ContractID) === contractId && String(x.FileName) === fileName && x.DocumentID !== docId && x.Snapshot) prevSnap = x.Snapshot;
+  });
+  var counts = {};
+  list.forEach(function (bl) { var k = trim_(bl.semanticKey) || 'misc'; counts[k] = (counts[k] || 0) + 1; });
+  var snap = JSON.stringify({ total: rows.length, keys: counts });
+  updateRow_(SHEETS.documents, 'DocumentID', docId, { Snapshot: snap, Profile: profile || '' });
+
+  var diff = null;
+  if (prevSnap) {
+    try {
+      var p = JSON.parse(prevSnap), changes = [];
+      if (p.total !== rows.length) changes.push('clauses ' + p.total + ' → ' + rows.length);
+      var allKeys = {};
+      for (var k1 in (p.keys || {})) allKeys[k1] = 1;
+      for (var k2 in counts) allKeys[k2] = 1;
+      for (var k in allKeys) {
+        var a = (p.keys || {})[k] || 0, b2 = counts[k] || 0;
+        if (a !== b2) changes.push(k + ' ' + a + ' → ' + b2);
+      }
+      diff = changes.length ? changes : ['identical to the previous parse'];
+    } catch (e) {}
+  }
+
+  return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null, diff: diff,
            timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_(),
                      parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
            notes: res.notes || [] };
@@ -617,7 +672,7 @@ function v2Parse_(d) {
   if (!a || !a.DriveFileID) return { ok: false, error: 'Document not found' };
   var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
   var kind = (trim_(a.DocType) === 'amendment') ? 'amendment' : (trim_(a.DocType) === 'annex' ? 'annex' : 'agreement');
-  var res = v2ParseFile_(contractId, a.DriveFileID, trim_(a.FileName), attId, kind, c ? cpName_(c.CounterpartyID) : '');
+  var res = v2ParseFile_(contractId, a.DriveFileID, trim_(a.FileName), attId, kind, c ? cpName_(c.CounterpartyID) : '', trim_(d.profile));
   if (res.ok) {
     // keep the dates and status of the source attachment on the document row
     var upd = { Status: (trim_(a.DocType) === 'draft') ? 'draft' : 'signed' };
@@ -663,8 +718,396 @@ function v2SetDoc_(d) {
   }
   if (d.signDate !== undefined) { upd.SignDate = trim_(d.signDate); upd.EffectiveFrom = trim_(d.signDate); }
   if (d.status !== undefined) upd.Status = (trim_(d.status) === 'draft') ? 'draft' : 'signed';
+  if (d.profile !== undefined) upd.Profile = trim_(d.profile);
+  if (d.notes !== undefined) upd.Notes = trim_(d.notes);
   updateRow_(SHEETS.documents, 'DocumentID', doc.DocumentID, upd);
   return { ok: true };
+}
+
+// ── Editing clauses ────────────────────────────────────────────────────────────
+// A clause taken from a signed PDF is a reconstruction: once edited it is marked as such,
+// so nobody mistakes it for the literal wording of the signed document.
+function v2SaveBlock_(d) {
+  requireAdmin_(d);
+  var b = findRow_(SHEETS.blocks, 'BlockID', trim_(d.blockId));
+  if (!b) return { ok: false, error: 'Clause not found' };
+  var upd = {};
+  if (d.text !== undefined) upd.Text = trim_(d.text);
+  if (d.title !== undefined) upd.Title = trim_(d.title);
+  if (d.path !== undefined) upd.Path = trim_(d.path);
+  if (d.level !== undefined) upd.Level = num_(d.level) || 2;
+  if (d.semanticKey !== undefined && SEMANTIC_KEYS.indexOf(trim_(d.semanticKey)) >= 0) upd.SemanticKey = trim_(d.semanticKey);
+  if (d.sortOrder !== undefined) upd.SortOrder = num_(d.sortOrder);
+  if (trim_(b.Origin) === 'external' && d.text !== undefined && trim_(d.text) !== trim_(b.Text)) upd.Origin = 'external-edited';
+  updateRow_(SHEETS.blocks, 'BlockID', b.BlockID, upd);
+  return { ok: true };
+}
+
+function v2AddBlock_(d) {
+  requireAdmin_(d);
+  var docId = trim_(d.documentId);
+  var doc = findRow_(SHEETS.documents, 'DocumentID', docId);
+  if (!doc) return { ok: false, error: 'Pick the document this clause belongs to' };
+  var after = num_(d.afterSort) || 0;
+  var row = {
+    BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: doc.ContractID,
+    SemanticKey: (SEMANTIC_KEYS.indexOf(trim_(d.semanticKey)) >= 0 ? trim_(d.semanticKey) : 'misc'),
+    Path: trim_(d.path), ReplacesPath: '', ReplacesIn: '', ReplacementText: '',
+    Level: num_(d.level) || 2, Title: trim_(d.title), Text: trim_(d.text), Params: '',
+    Origin: 'manual', SortOrder: after + 0.5, CreatedAt: new Date().toISOString()
+  };
+  appendRow_(SHEETS.blocks, row);
+  return { ok: true, block: row };
+}
+
+function v2DeleteBlock_(d) {
+  requireAdmin_(d);
+  deleteRowsWhere_(SHEETS.blocks, 'BlockID', trim_(d.blockId));
+  return { ok: true };
+}
+
+// ── Values behind the clauses ──────────────────────────────────────────────────
+// The clauses in force are the source of truth; the contract record is derived from them.
+// Because this runs on the effective version, an amendment that changed the rate or the
+// payment term is already taken into account. Every value carries the clause it came from.
+var V2_PARAM_FIELDS = [
+  ['amount', 'the contract price or the hourly rate, digits only'],
+  ['currency', 'USD, EUR, AED or SGD'],
+  ['pricingType', '"hourly" if paid per hour, otherwise "lump"'],
+  ['rateBasis', 'e.g. "per hour"'],
+  ['signDate', 'ISO date the agreement was signed'],
+  ['startDate', 'ISO date the work or the term starts'],
+  ['endDate', 'ISO date the term ends'],
+  ['paymentDays', 'days to pay, integer'],
+  ['acceptanceDays', 'days for acceptance or evaluation, integer'],
+  ['remarksDays', 'days to give remarks, integer'],
+  ['noticeDays', 'days of notice for termination, integer'],
+  ['disputeDays', 'days to dispute an amount, integer'],
+  ['cureDays', 'days to remedy a breach, integer'],
+  ['termYears', 'term in years, integer'],
+  ['warrantyPeriod', 'as written'],
+  ['penaltyDelayPercent', 'number'],
+  ['penaltyFailurePercent', 'number'],
+  ['penaltyCapPercent', 'number'],
+  ['insuranceAmount', 'number'],
+  ['restrictedTerritories', 'as written'],
+  ['paymentBasis', '"hourly" | "fixed" | "milestone"'],
+  ['reportFrequency', '"on_completion" | "monthly"'],
+  ['governingLaw', 'short'],
+  ['jurisdictionPlace', 'short'],
+  ['arbitrationBody', 'short'],
+  ['arbitrationSeat', 'short'],
+  ['subject', 'one line describing the subject']
+];
+
+function v2ExtractParams_(d) {
+  requireAdmin_(d);
+  var key = geminiKey_();
+  if (!key) return { ok: false, error: 'AI key is not configured' };
+  var ids = d.blockIds;
+  if (typeof ids === 'string') ids = ids.split(',');
+  if (!ids || !ids.length) return { ok: false, error: 'Nothing to read' };
+
+  var all = {};
+  readAll_(SHEETS.blocks).forEach(function (b) { all[b.BlockID] = b; });
+  var parts = [], cpName = '';
+  var c = findRow_(SHEETS.contracts, 'ContractID', trim_(d.contractId));
+  if (c) cpName = cpName_(c.CounterpartyID);
+  ids.forEach(function (id) {
+    var b = all[trim_(id)];
+    if (!b) return;
+    var txt = trim_(b.ReplacementText) || trim_(b.Text);
+    if (!txt) return;
+    parts.push('[' + (trim_(b.Path) || '-') + ' | ' + trim_(b.SemanticKey) + '] ' + txt);
+  });
+  if (!parts.length) return { ok: false, error: 'The clauses have no text' };
+  var text = maskForAI_(parts.join('\n\n'), cpName);
+
+  var fieldList = V2_PARAM_FIELDS.map(function (f) { return '- ' + f[0] + ': ' + f[1]; }).join('\n');
+  var prompt =
+    'Below are the clauses of a contract that are currently in force. Each clause is prefixed with\n' +
+    '[clause number | topic]. Extract the values listed and reply with ONE JSON object, nothing else.\n' +
+    'For every value give both the value and the clause number it came from:\n' +
+    '{"amount":{"value":250,"from":"2.1"}, "paymentDays":{"value":45,"from":"3.4"}}\n' +
+    'Omit a field entirely when the clauses do not state it. Never guess.\n' +
+    'Numbers written in words with digits in brackets — "within forty-five (45) days" — return 45.\n\n' +
+    'FIELDS:\n' + fieldList + '\n\nCLAUSES:\n' + text.slice(0, 60000);
+
+  var call = geminiCall_(key, JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json', maxOutputTokens: 8192 }
+  }));
+  if (!call.ok) return { ok: false, error: call.error };
+  try {
+    var data = JSON.parse(call.body);
+    var out = data.candidates[0].content.parts[0].text;
+    var obj = JSON.parse(String(out).replace(/```json|```/g, '').trim());
+    var res = {};
+    V2_PARAM_FIELDS.forEach(function (f) {
+      var v = obj[f[0]];
+      if (v === undefined || v === null) return;
+      if (typeof v === 'object') {
+        if (v.value === undefined || v.value === null || v.value === '') return;
+        res[f[0]] = { value: unmaskAI_(String(v.value), cpName), from: trim_(v.from) };
+      } else if (v !== '') {
+        res[f[0]] = { value: unmaskAI_(String(v), cpName), from: '' };
+      }
+    });
+    return { ok: true, fields: res };
+  } catch (e) { return { ok: false, error: 'Could not read the values: ' + e }; }
+}
+
+// ── Templates as clause libraries ──────────────────────────────────────────────
+// A template is just a parsed document kept under a reserved contract id. Any agreement
+// you have already parsed can become one, so the library grows out of real documents
+// instead of being described separately.
+var TPL_CONTRACT = '__templates';
+
+function v2Templates_() {
+  return readAll_(SHEETS.documents).filter(function (x) { return String(x.ContractID) === TPL_CONTRACT; });
+}
+
+function v2SaveTemplate_(d) {
+  requireAdmin_(d);
+  var srcId = trim_(d.documentId), name = trim_(d.name);
+  var src = findRow_(SHEETS.documents, 'DocumentID', srcId);
+  if (!src) return { ok: false, error: 'Document not found' };
+  if (!name) name = trim_(src.Number) || trim_(src.FileName) || 'Template';
+
+  // replace a template of the same name
+  v2Templates_().forEach(function (t) {
+    if (trim_(t.Number) === name) {
+      deleteRowsWhere_(SHEETS.blocks, 'DocumentID', t.DocumentID);
+      deleteRowsWhere_(SHEETS.documents, 'DocumentID', t.DocumentID);
+    }
+  });
+
+  var tplId = Utilities.getUuid(), now = new Date().toISOString();
+  appendRow_(SHEETS.documents, {
+    DocumentID: tplId, ContractID: TPL_CONTRACT, Kind: trim_(src.Kind) || 'agreement', Number: name,
+    SignDate: '', EffectiveFrom: '', Status: 'draft', Source: 'template',
+    AttachmentID: '', FileName: trim_(src.FileName), Profile: trim_(src.Profile),
+    Notes: trim_(d.notes) || trim_(src.Notes), Snapshot: '', CreatedAt: now
+  });
+
+  var head = HEADERS.blocks;
+  var rows = readAll_(SHEETS.blocks)
+    .filter(function (b) { return String(b.DocumentID) === srcId; })
+    .sort(function (a, b) { return (num_(a.SortOrder) || 0) - (num_(b.SortOrder) || 0); })
+    .map(function (b, i) {
+      var rec = {
+        BlockID: Utilities.getUuid(), DocumentID: tplId, ContractID: TPL_CONTRACT,
+        SemanticKey: b.SemanticKey, Path: b.Path, ReplacesPath: '', ReplacesIn: '', ReplacementText: '',
+        Level: b.Level, Title: b.Title, Text: trim_(b.ReplacementText) || trim_(b.Text),
+        Params: '', Origin: 'template', SortOrder: i + 1, CreatedAt: now
+      };
+      return head.map(function (h) { return rec[h] != null ? rec[h] : ''; });
+    });
+  if (rows.length) {
+    var sh = getSheet_(SHEETS.blocks), start = sh.getLastRow() + 1;
+    sh.getRange(start, head.indexOf('Path') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(start, head.indexOf('SemanticKey') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(start, 1, rows.length, head.length).setValues(rows);
+  }
+  return { ok: true, templateId: tplId, name: name, blocks: rows.length };
+}
+
+function v2FromTemplate_(d) {
+  requireAdmin_(d);
+  var contractId = trim_(d.contractId), tplId = trim_(d.templateId);
+  if (!contractId || contractId === TPL_CONTRACT) return { ok: false, error: 'Pick the contract to fill' };
+  var tpl = findRow_(SHEETS.documents, 'DocumentID', tplId);
+  if (!tpl) return { ok: false, error: 'Template not found' };
+  var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
+
+  var docId = Utilities.getUuid(), now = new Date().toISOString();
+  appendRow_(SHEETS.documents, {
+    DocumentID: docId, ContractID: contractId, Kind: trim_(d.kind) || trim_(tpl.Kind) || 'agreement',
+    Number: (c ? trim_(c.Number) : '') || trim_(tpl.Number),
+    SignDate: c ? trim_(c.SignDate) : '', EffectiveFrom: c ? trim_(c.SignDate) : '',
+    Status: 'draft', Source: 'template', AttachmentID: '',
+    FileName: 'from template: ' + trim_(tpl.Number), Notes: '', CreatedAt: now
+  });
+
+  var head = HEADERS.blocks;
+  var rows = readAll_(SHEETS.blocks)
+    .filter(function (b) { return String(b.DocumentID) === tplId; })
+    .sort(function (a, b) { return (num_(a.SortOrder) || 0) - (num_(b.SortOrder) || 0); })
+    .map(function (b, i) {
+      var rec = {
+        BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
+        SemanticKey: b.SemanticKey, Path: b.Path, ReplacesPath: '', ReplacesIn: '', ReplacementText: '',
+        Level: b.Level, Title: b.Title, Text: b.Text, Params: '', Origin: 'template',
+        SortOrder: i + 1, CreatedAt: now
+      };
+      return head.map(function (h) { return rec[h] != null ? rec[h] : ''; });
+    });
+  if (rows.length) {
+    var sh = getSheet_(SHEETS.blocks), start = sh.getLastRow() + 1;
+    sh.getRange(start, head.indexOf('Path') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(start, head.indexOf('SemanticKey') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(start, 1, rows.length, head.length).setValues(rows);
+  }
+  return { ok: true, documentId: docId, blocks: rows.length };
+}
+
+// ── History of terms ───────────────────────────────────────────────────────────
+// The contract record holds the terms in force now — that is what new work is priced by.
+// This log keeps every value with the date it took effect, so "what was the rate in March"
+// has an answer even after an amendment changed it. Reports already freeze their own rate
+// when they are created, so past work is never repriced.
+function v2TermsOf_(contractId) {
+  return readAll_(SHEETS.terms).filter(function (t) { return String(t.ContractID) === String(contractId); });
+}
+
+function v2LogTerms_(d) {
+  requireAdmin_(d);
+  var contractId = trim_(d.contractId);
+  if (!contractId || contractId === '__sandbox') return { ok: false, error: 'Pick a real contract' };
+  var items = d.items;
+  if (typeof items === 'string') items = JSON.parse(items);
+  if (!items || !items.length) return { ok: false, error: 'Nothing to record' };
+  var existing = v2TermsOf_(contractId), now = new Date().toISOString(), added = 0;
+  items.forEach(function (it) {
+    var field = trim_(it.field), value = trim_(it.value), from = trim_(it.validFrom);
+    if (!field) return;
+    // the same value effective from the same date is not a new fact
+    var dup = existing.some(function (t) {
+      return trim_(t.Field) === field && trim_(t.Value) === value && String(t.ValidFrom).slice(0, 10) === from;
+    });
+    if (dup) return;
+    appendRow_(SHEETS.terms, {
+      TermID: Utilities.getUuid(), ContractID: contractId, Field: field, Value: value,
+      ValidFrom: from, FromClause: trim_(it.fromClause), DocumentID: trim_(it.documentId),
+      Note: trim_(it.note), CreatedAt: now
+    });
+    added++;
+  });
+  return { ok: true, added: added };
+}
+
+// Build the whole history at once, document by document: the agreement gives the original
+// terms dated by its own signature, each amendment gives the values it changed dated by its
+// own effective date. Nothing depends on what the admin happened to tick.
+function v2BuildHistory_(d) {
+  requireAdmin_(d);
+  var contractId = trim_(d.contractId);
+  if (!contractId || contractId === '__sandbox') return { ok: false, error: 'Pick a real contract' };
+
+  var docs = readAll_(SHEETS.documents).filter(function (x) { return String(x.ContractID) === contractId; });
+  if (!docs.length) return { ok: false, error: 'No parsed documents for this contract' };
+  docs.sort(function (a, b) {
+    return String(a.EffectiveFrom || a.SignDate || '').localeCompare(String(b.EffectiveFrom || b.SignDate || ''));
+  });
+
+  var blocks = readAll_(SHEETS.blocks).filter(function (x) { return String(x.ContractID) === contractId; });
+  var notes = [], total = 0;
+
+  for (var i = 0; i < docs.length; i++) {
+    var doc = docs[i];
+    var mine = blocks.filter(function (b) { return String(b.DocumentID) === String(doc.DocumentID); });
+    if (!mine.length) { notes.push((doc.FileName || doc.Number) + ': no clauses'); continue; }
+    var res = v2ExtractParams_({ passcode: d.passcode, contractId: contractId,
+                                 blockIds: mine.map(function (b) { return b.BlockID; }) });
+    if (!res.ok) { notes.push((doc.FileName || doc.Number) + ': ' + res.error); continue; }
+
+    var when = String(doc.EffectiveFrom || doc.SignDate || '').slice(0, 10);
+    var items = [];
+    for (var f in res.fields) {
+      items.push({ field: f, value: String(res.fields[f].value), validFrom: when,
+                   fromClause: res.fields[f].from || '', documentId: doc.DocumentID,
+                   note: (doc.Kind === 'amendment') ? ('changed by ' + (doc.Number || 'amendment'))
+                       : (doc.Kind === 'annex' ? ('from ' + (doc.Number || 'annex')) : 'original') });
+    }
+    if (items.length) {
+      var lr = v2LogTerms_({ passcode: d.passcode, contractId: contractId, items: items });
+      total += (lr.added || 0);
+      notes.push((doc.FileName || doc.Number) + ': ' + items.length + ' values, ' + (lr.added || 0) + ' new');
+    } else {
+      notes.push((doc.FileName || doc.Number) + ': nothing to record');
+    }
+  }
+  return { ok: true, added: total, notes: notes };
+}
+
+// The value of a term on a given date — for future use by reports and invoices.
+function termAt_(contractId, field, dateStr) {
+  var best = null, bestFrom = '';
+  v2TermsOf_(contractId).forEach(function (t) {
+    if (trim_(t.Field) !== field) return;
+    var from = String(t.ValidFrom || '').slice(0, 10);
+    if (dateStr && from && from > dateStr) return;
+    if (!best || from >= bestFrom) { best = t; bestFrom = from; }
+  });
+  return best ? best.Value : '';
+}
+
+// ── Assembling a document out of the clauses in force ──────────────────────────
+function contractsFolder_() {
+  var name = 'FXWorks Contracts';
+  var it = DriveApp.getFoldersByName(name);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(name);
+}
+
+function v2Generate_(d) {
+  requireAdmin_(d);
+  var ids = d.blockIds;
+  if (typeof ids === 'string') ids = ids.split(',');
+  if (!ids || !ids.length) return { ok: false, error: 'Nothing to assemble' };
+  var all = {}, order = [];
+  readAll_(SHEETS.blocks).forEach(function (b) { all[b.BlockID] = b; });
+  ids.forEach(function (id) { if (all[trim_(id)]) order.push(all[trim_(id)]); });
+  if (!order.length) return { ok: false, error: 'The clauses were not found' };
+
+  var title = trim_(d.title) || 'Contract';
+  var doc = DocumentApp.create(title);
+  var body = doc.getBody();
+  body.clear();
+  var head = body.appendParagraph(title);
+  head.setHeading(DocumentApp.ParagraphHeading.TITLE);
+  if (trim_(d.subtitle)) body.appendParagraph(trim_(d.subtitle)).setHeading(DocumentApp.ParagraphHeading.SUBTITLE);
+
+  order.forEach(function (b) {
+    var lvl = num_(b.Level) || 2;
+    var num = trim_(b.Path) ? (trim_(b.Path) + '. ') : '';
+    var ttl = trim_(b.Title);
+    var text = trim_(b.ReplacementText) || trim_(b.Text);
+    if (lvl <= 1) {
+      body.appendParagraph(num + (ttl || '')).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+      if (text && text !== ttl) body.appendParagraph(text);
+    } else {
+      var p = body.appendParagraph(num + (ttl ? ttl + '. ' : '') + text);
+      p.setHeading(DocumentApp.ParagraphHeading.NORMAL);
+    }
+  });
+
+  var file = DriveApp.getFileById(doc.getId());
+  doc.saveAndClose();
+  var folder = contractsFolder_();
+  folder.addFile(file);
+  try { DriveApp.getRootFolder().removeFile(file); } catch (e) {}
+
+  var pdf = folder.createFile(file.getAs('application/pdf').setName(title + '.pdf'));
+  var docx = null;
+  try {
+    var url = 'https://www.googleapis.com/drive/v3/files/' + doc.getId() + '/export?mimeType=' +
+              encodeURIComponent('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    var resp = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+    if (resp.getResponseCode() === 200) docx = folder.createFile(resp.getBlob().setName(title + '.docx'));
+  } catch (e) {}
+
+  // attach the result to the contract, as a draft — it is generated, not signed
+  var contractId = trim_(d.contractId);
+  if (contractId && contractId !== '__sandbox') {
+    appendRow_(SHEETS.attachments, {
+      AttachmentID: Utilities.getUuid(), ParentType: 'contract', ParentID: contractId,
+      FileName: title + '.pdf', Description: 'assembled from the effective version',
+      DocType: 'draft', DocDate: new Date().toISOString().slice(0, 10), IsCurrent: 'no',
+      DriveFileID: pdf.getId(), Url: pdf.getUrl(), CreatedAt: new Date().toISOString()
+    });
+  }
+  return { ok: true, clauses: order.length, docUrl: doc.getUrl(), pdfUrl: pdf.getUrl(),
+           docxUrl: docx ? docx.getUrl() : '' };
 }
 
 // Blocks whose document row is gone would otherwise keep showing up and be counted.
@@ -684,9 +1127,10 @@ function v2PurgeOrphans_(contractId) {
 function v2List_(d) {
   var contractId = trim_(d.contractId);
   v2PurgeOrphans_(contractId);
+  if (contractId === TPL_CONTRACT) return { ok: true, documents: v2Templates_(), blocks: readAll_(SHEETS.blocks).filter(function (x) { return String(x.ContractID) === TPL_CONTRACT; }), keys: SEMANTIC_KEYS };
   var docs = readAll_(SHEETS.documents).filter(function (x) { return String(x.ContractID) === contractId; });
   var blocks = readAll_(SHEETS.blocks).filter(function (x) { return String(x.ContractID) === contractId; });
-  return { ok: true, documents: docs, blocks: blocks, keys: SEMANTIC_KEYS };
+  return { ok: true, documents: docs, blocks: blocks, keys: SEMANTIC_KEYS, profiles: Object.keys(PARSE_PROFILES) };
 }
 
 function v2DeleteDoc_(d) {
@@ -2065,7 +2509,7 @@ function testFx() {
 }
 
 function setup() {
-  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.documents); getSheet_(SHEETS.blocks); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
+  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.documents); getSheet_(SHEETS.blocks); getSheet_(SHEETS.terms); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
   ensureCounterparties_();
   SpreadsheetApp.getActive().toast('Sheets created.');
 }
