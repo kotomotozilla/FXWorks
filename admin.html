@@ -654,7 +654,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.57';
+const BUILD = '2026-08-08.58';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1522,6 +1522,73 @@ async function v2BuildHistory(btn){
   }catch(e){ notice('v2Err','err', esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent='Build full history'; }
 }
+// Export the term history together with the values currently read, so the whole chain
+// — clause → value → date it took effect — can be checked outside the app.
+function v2ExportTerms(){
+  if(!V2_TERMS.length && !V2_PARAMS){ notice('v2Err','err','Nothing to export yet — run "Read values" or "Build full history" first.'); return; }
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(V2.contractId)) || {Number:'test parsing'};
+  const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
+  const byPath={}; V2.blocks.forEach(b=>{ const p=String(b.Path||'').trim(); if(p && !byPath[p]) byPath[p]=b; });
+  const L=[];
+  L.push('# Term history for review');
+  L.push('');
+  L.push('Contract: '+(c.Number||'')+(c.CounterpartyID?' — '+cpName(c.CounterpartyID):''));
+  L.push('Exported: '+todayISO()+' · build '+BUILD+' · effective date used: '+($('v2_asOf').value||todayISO()));
+  L.push('');
+  L.push('## Documents');
+  V2.documents.forEach(d=>L.push('- '+(V2_KIND[d.Kind]||d.Kind)+': '+(d.FileName||d.Number||'')
+    +(d.SignDate?' · '+fmtDate(d.SignDate):'')+' · '+d.Status));
+
+  if(V2_PARAMS && Object.keys(V2_PARAMS).length){
+    L.push('');
+    L.push('## Values in force on '+($('v2_asOf').value||todayISO()));
+    L.push('');
+    L.push('| Field | Value | From clause | Clause text |');
+    L.push('|---|---|---|---|');
+    Object.keys(V2_PARAMS).forEach(k=>{
+      const from = String(V2_PARAMS[k].from||'').trim();
+      const b = byPath[from];
+      const txt = b ? String(b.ReplacementText||b.Text||'').replace(/\s+/g,' ').slice(0,300) : '';
+      const src = b ? ((docs[b.DocumentID]||{}).FileName||'') : '';
+      L.push('| '+(V2_FIELD_LABEL[k]||k)+' | '+String(V2_PARAMS[k].value).replace(/\|/g,'\\|')
+        +' | '+(from||'—')+(src?' ('+src+')':'')+' | '+txt.replace(/\|/g,'\\|')+' |');
+    });
+  }
+
+  if(V2_TERMS.length){
+    L.push('');
+    L.push('## History of terms');
+    L.push('');
+    L.push('| Field | Value | In force from | From clause | Document | Note |');
+    L.push('|---|---|---|---|---|---|');
+    V2_TERMS.slice().sort((a,b)=> String(a.Field).localeCompare(String(b.Field))
+      || String(a.ValidFrom).localeCompare(String(b.ValidFrom)))
+      .forEach(t=>{
+        const d0 = docs[t.DocumentID]||{};
+        L.push('| '+(V2_FIELD_LABEL[t.Field]||t.Field)+' | '+String(t.Value).replace(/\|/g,'\\|')
+          +' | '+(t.ValidFrom?fmtDate(t.ValidFrom):'—')+' | '+(t.FromClause||'—')
+          +' | '+(d0.FileName||d0.Number||'—')+' | '+(t.Note||'')+' |');
+      });
+  }
+
+  L.push('');
+  L.push('## Raw JSON');
+  L.push('```json');
+  L.push(JSON.stringify({
+    contract:{ number:c.Number||'', asOf:$('v2_asOf').value||todayISO() },
+    documents:V2.documents.map(d=>({id:d.DocumentID, kind:d.Kind, file:d.FileName, number:d.Number, date:d.SignDate, status:d.Status})),
+    valuesInForce:V2_PARAMS||{},
+    history:V2_TERMS.map(t=>({field:t.Field, value:t.Value, validFrom:t.ValidFrom, fromClause:t.FromClause, doc:t.DocumentID, note:t.Note}))
+  }, null, 1));
+  L.push('```');
+
+  const name = 'term-history-'+String(c.Number||'contract').replace(/[^A-Za-z0-9._-]+/g,'_')+'.md';
+  const url = URL.createObjectURL(new Blob([L.join('\n')], {type:'text/markdown'}));
+  const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 500);
+  notice('v2Err','ok','Exported '+esc(name)+' — includes the clause text behind every value.');
+}
+
 async function v2LoadTerms(){
   const el=$('v2_terms'); if(!el) return;
   if(!V2.contractId || V2.contractId==='__sandbox'){ el.innerHTML=''; V2_TERMS=[]; return; }
@@ -1529,11 +1596,16 @@ async function v2LoadTerms(){
     const r = await api('v2_terms',{contractId:V2.contractId});
     V2_TERMS = r.terms||[];
   }catch(e){ V2_TERMS=[]; }
-  if(!V2_TERMS.length){ el.innerHTML=''; return; }
+  if(!V2_TERMS.length){ el.innerHTML = (V2_PARAMS && Object.keys(V2_PARAMS).length)
+    ? '<div style="margin:10px 0"><button class="btn ghost sm" onclick="v2ExportTerms()">Export values for review</button></div>' : '';
+    return; }
   const rows = V2_TERMS.slice().sort((a,b)=> String(a.Field).localeCompare(String(b.Field))
     || String(a.ValidFrom).localeCompare(String(b.ValidFrom)));
   el.innerHTML = `<div style="margin:10px 0;padding:12px;border:1px dashed var(--line);border-radius:10px">
-    <b style="font-size:13px">History of terms</b>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <b style="font-size:13px">History of terms</b>
+      <button class="btn ghost sm" onclick="v2ExportTerms()">Export history for review</button>
+    </div>
     <p class="muted" style="font-size:11px;margin:4px 0 8px">What applied and from when. Work already reported keeps the rate it was created with; this is what lets you check the terms of any past period.</p>
     <div class="scroll"><table><tr><th>Field</th><th>Value</th><th>In force from</th><th>From clause</th><th></th></tr>
     ${rows.map(t=>`<tr>
