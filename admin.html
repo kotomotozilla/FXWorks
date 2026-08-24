@@ -207,7 +207,7 @@
             <input id="v2_asOf" type="date" style="max-width:170px" onchange="v2Render()" title="Effective as of">
             <button class="btn ghost sm" onclick="v2Export()">Export for review</button>
             <button class="btn ghost sm" onclick="v2ExtractParams()" title="Read the values out of the clauses in force">Read values</button>
-            <button class="btn ghost sm" onclick="v2BuildHistory(this)" title="Record what each document established, dated by that document">Build full history</button>
+            <button class="btn ghost sm" id="v2_histBtn" onclick="v2BuildHistory(this)" title="Record what each document established, dated by that document">Build full history</button>
             <button class="btn sm" onclick="v2Generate()" title="Assemble the clauses in force into a Google Doc, PDF and Word">Assemble document</button>
           </div>
         </div>
@@ -418,6 +418,17 @@
   </div>
 </div></div>
 
+<div id="setModal" class="modal top hidden"><div class="box">
+  <h2><span>Template settings</span><button class="x" onclick="closeModal('setModal')">×</button></h2>
+  <p class="muted">Paste the link or the id of each Google Doc template. Put the four templates in a folder on your Drive (for example <b>FXWorks Templates</b>) and open each one — the id is the long part of its address.</p>
+  <div id="set_err"></div>
+  <div style="margin-bottom:10px"><label>B2B agreement</label><input id="set_tpl_b2b_agreement" placeholder="https://docs.google.com/document/d/…"></div>
+  <div style="margin-bottom:10px"><label>B2B SOW</label><input id="set_tpl_b2b_sow"></div>
+  <div style="margin-bottom:10px"><label>ICA</label><input id="set_tpl_ica"></div>
+  <div style="margin-bottom:10px"><label>ICA SOW</label><input id="set_tpl_ica_sow"></div>
+  <div class="acts"><button class="btn sm" onclick="saveSettings(this)">Save</button></div>
+</div></div>
+
 <div id="helpModal" class="modal top hidden"><div class="box" style="max-width:620px">
   <h2><span id="help_title">Field</span><button class="x" onclick="closeModal('helpModal')">×</button></h2>
   <p class="muted" id="help_sub"></p>
@@ -603,6 +614,12 @@
     <div class="ica-only"><label>Insurance amount</label><input id="dc_insuranceAmount" type="number" min="0"></div>
   </div>
   <p class="muted" style="margin-top:12px">These settings are saved together with the contract — press <b>Save contract</b> above.</p>
+  <div class="acts" style="margin-top:10px">
+    <button class="btn sm" onclick="generateDoc('agreement',this)">Generate agreement</button>
+    <button class="btn sm" onclick="generateDoc('sow',this)">Generate SOW</button>
+    <button class="btn ghost sm" onclick="openSettings()">Template settings</button>
+  </div>
+  <div id="gen_msg"></div>
   </div>
   </div>
   </div>
@@ -654,7 +671,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.58';
+const BUILD = '2026-08-08.60';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1214,6 +1231,9 @@ function v2Init(){
 }
 function v2ModeToggle(){
   const sandbox = V2.contractId==='__sandbox';
+  // The history is written into a contract record — there is none in test mode.
+  const hb = $('v2_histBtn'); if(hb) hb.style.display = sandbox ? 'none' : '';
+  const tr = $('v2_tplRow'); if(tr) tr.classList.toggle('hidden', sandbox);
   $('v2_attWrap').classList.toggle('hidden', sandbox);
   $('v2_upWrap').classList.toggle('hidden', !sandbox);
 }
@@ -1395,14 +1415,17 @@ function v2BlockRow(b, docs, eff, superseded, showKey){
   const dim = active ? '' : 'opacity:.55';
   const isAmd = (d.Kind==='amendment');
   const badge = isAmd ? ' <span class="tag draft">amendment</span>' : '';
-  const repl = isAmd
+  // Headings, recitals and inserted clauses replace nothing — the field only clutters them.
+  const canReplace = isAmd && (+b.Level||2) >= 2 && String(b.Text||'').trim().length > 60;
+  const inserts = isAmd && /\b(new clause|is inserted|inserted into)\b/i.test(String(b.Text||''));
+  const repl = (canReplace && !inserts)
     ? ` <span class="muted" onclick="event.stopPropagation()">replaces
         <input value="${esc(b.ReplacesPath||'')}" placeholder="clause no." style="width:80px;display:inline-block;padding:2px 6px;font-size:12px" onchange="v2SetReplaces('${esc(b.BlockID)}',this.value,'${esc(b.ReplacesIn||'agreement')}')">
         <select style="width:auto;display:inline-block;padding:2px 6px;font-size:12px" onchange="v2SetReplaces('${esc(b.BlockID)}',this.previousElementSibling.value,this.value)">
           <option value="agreement" ${String(b.ReplacesIn||'agreement')!=='annex'?'selected':''}>in agreement</option>
           <option value="annex" ${String(b.ReplacesIn||'')==='annex'?'selected':''}>in annex</option>
         </select></span>`
-    : '';
+    : (inserts ? ' <span class="tag submitted">inserts a new clause</span>' : '');
   const keyCell = showKey
     ? `<td onclick="event.stopPropagation()"><select style="font-size:12px;padding:4px 6px" onchange="v2SetKey('${esc(b.BlockID)}',this.value,event)">${v2KeyOptions(b.SemanticKey)}</select></td>`
     : '';
@@ -2390,6 +2413,42 @@ function wireDocHelp(){
     lab.insertAdjacentHTML('beforeend', ' <span style="color:var(--brand);font-size:12px">ⓘ</span>');
     lab.addEventListener('click', ev=>{ if(ev.target.tagName!=='INPUT'){ ev.preventDefault(); showDocHelp(k); } });
   });
+}
+
+// ── Generating the contract documents from the Google Docs templates ──
+async function openSettings(){
+  try{
+    const r = await api('get_settings');
+    ['tpl_b2b_agreement','tpl_b2b_sow','tpl_ica','tpl_ica_sow'].forEach(k=>{
+      const el=$('set_'+k); if(el) el.value = (r.settings||{})[k] || '';
+    });
+    notice('set_err','','');
+    $('setModal').classList.remove('hidden');
+  }catch(e){ notice('gen_msg','err', esc(e.message)); }
+}
+async function saveSettings(btn){
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const payload = {};
+  ['tpl_b2b_agreement','tpl_b2b_sow','tpl_ica','tpl_ica_sow'].forEach(k=>{ payload[k] = $('set_'+k).value.trim(); });
+  try{
+    await api('save_settings', payload);
+    notice('set_err','ok','Saved.');
+  }catch(e){ notice('set_err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Save'; }
+}
+async function generateDoc(part, btn){
+  if(!EDIT_CT){ notice('gen_msg','err','Save the contract first.'); return; }
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  notice('gen_msg','info','Building the document from the template…');
+  try{
+    const r = await api('generate_contract',{ id:EDIT_CT, part });
+    notice('gen_msg','ok',`${esc(r.name)} is ready: `
+      + `<a href="${esc(r.docUrl)}" target="_blank" rel="noopener">Google Doc</a> · `
+      + `<a href="${esc(r.pdfUrl)}" target="_blank" rel="noopener">PDF</a>`
+      + ' · attached to the contract as a draft. Check it before sending.');
+    renderAttachments('ctm_attach','contract',EDIT_CT);
+  }catch(e){ notice('gen_msg','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent = (part==='sow'?'Generate SOW':'Generate agreement'); }
 }
 
 // ── Document settings on a contract ──

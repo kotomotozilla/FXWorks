@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.58';
+const BUILD = '2026-08-08.60';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -93,6 +93,9 @@ function route_(action, d) {
     case 'update_contract':    return adminUpdateContract_(d);
     case 'delete_contract':    return adminDeleteContract_(d);
     case 'save_contract_doc':  return adminSaveContractDoc_(d);
+    case 'get_settings':       requireAdmin_(d); return { ok: true, settings: appSettings_() };
+    case 'save_settings':      return adminSaveSettings_(d);
+    case 'generate_contract':  return adminGenerateContract_(d);
     // Contracts 2.0 — clause-level structure (experimental, separate sheets)
     case 'v2_parse':           return v2Parse_(d);
     case 'v2_parse_upload':    return v2ParseUpload_(d);
@@ -835,6 +838,7 @@ var V2_PARAM_FIELDS = [
   ['penaltyFailurePercent', 'number'],
   ['penaltyCapPercent', 'number'],
   ['insuranceAmount', 'number'],
+  ['liabilityCap', 'the cap on total liability, as written'],
   ['restrictedTerritories', 'as written'],
   ['paymentBasis', '"hourly" | "fixed" | "milestone"'],
   ['reportFrequency', '"on_completion" | "monthly"'],
@@ -872,7 +876,9 @@ function v2ExtractParams_(d) {
   var prompt =
     'Below are the clauses of a contract that are currently in force. Each clause is prefixed with\n' +
     '[clause number | topic]. Extract the values listed and reply with ONE JSON object, nothing else.\n' +
-    'For every value give both the value and the clause number it came from:\n' +
+    'For every value give both the value and the clause number it came from. The "from" must be the\n' +
+    'number in the [brackets] of the clause whose text actually states that value — never a neighbouring\n' +
+    'clause, never a heading, never "signatures". If no clause states it, omit the field entirely.\n' +
     '{"amount":{"value":250,"from":"2.1"}, "paymentDays":{"value":45,"from":"3.4"}}\n' +
     'Omit a field entirely when the clauses do not state it. Never guess.\n' +
     'Numbers written in words with digits in brackets — "within forty-five (45) days" — return 45.\n\n' +
@@ -1016,7 +1022,16 @@ function v2LogTerms_(d) {
   items.forEach(function (it) {
     var field = trim_(it.field), value = trim_(it.value), from = trim_(it.validFrom);
     if (!field) return;
-    // the same value effective from the same date is not a new fact
+    // A later document that merely restates an unchanged term is not a new fact:
+    // record a value only when it differs from the one already in force on that date.
+    var prior = null, priorFrom = '';
+    existing.forEach(function (t) {
+      if (trim_(t.Field) !== field) return;
+      var tf = String(t.ValidFrom).slice(0, 10);
+      if (from && tf && tf > from) return;
+      if (!prior || tf >= priorFrom) { prior = t; priorFrom = tf; }
+    });
+    if (prior && trim_(prior.Value) === value) return;
     var dup = existing.some(function (t) {
       return trim_(t.Field) === field && trim_(t.Value) === value && String(t.ValidFrom).slice(0, 10) === from;
     });
@@ -1026,6 +1041,7 @@ function v2LogTerms_(d) {
       ValidFrom: from, FromClause: trim_(it.fromClause), DocumentID: trim_(it.documentId),
       Note: trim_(it.note), CreatedAt: now
     });
+    existing.push({ Field: field, Value: value, ValidFrom: from });
     added++;
   });
   return { ok: true, added: added };
@@ -1184,6 +1200,238 @@ function v2DeleteDoc_(d) {
   deleteRowsWhere_(SHEETS.blocks, 'DocumentID', id);
   deleteRowsWhere_(SHEETS.documents, 'DocumentID', id);
   return { ok: true };
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Generating a contract from the Google Docs templates.
+// The template ids live in Script Properties, so they survive a redeploy and are
+// not baked into the code.
+// ─────────────────────────────────────────────────────────────────────────────
+var TPL_KEYS = ['tpl_b2b_agreement', 'tpl_b2b_sow', 'tpl_ica', 'tpl_ica_sow'];
+
+function appSettings_() {
+  var p = PropertiesService.getScriptProperties(), out = {};
+  TPL_KEYS.forEach(function (k) { out[k] = p.getProperty(k) || ''; });
+  return out;
+}
+
+function adminSaveSettings_(d) {
+  requireAdmin_(d);
+  var p = PropertiesService.getScriptProperties();
+  TPL_KEYS.forEach(function (k) {
+    if (d[k] !== undefined) p.setProperty(k, extractDocId_(trim_(d[k])));
+  });
+  return { ok: true, settings: appSettings_() };
+}
+
+// Accepts either a bare id or a full Google Docs url.
+function extractDocId_(v) {
+  var m = String(v || '').match(/[-\w]{25,}/);
+  return m ? m[0] : trim_(v);
+}
+
+function payTermsText_(c) {
+  var days = trim_(c.PaymentDays) || '30';
+  var adv = trim_(c.AdvancePercent), advDays = trim_(c.AdvanceDays) || '5';
+  switch (trim_(c.PaymentOption)) {
+    case 'prepay_100':
+      return 'The total price shall be paid in advance within ' + advDays + ' calendar days after signature of this Agreement.';
+    case 'advance_split':
+      return adv + '% of the total price shall be paid as an advance within ' + advDays +
+             ' calendar days after signature of this Agreement; the remaining amount shall be paid within ' +
+             days + ' calendar days after acceptance of the Deliverables.';
+    case 'after_warranty':
+      return 'The total price shall be paid within ' + days + ' calendar days after expiry of the warranty period.';
+    case 'milestone':
+      return 'The price shall be paid by milestones as set out in this Attachment, each milestone payable within ' +
+             days + ' calendar days after acceptance of the corresponding Deliverables.';
+    default:
+      return 'The total price shall be paid within ' + days +
+             ' calendar days after signature of the Acceptance Act, or the date on which the Deliverables are deemed accepted.';
+  }
+}
+
+function reqOf_(id) {
+  var r = id ? findRow_(SHEETS.requisites, 'RequisiteID', trim_(id)) : null;
+  return r || {};
+}
+
+function placeholders_(c) {
+  var cp = findRow_(SHEETS.counterparties, 'CounterpartyID', c.CounterpartyID) || {};
+  var ours = reqOf_(c.OurRequisiteID), theirs = reqOf_(c.TheirRequisiteID);
+  var weSupply = (trim_(c.OurRole) !== 'customer');
+  var supplier = weSupply ? ours : theirs, customer = weSupply ? theirs : ours;
+  var supplierName = weSupply ? (trim_(ours.LegalName) || CONFIG.COMPANY_NAME) : (trim_(theirs.LegalName) || trim_(cp.Name));
+  var customerName = weSupply ? (trim_(theirs.LegalName) || trim_(cp.Name)) : (trim_(ours.LegalName) || CONFIG.COMPANY_NAME);
+
+  var v = {
+    COMPANY_NAME: CONFIG.COMPANY_NAME,
+    CONTRACT_NUMBER: trim_(c.Number),
+    SOW_NUMBER: '1',
+    ATTACHMENT_NUMBER: '1',
+    SIGN_DATE: fmtHuman_(c.SignDate),
+    EFFECTIVE_DATE: fmtHuman_(c.StartDate || c.SignDate),
+    START_DATE: fmtHuman_(c.StartDate),
+    END_DATE: fmtHuman_(c.EndDate),
+    COMPLETION_DATE: fmtHuman_(c.CompletionDate),
+    AMOUNT: (c.Amount === '' || c.Amount == null) ? '' : money_(c.Amount),
+    RATE: (c.Amount === '' || c.Amount == null) ? '' : money_(c.Amount),
+    CURRENCY: trim_(c.Currency),
+    RATE_BASIS: trim_(c.RateBasis) || 'per hour',
+    SUBJECT: trim_(c.Subject),
+    SOW_SCOPE: trim_(c.SowScope),
+    PAYMENT_DAYS: trim_(c.PaymentDays),
+    ADVANCE_PERCENT: trim_(c.AdvancePercent),
+    ADVANCE_DAYS: trim_(c.AdvanceDays),
+    PAYMENT_TERMS_TEXT: payTermsText_(c),
+    REMARKS_DAYS: trim_(c.RemarksDays),
+    ACCEPTANCE_DAYS: trim_(c.AcceptanceDays),
+    EVALUATION_DAYS: trim_(c.EvaluationDays),
+    CURE_DAYS: trim_(c.CureDays),
+    DISPUTE_DAYS: trim_(c.DisputeDays),
+    NOTICE_DAYS: trim_(c.NoticeDays),
+    TERM_YEARS: trim_(c.TermYears),
+    WARRANTY_PERIOD: trim_(c.WarrantyPeriod),
+    PENALTY_DELAY_PERCENT: trim_(c.PenaltyDelayPercent),
+    PENALTY_FAILURE_PERCENT: trim_(c.PenaltyFailurePercent),
+    PENALTY_CAP_PERCENT: trim_(c.PenaltyCapPercent),
+    INSURANCE_AMOUNT: trim_(c.InsuranceAmount),
+    RESTRICTED_TERRITORIES: trim_(c.RestrictedTerritories),
+    GOVERNING_LAW: trim_(c.GoverningLaw),
+    JURISDICTION_PLACE: trim_(c.JurisdictionPlace),
+    ARBITRATION_BODY: trim_(c.ArbitrationBody),
+    ARBITRATION_SEAT: trim_(c.ArbitrationSeat),
+    PAYMENT_BASIS: trim_(c.PaymentBasis),
+    REPORT_FREQUENCY: trim_(c.ReportFrequency),
+    SUPPLIER_PM_NAME: trim_(c.PMName),
+    INVOICE_TRIGGER_TEXT: 'The Supplier may issue an invoice after the Deliverables have been accepted.',
+    CONTRACTOR_NAME: trim_(cp.Name),
+    CONTRACTOR_ADDRESS: trim_(cp.Address),
+    CONTRACTOR_EMAIL: trim_(cp.Email),
+    CONTRACTOR_PHONE: trim_(cp.Phone)
+  };
+
+  [['SUPPLIER', supplier, supplierName], ['CUSTOMER', customer, customerName]].forEach(function (pair) {
+    var pre = pair[0], r = pair[1], nm = pair[2];
+    v[pre + '_NAME'] = nm;
+    v[pre + '_ADDRESS'] = trim_(r.Address);
+    v[pre + '_JURISDICTION'] = trim_(r.Jurisdiction);
+    v[pre + '_REG_NUMBER'] = trim_(r.RegNumber);
+    v[pre + '_SIGNATORY'] = trim_(r.SignatoryName);
+    v[pre + '_SIGNATORY_TITLE'] = trim_(r.SignatoryTitle);
+    v[pre + '_BENEFICIARY_NAME'] = trim_(r.BeneficiaryName);
+    v[pre + '_ACCOUNT'] = trim_(r.AccountNumber);
+    v[pre + '_BANK_NAME'] = trim_(r.BankName);
+    v[pre + '_BANK_ADDRESS'] = trim_(r.BankAddress);
+    v[pre + '_SWIFT'] = trim_(r.Swift);
+    v[pre + '_CORR_BANK'] = trim_(r.CorrBank);
+    v[pre + '_CORR_SWIFT'] = trim_(r.CorrSwift);
+  });
+  return v;
+}
+
+function fmtHuman_(d) {
+  var s = String(d || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return trim_(d);
+  var M = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var p = s.split('-');
+  return String(+p[2]) + ' ' + M[+p[1] - 1] + ' ' + p[0];
+}
+function money_(v) {
+  var n = num_(v);
+  return n ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(v);
+}
+
+// Conditional blocks: {{#IF_X}} … {{/IF_X}} and {{#IFNOT_X}} … {{/IFNOT_X}}.
+// Working paragraph by paragraph is far more predictable than juggling ranges:
+// walk the body once, track which block we are inside, and delete what is not wanted.
+function applyConditions_(body, flags) {
+  var open = /\{\{#(IF|IFNOT)_([A-Z_0-9]+)\}\}/;
+  var close = /\{\{\/(IF|IFNOT)_([A-Z_0-9]+)\}\}/;
+  for (var guard = 0; guard < 60; guard++) {
+    var found = false;
+    for (var i = 0; i < body.getNumChildren(); i++) {
+      var txt = '';
+      try { txt = body.getChild(i).asText().getText(); } catch (e) { continue; }
+      var m = txt.match(open);
+      if (!m) continue;
+      found = true;
+      var kind = m[1], name = m[2];
+      var keep = (kind === 'IF') ? !!flags[name] : !flags[name];
+      // find the matching closing marker
+      var endIdx = -1;
+      for (var j = i + 1; j < body.getNumChildren(); j++) {
+        var t2 = '';
+        try { t2 = body.getChild(j).asText().getText(); } catch (e) { continue; }
+        var mc = t2.match(close);
+        if (mc && mc[1] === kind && mc[2] === name) { endIdx = j; break; }
+      }
+      if (endIdx < 0) {            // stray marker — just drop that paragraph
+        safeRemove_(body, i);
+        break;
+      }
+      if (keep) {
+        safeRemove_(body, endIdx);  // keep the content, drop both markers
+        safeRemove_(body, i);
+      } else {
+        for (var k = endIdx; k >= i; k--) safeRemove_(body, k);
+      }
+      break;
+    }
+    if (!found) break;
+  }
+}
+function safeRemove_(body, idx) {
+  if (idx < 0 || idx >= body.getNumChildren()) return;
+  if (body.getNumChildren() <= 1) { try { body.getChild(idx).asText().setText(''); } catch (e) {} return; }
+  try { body.removeChild(body.getChild(idx)); } catch (e) {}
+}
+
+function adminGenerateContract_(d) {
+  requireAdmin_(d);
+  var c = findRow_(SHEETS.contracts, 'ContractID', trim_(d.id));
+  if (!c) return { ok: false, error: 'Contract not found' };
+  if (truthy_(c.ExternalForm)) return { ok: false, error: 'This contract uses an external form — nothing to generate' };
+
+  var ica = (trim_(c.TemplateType) === 'ica');
+  var which = trim_(d.part) === 'sow' ? (ica ? 'tpl_ica_sow' : 'tpl_b2b_sow') : (ica ? 'tpl_ica' : 'tpl_b2b_agreement');
+  var tplId = PropertiesService.getScriptProperties().getProperty(which);
+  if (!tplId) return { ok: false, error: 'Template is not configured yet (' + which + ') — set it in Settings' };
+
+  var name = (trim_(d.part) === 'sow' ? 'SOW ' : 'Agreement ') + trim_(c.Number);
+  var folder = contractsFolder_();
+  var copy;
+  try { copy = DriveApp.getFileById(tplId).makeCopy(name, folder); }
+  catch (e) { return { ok: false, error: 'Could not open the template — check the id and access: ' + e }; }
+
+  var doc = DocumentApp.openById(copy.getId());
+  var body = doc.getBody();
+
+  var flags = {
+    ACCEPTANCE_ACT: truthy_(c.OptAcceptanceAct), PENALTIES: truthy_(c.OptPenalties),
+    USAGE_RIGHTS: truthy_(c.OptUsageRights), INSURANCE: truthy_(c.OptInsurance),
+    DATA_SECURITY: truthy_(c.OptDataSecurity), WARRANTY: truthy_(c.OptWarranty),
+    PAYOUT_CURRENCY: truthy_(c.OptPayoutCurrency)
+  };
+  applyConditions_(body, flags);
+
+  var v = placeholders_(c);
+  Object.keys(v).forEach(function (k) {
+    body.replaceText('\\{\\{' + k + '\\}\\}', String(v[k] == null ? '' : v[k]));
+  });
+  // anything left unfilled should not reach the signed document
+  body.replaceText('\\{\\{[A-Z_0-9]+\\}\\}', '');
+  doc.saveAndClose();
+
+  var pdf = folder.createFile(copy.getAs('application/pdf').setName(name + '.pdf'));
+  appendRow_(SHEETS.attachments, {
+    AttachmentID: Utilities.getUuid(), ParentType: 'contract', ParentID: c.ContractID,
+    FileName: name + '.pdf', Description: 'generated from the template',
+    DocType: 'draft', DocDate: new Date().toISOString().slice(0, 10), IsCurrent: 'no',
+    DriveFileID: pdf.getId(), Url: pdf.getUrl(), CreatedAt: new Date().toISOString()
+  });
+  return { ok: true, name: name, docUrl: doc.getUrl(), pdfUrl: pdf.getUrl() };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2452,7 +2700,7 @@ function readAll_(name) {
   for (var i = 1; i < values.length; i++) { var o = {}; for (var j = 0; j < head.length; j++) o[head[j]] = values[i][j]; out.push(o); }
   return out;
 }
-var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName', 'Path', 'ReplacesPath', 'ReplacesIn', 'SemanticKey'];
+var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName', 'Path', 'ReplacesPath', 'ReplacesIn', 'SemanticKey', 'FromClause', 'Field'];
 function appendRow_(name, obj) {
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
   var arr = head.map(function (h) { return obj[h] != null ? obj[h] : ''; });
