@@ -699,7 +699,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.62';
+const BUILD = '2026-08-08.63';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2856,6 +2856,11 @@ async function acceptNow(btn){
     await api('accept_assignment',{ assignmentId:ACC_ID, acceptedBy:$('acc_name').value.trim(),
       acceptedTitle:$('acc_role').value.trim(), acceptedAt:$('acc_date').value });
     closeModal('acceptModal');
+    // the open report editor holds a copy loaded before acceptance — refresh it,
+    // otherwise a PDF printed from there shows an empty acceptance block
+    if(REP && String(REP.AssignmentID)===String(ACC_ID)){
+      try{ const rr = await api('admin_get_report',{assignmentId:ACC_ID}); REP = rr.assignment; }catch(_){}
+    }
     await refreshModal();
     notice('pm_err','ok','Report accepted — this is the basis for payment.');
   }catch(e){ notice('acc_err','err', esc(e.message)); }
@@ -2999,8 +3004,10 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
 }
 
 // from the report editor (uses on-screen data)
-function generatePdf(){
+async function generatePdf(){
   if(!REP) return;
+  // always print from the stored record, so acceptance made in this session is included
+  try{ const rr = await api('admin_get_report',{assignmentId:REP.AssignmentID}); REP = Object.assign({}, REP, rr.assignment); }catch(_){}
   const activities=[...document.querySelectorAll('#rm_items textarea')].map(t=>t.value.trim()).filter(Boolean);
   const hours=parseFloat(($('rm_hours').value||'').replace(',','.'))||0;
   const html = buildReportHtml(REP, activities, hours, $('rm_sign').checked, $('rm_date').value);
