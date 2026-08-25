@@ -22,7 +22,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.65';
+const BUILD = '2026-08-08.66';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -1262,10 +1262,17 @@ function reqOf_(id) {
   return r || {};
 }
 
+// Our own details when no requisite set is picked on the contract.
+function ourDefaultRequisite_() {
+  var us = findRow_(SHEETS.counterparties, 'Name', CONFIG.COMPANY_NAME);
+  return (us && defaultRequisite_(us.CounterpartyID)) || {};
+}
+
 function placeholders_(c, over) {
   over = over || {};
   var cp = findRow_(SHEETS.counterparties, 'CounterpartyID', c.CounterpartyID) || {};
   var ours = reqOf_(c.OurRequisiteID), theirs = reqOf_(c.TheirRequisiteID);
+  if (!trim_(ours.LegalName) && !trim_(ours.SignatoryName)) ours = ourDefaultRequisite_();
   var weSupply = (trim_(c.OurRole) !== 'customer');
   var supplier = weSupply ? ours : theirs, customer = weSupply ? theirs : ours;
   var supplierName = weSupply ? (trim_(ours.LegalName) || CONFIG.COMPANY_NAME) : (trim_(theirs.LegalName) || trim_(cp.Name));
@@ -1315,8 +1322,34 @@ function placeholders_(c, over) {
     CONTRACTOR_NAME: trim_(cp.Name),
     CONTRACTOR_ADDRESS: trim_(cp.Address),
     CONTRACTOR_EMAIL: trim_(cp.Email),
-    CONTRACTOR_PHONE: trim_(cp.Phone)
+    CONTRACTOR_PHONE: trim_(cp.Phone),
+    CONTRACTOR_JURISDICTION: '',
+    CONTRACTOR_REG_NUMBER: '',
+    CONTRACTOR_BENEFICIARY_NAME: '',
+    CONTRACTOR_ACCOUNT: '',
+    CONTRACTOR_BANK_NAME: '',
+    CONTRACTOR_BANK_ADDRESS: '',
+    CONTRACTOR_SWIFT: '',
+    CONTRACTOR_CORR_BANK: '',
+    CONTRACTOR_CORR_SWIFT: ''
   };
+
+  // The ICA SOW prints the contractor's bank details. Take the requisite set chosen on the
+  // contract; if none is chosen, fall back to the counterparty's default set.
+  var cpReq = theirs;
+  if (!trim_(cpReq.AccountNumber) && cp.CounterpartyID) {
+    var dflt = defaultRequisite_(cp.CounterpartyID);
+    if (dflt) cpReq = dflt;
+  }
+  v.CONTRACTOR_JURISDICTION = trim_(cpReq.Jurisdiction);
+  v.CONTRACTOR_REG_NUMBER = trim_(cpReq.RegNumber);
+  v.CONTRACTOR_BENEFICIARY_NAME = trim_(cpReq.BeneficiaryName) || trim_(cp.Name);
+  v.CONTRACTOR_ACCOUNT = trim_(cpReq.AccountNumber);
+  v.CONTRACTOR_BANK_NAME = trim_(cpReq.BankName);
+  v.CONTRACTOR_BANK_ADDRESS = trim_(cpReq.BankAddress);
+  v.CONTRACTOR_SWIFT = trim_(cpReq.Swift);
+  v.CONTRACTOR_CORR_BANK = trim_(cpReq.CorrBank);
+  v.CONTRACTOR_CORR_SWIFT = trim_(cpReq.CorrSwift);
 
   // Who signs for us is asked at generation time — the requisite set holds a default,
   // but the person actually signing can differ from one contract to the next.
