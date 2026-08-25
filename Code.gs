@@ -19,7 +19,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.60';
+const BUILD = '2026-08-08.62';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -51,7 +51,7 @@ const HEADERS = {
   projects:    ['ProjectID', 'Name', 'Customer', 'CounterpartyID', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
-                'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt', 'PayoutCurrency', 'AcceptedBy', 'AcceptedAt',
+                'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt', 'PayoutCurrency', 'AcceptedBy', 'AcceptedTitle', 'AcceptedAt',
                 'ContractID', 'RateSource', 'PricingType'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
@@ -96,6 +96,7 @@ function route_(action, d) {
     case 'get_settings':       requireAdmin_(d); return { ok: true, settings: appSettings_() };
     case 'save_settings':      return adminSaveSettings_(d);
     case 'generate_contract':  return adminGenerateContract_(d);
+    case 'signing_defaults':   return adminSigningDefaults_(d);
     // Contracts 2.0 — clause-level structure (experimental, separate sheets)
     case 'v2_parse':           return v2Parse_(d);
     case 'v2_parse_upload':    return v2ParseUpload_(d);
@@ -147,6 +148,7 @@ function route_(action, d) {
     case 'reopen_assignment':  return adminReopen_(d);
     case 'remind_assignment':  return adminRemind_(d);
     case 'accept_assignment':  return adminAcceptAssignment_(d);
+    case 'accept_defaults':    return adminAcceptDefaults_(d);
     case 'delete_assignment':  return adminDeleteAssignment_(d);
     case 'admin_get_report':   return adminGetReport_(d);
     case 'admin_save_report':  return adminSaveReport_(d);
@@ -1257,7 +1259,8 @@ function reqOf_(id) {
   return r || {};
 }
 
-function placeholders_(c) {
+function placeholders_(c, over) {
+  over = over || {};
   var cp = findRow_(SHEETS.counterparties, 'CounterpartyID', c.CounterpartyID) || {};
   var ours = reqOf_(c.OurRequisiteID), theirs = reqOf_(c.TheirRequisiteID);
   var weSupply = (trim_(c.OurRole) !== 'customer');
@@ -1270,7 +1273,7 @@ function placeholders_(c) {
     CONTRACT_NUMBER: trim_(c.Number),
     SOW_NUMBER: '1',
     ATTACHMENT_NUMBER: '1',
-    SIGN_DATE: fmtHuman_(c.SignDate),
+    SIGN_DATE: fmtHuman_(over.signDate || c.SignDate),
     EFFECTIVE_DATE: fmtHuman_(c.StartDate || c.SignDate),
     START_DATE: fmtHuman_(c.StartDate),
     END_DATE: fmtHuman_(c.EndDate),
@@ -1312,14 +1315,19 @@ function placeholders_(c) {
     CONTRACTOR_PHONE: trim_(cp.Phone)
   };
 
+  // Who signs for us is asked at generation time — the requisite set holds a default,
+  // but the person actually signing can differ from one contract to the next.
+  var ourSignatory = trim_(over.signatoryName), ourTitle = trim_(over.signatoryTitle);
+
   [['SUPPLIER', supplier, supplierName], ['CUSTOMER', customer, customerName]].forEach(function (pair) {
     var pre = pair[0], r = pair[1], nm = pair[2];
     v[pre + '_NAME'] = nm;
     v[pre + '_ADDRESS'] = trim_(r.Address);
     v[pre + '_JURISDICTION'] = trim_(r.Jurisdiction);
     v[pre + '_REG_NUMBER'] = trim_(r.RegNumber);
-    v[pre + '_SIGNATORY'] = trim_(r.SignatoryName);
-    v[pre + '_SIGNATORY_TITLE'] = trim_(r.SignatoryTitle);
+    var isUs = (pre === 'SUPPLIER') ? weSupply : !weSupply;
+    v[pre + '_SIGNATORY'] = (isUs && ourSignatory) ? ourSignatory : trim_(r.SignatoryName);
+    v[pre + '_SIGNATORY_TITLE'] = (isUs && ourTitle) ? ourTitle : trim_(r.SignatoryTitle);
     v[pre + '_BENEFICIARY_NAME'] = trim_(r.BeneficiaryName);
     v[pre + '_ACCOUNT'] = trim_(r.AccountNumber);
     v[pre + '_BANK_NAME'] = trim_(r.BankName);
@@ -1388,6 +1396,18 @@ function safeRemove_(body, idx) {
   try { body.removeChild(body.getChild(idx)); } catch (e) {}
 }
 
+// What to prefill in the signing dialog: whoever is named in our requisite set.
+function adminSigningDefaults_(d) {
+  requireAdmin_(d);
+  var c = findRow_(SHEETS.contracts, 'ContractID', trim_(d.id));
+  if (!c) return { ok: false, error: 'Contract not found' };
+  var r = reqOf_(c.OurRequisiteID);
+  return { ok: true,
+           signatoryName: trim_(r.SignatoryName),
+           signatoryTitle: trim_(r.SignatoryTitle),
+           signDate: trim_(c.SignDate) || new Date().toISOString().slice(0, 10) };
+}
+
 function adminGenerateContract_(d) {
   requireAdmin_(d);
   var c = findRow_(SHEETS.contracts, 'ContractID', trim_(d.id));
@@ -1416,12 +1436,19 @@ function adminGenerateContract_(d) {
   };
   applyConditions_(body, flags);
 
-  var v = placeholders_(c);
-  Object.keys(v).forEach(function (k) {
-    body.replaceText('\\{\\{' + k + '\\}\\}', String(v[k] == null ? '' : v[k]));
+  var v = placeholders_(c, { signatoryName: trim_(d.signatoryName), signatoryTitle: trim_(d.signatoryTitle), signDate: trim_(d.signDate) });
+  // Headers and footers are separate containers — replacing only in the body left
+  // {{COMPANY_NAME}} showing at the top of every page.
+  var targets = [body];
+  var hdr = doc.getHeader(), ftr = doc.getFooter();
+  if (hdr) targets.push(hdr);
+  if (ftr) targets.push(ftr);
+  targets.forEach(function (el) {
+    Object.keys(v).forEach(function (k) {
+      el.replaceText('\\{\\{' + k + '\\}\\}', String(v[k] == null ? '' : v[k]));
+    });
+    el.replaceText('\\{\\{[A-Z_0-9]+\\}\\}', '');   // nothing unfilled reaches the signed document
   });
-  // anything left unfilled should not reach the signed document
-  body.replaceText('\\{\\{[A-Z_0-9]+\\}\\}', '');
   doc.saveAndClose();
 
   var pdf = folder.createFile(copy.getAs('application/pdf').setName(name + '.pdf'));
@@ -2538,6 +2565,30 @@ function payoutAllowed_(a) {
 }
 function payoutCur_(c) { c = trim_(c).toUpperCase(); return PAYOUT_CURRENCIES.indexOf(c) >= 0 ? c : ''; }
 
+// Prefill for the acceptance dialog: whoever signs for us on the related contract,
+// falling back to our own default requisite set.
+function adminAcceptDefaults_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  var name = '', title = '';
+  if (a && trim_(a.ContractID)) {
+    var c = findRow_(SHEETS.contracts, 'ContractID', a.ContractID);
+    if (c && trim_(c.OurRequisiteID)) {
+      var r = reqOf_(c.OurRequisiteID);
+      name = trim_(r.SignatoryName); title = trim_(r.SignatoryTitle);
+    }
+  }
+  if (!name) {
+    var us = findRow_(SHEETS.counterparties, 'Name', CONFIG.COMPANY_NAME);
+    if (us) {
+      var dr = defaultRequisite_(us.CounterpartyID);
+      if (dr) { name = trim_(dr.SignatoryName); title = trim_(dr.SignatoryTitle); }
+    }
+  }
+  return { ok: true, acceptedBy: name, acceptedTitle: title,
+           acceptedAt: (a && trim_(a.AcceptedAt)) || new Date().toISOString().slice(0, 10) };
+}
+
 // Countersigning the report = acceptance and the trigger for payment (ICA clauses 3.2-3.4).
 function adminAcceptAssignment_(d) {
   requireAdmin_(d);
@@ -2546,14 +2597,16 @@ function adminAcceptAssignment_(d) {
   if (a.Status !== 'submitted') return { ok: false, error: 'Only a submitted report can be accepted' };
   var revoke = truthy_(d.revoke);
   if (revoke) {
-    updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { AcceptedBy: '', AcceptedAt: '', UpdatedAt: new Date().toISOString() });
+    updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { AcceptedBy: '', AcceptedTitle: '', AcceptedAt: '', UpdatedAt: new Date().toISOString() });
     return { ok: true, revoked: true };
   }
   var by = trim_(d.acceptedBy);
   if (!by) return { ok: false, error: 'Enter the name of the person accepting the report' };
   var date = trim_(d.acceptedAt) || new Date().toISOString().slice(0, 10);
-  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { AcceptedBy: by, AcceptedAt: date, UpdatedAt: new Date().toISOString() });
-  return { ok: true, acceptedBy: by, acceptedAt: date };
+  var title = trim_(d.acceptedTitle);
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID,
+             { AcceptedBy: by, AcceptedTitle: title, AcceptedAt: date, UpdatedAt: new Date().toISOString() });
+  return { ok: true, acceptedBy: by, acceptedTitle: title, acceptedAt: date };
 }
 
 function adminRemind_(d) {

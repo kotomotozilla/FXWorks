@@ -418,6 +418,34 @@
   </div>
 </div></div>
 
+<div id="acceptModal" class="modal top hidden"><div class="box" style="max-width:560px">
+  <h2><span>Accept the report</span><button class="x" onclick="closeModal('acceptModal')">×</button></h2>
+  <p class="muted">Countersigning the report is the acceptance of the work and the basis for payment. State who accepts it on behalf of the company and the date.</p>
+  <div id="acc_err"></div>
+  <div class="row">
+    <div style="flex:2"><label>Accepted by</label><input id="acc_name" placeholder="Konstantin Maiorov"></div>
+    <div style="flex:1"><label>Title</label><input id="acc_role" placeholder="Director"></div>
+  </div>
+  <div style="height:10px"></div>
+  <div style="max-width:220px"><label>Date of acceptance</label><input id="acc_date" type="date"></div>
+  <div style="height:14px"></div>
+  <div class="acts"><button class="btn sm" id="acc_go" onclick="acceptNow(this)">Accept report</button></div>
+</div></div>
+
+<div id="signModal" class="modal top hidden"><div class="box" style="max-width:560px">
+  <h2><span id="sign_title">Signing details</span><button class="x" onclick="closeModal('signModal')">×</button></h2>
+  <p class="muted">Who signs this document on behalf of the company, and the date it is signed. The name is prefilled from the requisite set — change it if someone else signs.</p>
+  <div id="sign_err"></div>
+  <div class="row">
+    <div style="flex:2"><label>Signatory</label><input id="sign_name" placeholder="Konstantin Maiorov"></div>
+    <div style="flex:1"><label>Title</label><input id="sign_role" placeholder="Director"></div>
+  </div>
+  <div style="height:10px"></div>
+  <div style="max-width:220px"><label>Date of signature</label><input id="sign_date" type="date"></div>
+  <div style="height:14px"></div>
+  <div class="acts"><button class="btn sm" id="sign_go" onclick="generateNow(this)">Generate</button></div>
+</div></div>
+
 <div id="setModal" class="modal top hidden"><div class="box">
   <h2><span>Template settings</span><button class="x" onclick="closeModal('setModal')">×</button></h2>
   <p class="muted">Paste the link or the id of each Google Doc template. Put the four templates in a folder on your Drive (for example <b>FXWorks Templates</b>) and open each one — the id is the long part of its address.</p>
@@ -615,8 +643,8 @@
   </div>
   <p class="muted" style="margin-top:12px">These settings are saved together with the contract — press <b>Save contract</b> above.</p>
   <div class="acts" style="margin-top:10px">
-    <button class="btn sm" onclick="generateDoc('agreement',this)">Generate agreement</button>
-    <button class="btn sm" onclick="generateDoc('sow',this)">Generate SOW</button>
+    <button class="btn sm" onclick="askSigning('agreement')">Generate agreement</button>
+    <button class="btn sm" onclick="askSigning('sow')">Generate SOW</button>
     <button class="btn ghost sm" onclick="openSettings()">Template settings</button>
   </div>
   <div id="gen_msg"></div>
@@ -671,7 +699,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.60';
+const BUILD = '2026-08-08.62';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2436,6 +2464,36 @@ async function saveSettings(btn){
   }catch(e){ notice('set_err','err', esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent='Save'; }
 }
+let GEN_PART = 'agreement';
+async function askSigning(part){
+  if(!EDIT_CT){ notice('gen_msg','err','Save the contract first.'); return; }
+  GEN_PART = part;
+  $('sign_title').textContent = (part==='sow' ? 'Signing details — SOW' : 'Signing details — agreement');
+  notice('sign_err','','');
+  try{
+    const r = await api('signing_defaults',{ id:EDIT_CT });
+    $('sign_name').value = r.signatoryName || '';
+    $('sign_role').value = r.signatoryTitle || '';
+    $('sign_date').value = r.signDate || todayISO();
+  }catch(e){ $('sign_date').value = todayISO(); }
+  $('signModal').classList.remove('hidden');
+}
+async function generateNow(btn){
+  if(!$('sign_name').value.trim()){ notice('sign_err','err','Enter who signs on behalf of the company.'); return; }
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    const r = await api('generate_contract',{ id:EDIT_CT, part:GEN_PART,
+      signatoryName:$('sign_name').value.trim(), signatoryTitle:$('sign_role').value.trim(),
+      signDate:$('sign_date').value });
+    closeModal('signModal');
+    notice('gen_msg','ok',`${esc(r.name)} is ready: `
+      + `<a href="${esc(r.docUrl)}" target="_blank" rel="noopener">Google Doc</a> · `
+      + `<a href="${esc(r.pdfUrl)}" target="_blank" rel="noopener">PDF</a>`
+      + ' · attached to the contract as a draft. Check it before sending.');
+    renderAttachments('ctm_attach','contract',EDIT_CT);
+  }catch(e){ notice('sign_err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Generate'; }
+}
 async function generateDoc(part, btn){
   if(!EDIT_CT){ notice('gen_msg','err','Save the contract first.'); return; }
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
@@ -2669,7 +2727,7 @@ function renderProjectModal(){
     const acceptBtn = (a.Status==='submitted')
       ? (a.AcceptedBy
           ? `<button class="btn ghost sm" onclick="acceptReport('${a.AssignmentID}',this,true)">Revoke acceptance</button>`
-          : `<button class="btn sm" onclick="acceptReport('${a.AssignmentID}',this,false)">Accept</button>`)
+          : `<button class="btn sm" onclick="askAccept('${a.AssignmentID}')">Accept</button>`)
       : '';
     const toggle = a.Status==='recalled'
       ? `<button class="btn sm" onclick="setStatus('${a.AssignmentID}','release',this)">Release again</button>`
@@ -2682,7 +2740,7 @@ function renderProjectModal(){
         <span class="tag ${esc(a.Status)}">${statusEn(a.Status)}</span>
       </div>
       <div class="muted" style="font-size:12px">${a.ContractID?('Contract: '+esc(ctNumber(a.ContractID))+(a.PricingType==='lump'?' · lump sum':' · hourly')):'Counterparty rate · non-contractual'}</div>
-      ${a.AcceptedBy?`<div class="muted" style="font-size:12px">✓ Accepted by ${esc(a.AcceptedBy)}${a.AcceptedAt?' on '+esc(fmtDate(a.AcceptedAt)):''}${a.PayoutCurrency?' · payout in '+esc(a.PayoutCurrency):''}</div>`:(a.PayoutCurrency?`<div class="muted" style="font-size:12px">Payout currency: ${esc(a.PayoutCurrency)}</div>`:'')}
+      ${a.AcceptedBy?`<div class="muted" style="font-size:12px">✓ Accepted by ${esc(a.AcceptedBy)}${a.AcceptedTitle?', '+esc(a.AcceptedTitle):''}${a.AcceptedAt?' on '+esc(fmtDate(a.AcceptedAt)):''}${a.PayoutCurrency?' · payout in '+esc(a.PayoutCurrency):''}</div>`:(a.PayoutCurrency?`<div class="muted" style="font-size:12px">Payout currency: ${esc(a.PayoutCurrency)}</div>`:'')}
       ${(a.ReportedHours!==''&&a.ReportedHours!=null)?`<div class="muted" style="margin-bottom:4px">Reported: ${hrs(a.ReportedHours)} h · ${s}${money(a.ReportedAmount||0)}</div>`:''}
       <div class="muted" style="margin-bottom:8px">Submitted: ${a.SubmittedAt?fmtDate(a.SubmittedAt):'—'}</div>
       <label>Comment</label>
@@ -2779,6 +2837,30 @@ async function deleteAssignment(aid, btn){
   try{ await api('delete_assignment',{assignmentId:aid}); await refreshModal(); }
   catch(e){ alert(e.message); }
 }
+let ACC_ID = '';
+async function askAccept(aid){
+  ACC_ID = aid;
+  notice('acc_err','','');
+  try{
+    const r = await api('accept_defaults',{ assignmentId:aid });
+    $('acc_name').value = r.acceptedBy || '';
+    $('acc_role').value = r.acceptedTitle || '';
+    $('acc_date').value = r.acceptedAt || todayISO();
+  }catch(e){ $('acc_date').value = todayISO(); }
+  $('acceptModal').classList.remove('hidden');
+}
+async function acceptNow(btn){
+  if(!$('acc_name').value.trim()){ notice('acc_err','err','Enter who accepts the report.'); return; }
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    await api('accept_assignment',{ assignmentId:ACC_ID, acceptedBy:$('acc_name').value.trim(),
+      acceptedTitle:$('acc_role').value.trim(), acceptedAt:$('acc_date').value });
+    closeModal('acceptModal');
+    await refreshModal();
+    notice('pm_err','ok','Report accepted — this is the basis for payment.');
+  }catch(e){ notice('acc_err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Accept report'; }
+}
 async function acceptReport(aid, btn, revoke){
   if(revoke){
     if(!confirm('Revoke acceptance of this report?')) return;
@@ -2860,7 +2942,7 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   const accepted = a.AcceptedBy ? `
     <div class="acc">
       <div class="acch">Accepted on behalf of ${esc(COMPANY)}</div>
-      <div><span class="k">Name / title:</span> ${esc(a.AcceptedBy)}</div>
+      <div><span class="k">Name / title:</span> ${esc(a.AcceptedBy)}${a.AcceptedTitle?', '+esc(a.AcceptedTitle):''}</div>
       <div><span class="k">Date:</span> ${esc(fmtDate(a.AcceptedAt||''))}</div>
       <div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>
     </div>` : `

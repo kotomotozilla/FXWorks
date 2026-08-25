@@ -185,7 +185,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-08-08.60';
+const BUILD='2026-08-08.62';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -360,7 +360,7 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   const accepted = a.AcceptedBy ? `
     <div class="acc">
       <div class="acch">Accepted on behalf of ${esc(COMPANY)}</div>
-      <div><span class="k">Name / title:</span> ${esc(a.AcceptedBy)}</div>
+      <div><span class="k">Name / title:</span> ${esc(a.AcceptedBy)}${a.AcceptedTitle?', '+esc(a.AcceptedTitle):''}</div>
       <div><span class="k">Date:</span> ${esc(fmtDate(a.AcceptedAt||''))}</div>
       <div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>
     </div>` : `
