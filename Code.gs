@@ -22,7 +22,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.64';
+const BUILD = '2026-08-08.65';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -1326,6 +1326,14 @@ function placeholders_(c, over) {
   if (!ourSignatory) ourSignatory = trim_(ours.SignatoryName) || CONFIG.DEFAULT_SIGNATORY;
   if (!ourTitle) ourTitle = trim_(ours.SignatoryTitle) || CONFIG.DEFAULT_SIGNATORY_TITLE;
 
+  // The ICA template always signs as {{SUPPLIER_SIGNATORY}} for our side, while in an ICA
+  // Fraktalex is the customer — so under that template our signatory must fill both roles'
+  // aliases. Expose OUR_* as well, which never depends on who is supplier.
+  v.OUR_SIGNATORY = ourSignatory;
+  v.OUR_SIGNATORY_TITLE = ourTitle;
+  v.OUR_NAME = trim_(ours.LegalName) || CONFIG.COMPANY_NAME;
+  var icaTemplate = (trim_(c.TemplateType) === 'ica');
+
   [['SUPPLIER', supplier, supplierName], ['CUSTOMER', customer, customerName]].forEach(function (pair) {
     var pre = pair[0], r = pair[1], nm = pair[2];
     v[pre + '_NAME'] = nm;
@@ -1333,8 +1341,11 @@ function placeholders_(c, over) {
     v[pre + '_JURISDICTION'] = trim_(r.Jurisdiction);
     v[pre + '_REG_NUMBER'] = trim_(r.RegNumber);
     var isUs = (pre === 'SUPPLIER') ? weSupply : !weSupply;
-    v[pre + '_SIGNATORY'] = isUs ? ourSignatory : trim_(r.SignatoryName);
-    v[pre + '_SIGNATORY_TITLE'] = isUs ? ourTitle : trim_(r.SignatoryTitle);
+    // In an ICA the counterparty is a person who signs in their own name and holds no
+    // requisite set, so the supplier-side signatory slot belongs to us.
+    var takeOurs = isUs || (icaTemplate && pre === 'SUPPLIER');
+    v[pre + '_SIGNATORY'] = takeOurs ? ourSignatory : trim_(r.SignatoryName);
+    v[pre + '_SIGNATORY_TITLE'] = takeOurs ? ourTitle : trim_(r.SignatoryTitle);
     v[pre + '_BENEFICIARY_NAME'] = trim_(r.BeneficiaryName);
     v[pre + '_ACCOUNT'] = trim_(r.AccountNumber);
     v[pre + '_BANK_NAME'] = trim_(r.BankName);
