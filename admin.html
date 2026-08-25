@@ -699,7 +699,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.63';
+const BUILD = '2026-08-08.64';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2472,10 +2472,14 @@ async function askSigning(part){
   notice('sign_err','','');
   try{
     const r = await api('signing_defaults',{ id:EDIT_CT });
-    $('sign_name').value = r.signatoryName || '';
-    $('sign_role').value = r.signatoryTitle || '';
+    $('sign_name').value = r.signatoryName || 'Konstantin Maiorov';
+    $('sign_role').value = r.signatoryTitle || 'Director';
     $('sign_date').value = r.signDate || todayISO();
-  }catch(e){ $('sign_date').value = todayISO(); }
+  }catch(e){
+    $('sign_name').value = $('sign_name').value || 'Konstantin Maiorov';
+    $('sign_role').value = $('sign_role').value || 'Director';
+    $('sign_date').value = todayISO();
+  }
   $('signModal').classList.remove('hidden');
 }
 async function generateNow(btn){
@@ -2843,10 +2847,14 @@ async function askAccept(aid){
   notice('acc_err','','');
   try{
     const r = await api('accept_defaults',{ assignmentId:aid });
-    $('acc_name').value = r.acceptedBy || '';
-    $('acc_role').value = r.acceptedTitle || '';
+    $('acc_name').value = r.acceptedBy || 'Konstantin Maiorov';
+    $('acc_role').value = r.acceptedTitle || 'Director';
     $('acc_date').value = r.acceptedAt || todayISO();
-  }catch(e){ $('acc_date').value = todayISO(); }
+  }catch(e){
+    $('acc_name').value = $('acc_name').value || 'Konstantin Maiorov';
+    $('acc_role').value = $('acc_role').value || 'Director';
+    $('acc_date').value = todayISO();
+  }
   $('acceptModal').classList.remove('hidden');
 }
 async function acceptNow(btn){

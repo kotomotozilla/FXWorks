@@ -15,11 +15,14 @@ const CONFIG = {
   // If empty — the script owner's address is used.
   ADMIN_EMAIL: 'info@fraktalex.com',
   SHEET_ID: '',
-  COMPANY_NAME: 'Fraktalex Limited'
+  COMPANY_NAME: 'Fraktalex Limited',
+  // Who signs for the company unless someone else is named at generation time
+  DEFAULT_SIGNATORY: 'Konstantin Maiorov',
+  DEFAULT_SIGNATORY_TITLE: 'Director'
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.63';
+const BUILD = '2026-08-08.64';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -1318,6 +1321,10 @@ function placeholders_(c, over) {
   // Who signs for us is asked at generation time — the requisite set holds a default,
   // but the person actually signing can differ from one contract to the next.
   var ourSignatory = trim_(over.signatoryName), ourTitle = trim_(over.signatoryTitle);
+  // Fall back to the requisite set, then to the company default — the signature block
+  // of our own side must never come out blank.
+  if (!ourSignatory) ourSignatory = trim_(ours.SignatoryName) || CONFIG.DEFAULT_SIGNATORY;
+  if (!ourTitle) ourTitle = trim_(ours.SignatoryTitle) || CONFIG.DEFAULT_SIGNATORY_TITLE;
 
   [['SUPPLIER', supplier, supplierName], ['CUSTOMER', customer, customerName]].forEach(function (pair) {
     var pre = pair[0], r = pair[1], nm = pair[2];
@@ -1326,8 +1333,8 @@ function placeholders_(c, over) {
     v[pre + '_JURISDICTION'] = trim_(r.Jurisdiction);
     v[pre + '_REG_NUMBER'] = trim_(r.RegNumber);
     var isUs = (pre === 'SUPPLIER') ? weSupply : !weSupply;
-    v[pre + '_SIGNATORY'] = (isUs && ourSignatory) ? ourSignatory : trim_(r.SignatoryName);
-    v[pre + '_SIGNATORY_TITLE'] = (isUs && ourTitle) ? ourTitle : trim_(r.SignatoryTitle);
+    v[pre + '_SIGNATORY'] = isUs ? ourSignatory : trim_(r.SignatoryName);
+    v[pre + '_SIGNATORY_TITLE'] = isUs ? ourTitle : trim_(r.SignatoryTitle);
     v[pre + '_BENEFICIARY_NAME'] = trim_(r.BeneficiaryName);
     v[pre + '_ACCOUNT'] = trim_(r.AccountNumber);
     v[pre + '_BANK_NAME'] = trim_(r.BankName);
@@ -1403,8 +1410,8 @@ function adminSigningDefaults_(d) {
   if (!c) return { ok: false, error: 'Contract not found' };
   var r = reqOf_(c.OurRequisiteID);
   return { ok: true,
-           signatoryName: trim_(r.SignatoryName),
-           signatoryTitle: trim_(r.SignatoryTitle),
+           signatoryName: trim_(r.SignatoryName) || CONFIG.DEFAULT_SIGNATORY,
+           signatoryTitle: trim_(r.SignatoryTitle) || CONFIG.DEFAULT_SIGNATORY_TITLE,
            signDate: trim_(c.SignDate) || new Date().toISOString().slice(0, 10) };
 }
 
@@ -2585,6 +2592,8 @@ function adminAcceptDefaults_(d) {
       if (dr) { name = trim_(dr.SignatoryName); title = trim_(dr.SignatoryTitle); }
     }
   }
+  if (!name) { name = CONFIG.DEFAULT_SIGNATORY; title = CONFIG.DEFAULT_SIGNATORY_TITLE; }
+  if (!title) title = CONFIG.DEFAULT_SIGNATORY_TITLE;
   return { ok: true, acceptedBy: name, acceptedTitle: title,
            acceptedAt: (a && trim_(a.AcceptedAt)) || new Date().toISOString().slice(0, 10) };
 }
