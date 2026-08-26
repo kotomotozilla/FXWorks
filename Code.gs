@@ -22,7 +22,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.75';
+const BUILD = '2026-08-08.76';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2988,15 +2988,25 @@ function headersMatch_(have, want) {
   return true;
 }
 function keyByName_(name) { for (var k in SHEETS) if (SHEETS[k] === name) return k; return null; }
+// A sheet is read once per request and then served from memory: findRow_ used to pull the
+// whole sheet again on every call, so one request could re-read the same sheet dozens of
+// times. The cache is dropped as soon as anything is written, so nothing goes stale.
+var SHEET_CACHE = {};
+function invalidateCache_(name) {
+  if (name) delete SHEET_CACHE[name]; else SHEET_CACHE = {};
+}
 function readAll_(name) {
+  if (SHEET_CACHE[name]) return SHEET_CACHE[name];
   var sh = getSheet_(name), values = sh.getDataRange().getValues();
-  if (values.length < 2) return [];
+  if (values.length < 2) { SHEET_CACHE[name] = []; return SHEET_CACHE[name]; }
   var head = values[0], out = [];
   for (var i = 1; i < values.length; i++) { var o = {}; for (var j = 0; j < head.length; j++) o[head[j]] = values[i][j]; out.push(o); }
+  SHEET_CACHE[name] = out;
   return out;
 }
 var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName', 'Path', 'ReplacesPath', 'ReplacesIn', 'SemanticKey', 'FromClause', 'Field'];
 function appendRow_(name, obj) {
+  invalidateCache_(name);
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
   var arr = head.map(function (h) { return obj[h] != null ? obj[h] : ''; });
   sh.appendRow(arr);
@@ -3021,6 +3031,7 @@ function findRow_(name, idField, idValue) {
   return null;
 }
 function updateRow_(name, idField, idValue, updates) {
+  invalidateCache_(name);
   var sh = getSheet_(name), values = sh.getDataRange().getValues(), head = values[0];
   var idCol = head.indexOf(idField), norm = (idField === 'Email');
   var target = norm ? normEmail_(idValue) : String(idValue);
@@ -3043,6 +3054,7 @@ function updateRow_(name, idField, idValue, updates) {
   return false;
 }
 function deleteRowsWhere_(name, field, value) {
+  invalidateCache_(name);
   var sh = getSheet_(name), values = sh.getDataRange().getValues(), col = values[0].indexOf(field);
   if (col < 0) return;
   for (var i = values.length - 1; i >= 1; i--) if (String(values[i][col]) === String(value)) sh.deleteRow(i + 1);
