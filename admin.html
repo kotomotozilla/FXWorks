@@ -736,7 +736,8 @@
   <div class="row" style="margin-bottom:12px">
     <div style="flex:2"><label>Report title</label><input id="rm_title_in" placeholder="e.g. May 2026 / Phase 1"></div>
     <div><label>Currency elected for payment</label>
-      <select id="rm_payout"><option value="">Base currency</option><option value="EUR">EUR</option><option value="USD">USD</option><option value="AED">AED</option><option value="SGD">SGD</option></select></div>
+      <select id="rm_payout"><option value="">Base currency</option><option value="EUR">EUR</option><option value="USD">USD</option><option value="AED">AED</option><option value="SGD">SGD</option></select>
+      <div id="rm_payoutHint" class="muted" style="font-size:11px;margin-top:4px"></div></div>
   </div>
   <p class="muted" style="text-transform:uppercase;letter-spacing:.4px;font-size:12px">Activities</p>
   <div id="rm_items"></div>
@@ -765,7 +766,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.78';
+const BUILD = '2026-08-08.79';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3205,9 +3206,14 @@ async function viewReport(aid){
     $('rm_hours').value = (a.ReportedHours!==''&&a.ReportedHours!=null) ? a.ReportedHours : '';
     $('rm_date').value = a.SubmittedAt ? fmtDate(a.SubmittedAt) : '';
     $('rm_title_in').value = a.Title || '';
-    const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes' || !!a.PayoutCurrency;
-    $('rm_payout').parentElement.style.display = allowCur ? '' : 'none';
+    // The admin can always set the payout currency here, even where the contractor's own
+    // agreement does not let them choose it — the note below says which case this is.
+    const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes';
     $('rm_payout').value = a.PayoutCurrency || '';
+    const hint = $('rm_payoutHint');
+    if(hint) hint.innerHTML = allowCur
+      ? 'The contractor may choose this in their own report.'
+      : '<span style="color:var(--warn)">Their ICA does not allow choosing a currency — set it here only if it was agreed separately.</span>';
     loadReportRate(a.AssignmentID, r.rateOptions);
     const lump = a.PricingType==='lump';
     const hw = $('rm_hours') ? $('rm_hours').closest('div') : null;
