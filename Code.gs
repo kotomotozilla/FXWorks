@@ -18,11 +18,16 @@ const CONFIG = {
   COMPANY_NAME: 'Fraktalex Limited',
   // Who signs for the company unless someone else is named at generation time
   DEFAULT_SIGNATORY: 'Konstantin Maiorov',
-  DEFAULT_SIGNATORY_TITLE: 'Director'
+  DEFAULT_SIGNATORY_TITLE: 'Director',
+  // Who may sign for the company. Add or change names here.
+  SIGNATORIES: [
+    { name: 'Konstantin Maiorov', title: 'Director' },
+    { name: 'Elena Bigzaeva',     title: 'Director (PoA)' }
+  ]
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.76';
+const BUILD = '2026-08-08.77';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2800,8 +2805,11 @@ function adminAcceptDefaults_(d) {
   }
   if (!name) { name = CONFIG.DEFAULT_SIGNATORY; title = CONFIG.DEFAULT_SIGNATORY_TITLE; }
   if (!title) title = CONFIG.DEFAULT_SIGNATORY_TITLE;
-  return { ok: true, acceptedBy: name, acceptedTitle: title,
-           acceptedAt: (a && trim_(a.AcceptedAt)) || new Date().toISOString().slice(0, 10) };
+  return { ok: true, acceptedBy: name, acceptedTitle: title, signatories: CONFIG.SIGNATORIES,
+           // default to the day the report was submitted — acceptance normally follows it,
+           // and typing today's date by habit would misdate the payment term
+           acceptedAt: (a && trim_(a.AcceptedAt)) || (a && trim_(a.SubmittedAt).slice(0, 10))
+                       || new Date().toISOString().slice(0, 10) };
 }
 
 // Countersigning the report = acceptance and the trigger for payment (ICA clauses 3.2-3.4).

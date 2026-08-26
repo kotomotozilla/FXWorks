@@ -452,7 +452,7 @@
   <p class="muted">Countersigning the report is the acceptance of the work and the basis for payment. State who accepts it on behalf of the company and the date.</p>
   <div id="acc_err"></div>
   <div class="row">
-    <div style="flex:2"><label>Accepted by</label><input id="acc_name" placeholder="Konstantin Maiorov"></div>
+    <div style="flex:2"><label>Accepted by</label><select id="acc_name" onchange="accSignatoryChange()"></select></div>
     <div style="flex:1"><label>Title</label><input id="acc_role" placeholder="Director"></div>
   </div>
   <div style="height:10px"></div>
@@ -765,7 +765,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.76';
+const BUILD = '2026-08-08.77';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3096,14 +3096,27 @@ function upCalc(){
     + (capped?' <span style="color:var(--warn)">· values outside the agreed range were pulled back to the limits</span>':'')
     + ` · ceiling at this base: ${Math.round(b*st.k1Max*st.k2Max*st.k3Max*100)/100}%`;
 }
+// Who may accept on behalf of the company — the list comes from the server config.
+let ACC_SIGNERS = [];
+function accFillSignatories(list, name, title){
+  ACC_SIGNERS = (list && list.length) ? list : [{name:'Konstantin Maiorov', title:'Director'}];
+  const known = ACC_SIGNERS.some(x => x.name === name);
+  $('acc_name').innerHTML = ACC_SIGNERS.map(x =>
+      `<option value="${esc(x.name)}" ${x.name===name?'selected':''}>${esc(x.name)}${x.title?` — ${esc(x.title)}`:''}</option>`).join('')
+    + (name && !known ? `<option value="${esc(name)}" selected>${esc(name)}</option>` : '');
+  $('acc_role').value = title || (ACC_SIGNERS[0] ? ACC_SIGNERS[0].title : '');
+}
+function accSignatoryChange(){
+  const s = ACC_SIGNERS.find(x => x.name === $('acc_name').value);
+  if(s) $('acc_role').value = s.title || '';
+}
 let ACC_ID = '', PDF_AFTER_UPLIFT = false;
 async function askAccept(aid){
   ACC_ID = aid;
   notice('acc_err','','');
   try{
     const r = await api('accept_defaults',{ assignmentId:aid });
-    $('acc_name').value = r.acceptedBy || 'Konstantin Maiorov';
-    $('acc_role').value = r.acceptedTitle || 'Director';
+    accFillSignatories(r.signatories, r.acceptedBy, r.acceptedTitle);
     $('acc_date').value = r.acceptedAt || todayISO();
     $('acceptModal').classList.remove('hidden');   // show it at once; the uplift block fills in after
     await upLoad(aid);
@@ -3116,14 +3129,13 @@ async function askAccept(aid){
     return;
   }catch(e){
     upLoad(aid);
-    $('acc_name').value = $('acc_name').value || 'Konstantin Maiorov';
-    $('acc_role').value = $('acc_role').value || 'Director';
+    accFillSignatories(null, 'Konstantin Maiorov', 'Director');
     $('acc_date').value = todayISO();
   }
   $('acceptModal').classList.remove('hidden');
 }
 async function acceptNow(btn){
-  if(!$('acc_name').value.trim()){ notice('acc_err','err','Enter who accepts the report.'); return; }
+  if(!$('acc_name').value.trim()){ notice('acc_err','err','Pick who accepts the report.'); return; }
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
   try{
     const payload = { assignmentId:ACC_ID, acceptedBy:$('acc_name').value.trim(),
