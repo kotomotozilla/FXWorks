@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.77';
+const BUILD = '2026-08-08.78';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -149,6 +149,7 @@ function route_(action, d) {
     // Projects
     case 'create_project':     return adminCreateProject_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
+    case 'orphan_reports':     requireAdmin_(d); return orphanReports_();
     case 'get_project':        return adminGetProject_(d);
     case 'update_project':     return adminUpdateProject_(d);
     case 'delete_project':     return adminDeleteProject_(d);
@@ -2783,6 +2784,20 @@ function adminSetUplift_(d) {
   up.fields.UpdatedAt = new Date().toISOString();
   updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, up.fields);
   return { ok: true, uplift: up.info };
+}
+
+// Diagnostic: reports whose e-mail matches no counterparty — usually the address was
+// changed at some point and the older rows kept the previous one.
+function orphanReports_() {
+  var emails = {};
+  readAll_(SHEETS.counterparties).forEach(function (c) { if (trim_(c.Email)) emails[normEmail_(c.Email)] = trim_(c.Name); });
+  var out = [];
+  readAll_(SHEETS.assignments).forEach(function (a) {
+    var e = normEmail_(a.EmployeeEmail);
+    if (!e || !emails[e]) out.push({ id: a.AssignmentID, email: trim_(a.EmployeeEmail), name: trim_(a.EmployeeName),
+                                     project: trim_(a.ProjectName), status: trim_(a.Status) });
+  });
+  return { ok: true, orphans: out };
 }
 
 function adminAcceptDefaults_(d) {

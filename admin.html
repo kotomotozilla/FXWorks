@@ -765,7 +765,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.77';
+const BUILD = '2026-08-08.78';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -948,8 +948,17 @@ async function renderCpReports(cpId){
     catch(e){ el.innerHTML = '<div class="notice err">'+esc(e.message)+'</div>'; return; }
   }
   const cp = COUNTERPARTIES.find(c=>String(c.CounterpartyID)===String(cpId));
-  const email = cp ? String(cp.Email||'').toLowerCase() : '';
-  const rows = ASSIGNMENTS.filter(a=>String(a.EmployeeEmail||'').toLowerCase()===email && email);
+  if(!cp){ el.innerHTML=''; return; }
+  const email = String(cp.Email||'').trim().toLowerCase();
+  const name  = String(cp.Name||'').trim().toLowerCase();
+  // Reports are keyed by e-mail, but an address may have been changed at some point and the
+  // older rows kept the previous one — so match on the stored name as well.
+  const rows = ASSIGNMENTS.filter(a=>{
+    const ae = String(a.EmployeeEmail||'').trim().toLowerCase();
+    const an = String(a.EmployeeName||'').trim().toLowerCase();
+    return (email && ae === email) || (name && an === name);
+  });
+  const byName = rows.filter(a=>String(a.EmployeeEmail||'').trim().toLowerCase() !== email).length;
   if(!rows.length){ el.innerHTML = '<div class="muted" style="padding:6px 0">No reports yet.</div>'; return; }
 
   const dateOf = a => String(a.AcceptedAt || a.SubmittedAt || a.ReleasedAt || '').slice(0,10);
@@ -982,6 +991,7 @@ async function renderCpReports(cpId){
           <td><span class="tag ${a.AcceptedBy?'submitted':esc(a.Status)}">${esc(acc)}</span></td></tr>`;
       }).join('')
     + '</table></div>'
+    + (byName ? `<div class="muted" style="margin-top:6px;font-size:12px">${byName} report(s) matched by name — their stored e-mail differs from the one in this card.</div>` : '')
     + (Object.keys(totals).length
         ? `<div class="muted" style="margin-top:8px;font-size:13px">Submitted and accepted, by currency: `
           + Object.keys(totals).map(c=>`<b>${cur(c)}${money(Math.round(totals[c]*100)/100)}</b>`).join(' · ')
