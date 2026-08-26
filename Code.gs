@@ -22,7 +22,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.66';
+const BUILD = '2026-08-08.69';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -47,7 +47,9 @@ const HEADERS = {
                 'InsuranceAmount', 'RestrictedTerritories', 'RateAmount', 'RateBasis',
                 'InvoiceTrigger', 'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope',
                 'OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty',
-                'OptPayoutCurrency', 'ExternalForm', 'ExtractedAt', 'PricingType'],
+                'OptPayoutCurrency', 'ExternalForm', 'ExtractedAt', 'PricingType',
+                'OptUplift', 'UpliftBase', 'UpliftK1Min', 'UpliftK1Max', 'UpliftK2Min', 'UpliftK2Max',
+                'UpliftK3Min', 'UpliftK3Max', 'UpliftNumber', 'UpliftDate', 'UpliftFrom'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
   attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt'],
@@ -55,7 +57,9 @@ const HEADERS = {
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
                 'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt', 'PayoutCurrency', 'AcceptedBy', 'AcceptedTitle', 'AcceptedAt',
-                'ContractID', 'RateSource', 'PricingType'],
+                'ContractID', 'RateSource', 'PricingType',
+                'UpliftGranted', 'UpliftBase', 'UpliftK1', 'UpliftK2', 'UpliftK3',
+                'UpliftPercent', 'UpliftAmount', 'UpliftNote', 'UpliftSetBy', 'UpliftSetAt'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
 
@@ -152,6 +156,8 @@ function route_(action, d) {
     case 'remind_assignment':  return adminRemind_(d);
     case 'accept_assignment':  return adminAcceptAssignment_(d);
     case 'accept_defaults':    return adminAcceptDefaults_(d);
+    case 'uplift_settings':    requireAdmin_(d); return upliftFor_(d);
+    case 'set_uplift':         return adminSetUplift_(d);
     case 'delete_assignment':  return adminDeleteAssignment_(d);
     case 'admin_get_report':   return adminGetReport_(d);
     case 'admin_save_report':  return adminSaveReport_(d);
@@ -1213,7 +1219,7 @@ function v2DeleteDoc_(d) {
 // The template ids live in Script Properties, so they survive a redeploy and are
 // not baked into the code.
 // ─────────────────────────────────────────────────────────────────────────────
-var TPL_KEYS = ['tpl_b2b_agreement', 'tpl_b2b_sow', 'tpl_ica', 'tpl_ica_sow'];
+var TPL_KEYS = ['tpl_b2b_agreement', 'tpl_b2b_sow', 'tpl_ica', 'tpl_ica_sow', 'tpl_uplift'];
 
 function appSettings_() {
   var p = PropertiesService.getScriptProperties(), out = {};
@@ -1323,6 +1329,9 @@ function placeholders_(c, over) {
     CONTRACTOR_ADDRESS: trim_(cp.Address),
     CONTRACTOR_EMAIL: trim_(cp.Email),
     CONTRACTOR_PHONE: trim_(cp.Phone),
+    UPLIFT_NUMBER: trim_(c.UpliftNumber) || '2',   // Attachment 1 is the SOW
+    UPLIFT_DATE: fmtHuman_(c.UpliftDate || c.SignDate),
+    UPLIFT_FROM: fmtHuman_(c.UpliftFrom || c.StartDate || c.SignDate),
     CONTRACTOR_JURISDICTION: '',
     CONTRACTOR_REG_NUMBER: '',
     CONTRACTOR_BENEFICIARY_NAME: '',
@@ -1350,6 +1359,14 @@ function placeholders_(c, over) {
   v.CONTRACTOR_SWIFT = trim_(cpReq.Swift);
   v.CONTRACTOR_CORR_BANK = trim_(cpReq.CorrBank);
   v.CONTRACTOR_CORR_SWIFT = trim_(cpReq.CorrSwift);
+
+  // Uplift ranges printed into the amendment, with the ceiling worked out from them.
+  var ust = upliftSettings_(c);
+  v.UPLIFT_BASE = String(ust.base);
+  v.UPLIFT_K1_MIN = ust.k1Min.toFixed(2); v.UPLIFT_K1_MAX = ust.k1Max.toFixed(2);
+  v.UPLIFT_K2_MIN = ust.k2Min.toFixed(2); v.UPLIFT_K2_MAX = ust.k2Max.toFixed(2);
+  v.UPLIFT_K3_MIN = ust.k3Min.toFixed(2); v.UPLIFT_K3_MAX = ust.k3Max.toFixed(2);
+  v.UPLIFT_MAX = String(upliftMax_(ust));
 
   // Who signs for us is asked at generation time — the requisite set holds a default,
   // but the person actually signing can differ from one contract to the next.
@@ -1463,14 +1480,18 @@ function adminGenerateContract_(d) {
   requireAdmin_(d);
   var c = findRow_(SHEETS.contracts, 'ContractID', trim_(d.id));
   if (!c) return { ok: false, error: 'Contract not found' };
-  if (truthy_(c.ExternalForm)) return { ok: false, error: 'This contract uses an external form — nothing to generate' };
+  if (truthy_(c.ExternalForm) && trim_(d.part) !== 'uplift') return { ok: false, error: 'This contract uses an external form — nothing to generate' };
 
   var ica = (trim_(c.TemplateType) === 'ica');
-  var which = trim_(d.part) === 'sow' ? (ica ? 'tpl_ica_sow' : 'tpl_b2b_sow') : (ica ? 'tpl_ica' : 'tpl_b2b_agreement');
+  var part = trim_(d.part);
+  var which = (part === 'uplift') ? 'tpl_uplift'
+            : (part === 'sow') ? (ica ? 'tpl_ica_sow' : 'tpl_b2b_sow')
+            : (ica ? 'tpl_ica' : 'tpl_b2b_agreement');
+  if (part === 'uplift' && !truthy_(c.OptUplift)) return { ok: false, error: 'Turn on "Performance uplift" in the document settings first' };
   var tplId = PropertiesService.getScriptProperties().getProperty(which);
   if (!tplId) return { ok: false, error: 'Template is not configured yet (' + which + ') — set it in Settings' };
 
-  var name = (trim_(d.part) === 'sow' ? 'SOW ' : 'Agreement ') + trim_(c.Number);
+  var name = (part === 'uplift' ? 'Attachment 2 uplift ' : part === 'sow' ? 'SOW ' : 'Agreement ') + trim_(c.Number);
   var folder = contractsFolder_();
   var copy;
   try { copy = DriveApp.getFileById(tplId).makeCopy(name, folder); }
@@ -2239,7 +2260,7 @@ var DOC_TEXT_FIELDS = ['TemplateType', 'OurRole', 'OurRequisiteID', 'TheirRequis
   'CureDays', 'NoticeDays', 'TermYears', 'WarrantyPeriod', 'PenaltyDelayPercent', 'PenaltyFailurePercent',
   'PenaltyCapPercent', 'InsuranceAmount', 'RestrictedTerritories', 'RateBasis',
   'PaymentBasis', 'ReportFrequency', 'CompletionDate', 'PMName', 'SowScope', 'ExtractedAt'];
-var DOC_FLAGS = ['OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty', 'OptPayoutCurrency', 'ExternalForm'];
+var DOC_FLAGS = ['OptUplift', 'OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty', 'OptPayoutCurrency', 'ExternalForm'];
 
 function adminSaveContractDoc_(d) {
   requireAdmin_(d);
@@ -2599,6 +2620,41 @@ function adminInviteCounterparty_(d) {
   return { ok: true };
 }
 
+// ── Performance uplift ────────────────────────────────────────────────────────
+// Discretionary by design: nothing is added unless it is granted for that report.
+// The base defaults to what the amendment says but can be overridden per report,
+// so the ceiling is recalculated from whatever base is actually used.
+var UPLIFT_DEFAULTS = { base: 5, k1Min: 1, k1Max: 1.5, k2Min: 1, k2Max: 1.6, k3Min: 1, k3Max: 1.25 };
+
+function upliftSettings_(c) {
+  function pick(v, d) { var n = num_(v); return (v === '' || v == null || isNaN(n) || n <= 0) ? d : n; }
+  return {
+    enabled: truthy_(c && c.OptUplift),
+    base:  pick(c && c.UpliftBase,  UPLIFT_DEFAULTS.base),
+    k1Min: pick(c && c.UpliftK1Min, UPLIFT_DEFAULTS.k1Min), k1Max: pick(c && c.UpliftK1Max, UPLIFT_DEFAULTS.k1Max),
+    k2Min: pick(c && c.UpliftK2Min, UPLIFT_DEFAULTS.k2Min), k2Max: pick(c && c.UpliftK2Max, UPLIFT_DEFAULTS.k2Max),
+    k3Min: pick(c && c.UpliftK3Min, UPLIFT_DEFAULTS.k3Min), k3Max: pick(c && c.UpliftK3Max, UPLIFT_DEFAULTS.k3Max)
+  };
+}
+function upliftMax_(st) { return round2_(st.base * st.k1Max * st.k2Max * st.k3Max); }
+
+function clampK_(v, lo, hi) {
+  var n = num_(v);
+  if (isNaN(n) || n <= 0) n = lo;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+// Returns the percentage, the money and the coefficients actually used.
+function computeUplift_(st, feeBase, k1, k2, k3, base) {
+  var b = (base === '' || base == null) ? st.base : num_(base);
+  if (isNaN(b) || b < 0) b = st.base;
+  var a = clampK_(k1, st.k1Min, st.k1Max),
+      c2 = clampK_(k2, st.k2Min, st.k2Max),
+      c3 = clampK_(k3, st.k3Min, st.k3Max);
+  var pct = round2_(b * a * c2 * c3);
+  return { base: b, k1: a, k2: c2, k3: c3, percent: pct, amount: round2_(num_(feeBase) * pct / 100) };
+}
+
 var PAYOUT_CURRENCIES = ['EUR', 'USD', 'AED', 'SGD'];
 // The contractor may pick a payout currency when their OWN contract with us (an ICA)
 // allows it — not the contract the project happens to be linked to.
@@ -2618,6 +2674,34 @@ function payoutCur_(c) { c = trim_(c).toUpperCase(); return PAYOUT_CURRENCIES.in
 
 // Prefill for the acceptance dialog: whoever signs for us on the related contract,
 // falling back to our own default requisite set.
+// What the dialog needs to show: the ranges from the contract and whatever is stored already.
+function upliftFor_(d) {
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  if (!a) return { ok: false, error: 'Report not found' };
+  var c = trim_(a.ContractID) ? findRow_(SHEETS.contracts, 'ContractID', a.ContractID) : null;
+  var st = upliftSettings_(c);
+  var fee = num_(a.ReportedAmount);
+  if (!fee) fee = round2_(num_(a.ReportedHours) * num_(a.Rate));
+  return { ok: true, settings: st, max: upliftMax_(st), fee: fee, currency: trim_(a.Currency),
+           granted: truthy_(a.UpliftGranted),
+           base: a.UpliftBase === '' || a.UpliftBase == null ? st.base : num_(a.UpliftBase),
+           k1: num_(a.UpliftK1) || st.k1Min, k2: num_(a.UpliftK2) || st.k2Min, k3: num_(a.UpliftK3) || st.k3Min,
+           percent: num_(a.UpliftPercent), amount: num_(a.UpliftAmount), note: trim_(a.UpliftNote),
+           setBy: trim_(a.UpliftSetBy), setAt: trim_(a.UpliftSetAt), accepted: !!trim_(a.AcceptedBy) };
+}
+
+// Revising an uplift after acceptance changes what is payable, so it is recorded who did it.
+function adminSetUplift_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  if (!a) return { ok: false, error: 'Report not found' };
+  var who = trim_(d.setBy) || trim_(a.AcceptedBy) || CONFIG.DEFAULT_SIGNATORY;
+  var up = applyUpliftFields_(a, d, who);
+  up.fields.UpdatedAt = new Date().toISOString();
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, up.fields);
+  return { ok: true, uplift: up.info };
+}
+
 function adminAcceptDefaults_(d) {
   requireAdmin_(d);
   var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
@@ -2643,6 +2727,27 @@ function adminAcceptDefaults_(d) {
 }
 
 // Countersigning the report = acceptance and the trigger for payment (ICA clauses 3.2-3.4).
+// Shared by acceptance and by a later revision: work out what to store for the uplift.
+function applyUpliftFields_(a, d, who) {
+  var c = trim_(a.ContractID) ? findRow_(SHEETS.contracts, 'ContractID', a.ContractID) : null;
+  var st = upliftSettings_(c);
+  if (!st.enabled || !truthy_(d.upliftGranted)) {
+    return { fields: { UpliftGranted: 'no', UpliftPercent: '', UpliftAmount: '',
+                       UpliftK1: '', UpliftK2: '', UpliftK3: '', UpliftBase: '',
+                       UpliftNote: trim_(d.upliftNote),
+                       UpliftSetBy: who || '', UpliftSetAt: new Date().toISOString().slice(0, 10) },
+             info: { granted: false } };
+  }
+  var fee = num_(a.ReportedAmount);
+  if (!fee) fee = round2_(num_(a.ReportedHours) * num_(a.Rate));
+  var r = computeUplift_(st, fee, d.upliftK1, d.upliftK2, d.upliftK3, d.upliftBase);
+  return { fields: { UpliftGranted: 'yes', UpliftBase: r.base, UpliftK1: r.k1, UpliftK2: r.k2, UpliftK3: r.k3,
+                     UpliftPercent: r.percent, UpliftAmount: r.amount, UpliftNote: trim_(d.upliftNote),
+                     UpliftSetBy: who || '', UpliftSetAt: new Date().toISOString().slice(0, 10) },
+           info: { granted: true, percent: r.percent, amount: r.amount, fee: fee,
+                   total: round2_(fee + r.amount), k1: r.k1, k2: r.k2, k3: r.k3, base: r.base } };
+}
+
 function adminAcceptAssignment_(d) {
   requireAdmin_(d);
   var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
@@ -2657,9 +2762,13 @@ function adminAcceptAssignment_(d) {
   if (!by) return { ok: false, error: 'Enter the name of the person accepting the report' };
   var date = trim_(d.acceptedAt) || new Date().toISOString().slice(0, 10);
   var title = trim_(d.acceptedTitle);
-  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID,
-             { AcceptedBy: by, AcceptedTitle: title, AcceptedAt: date, UpdatedAt: new Date().toISOString() });
-  return { ok: true, acceptedBy: by, acceptedTitle: title, acceptedAt: date };
+  var upd = { AcceptedBy: by, AcceptedTitle: title, AcceptedAt: date, UpdatedAt: new Date().toISOString() };
+  var res = { ok: true, acceptedBy: by, acceptedTitle: title, acceptedAt: date };
+  var up = applyUpliftFields_(a, d, by);
+  for (var k in up.fields) upd[k] = up.fields[k];
+  res.uplift = up.info;
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
+  return res;
 }
 
 function adminRemind_(d) {

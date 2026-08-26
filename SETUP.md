@@ -140,3 +140,13 @@ Before anything is sent, emails, phone numbers, IBANs, account and registration 
 
 The message under "Read data from document" states which engine was used: *AI reading* or *rule-based reading*.
 Values are always only proposed — check them and press Save contract.
+
+## Generating contracts from the templates
+
+Upload the four templates from `fraktalex-templates.zip` to Drive and open each **as a Google Doc**
+(a .docx will not open for generation — use File → Save as Google Docs to convert). Then in a contract
+card press **Template settings** and paste the link of each one.
+
+Generation asks who signs for the company, their title and the date of signature, then produces a
+Google Doc and a PDF in the folder **FXWorks Contracts** and attaches the PDF to the contract as a draft.
+Optional blocks in Document settings decide which clauses appear.

@@ -185,7 +185,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-08-08.66';
+const BUILD='2026-08-08.69';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -407,6 +407,9 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
     <tr><td colspan="2">${list}</td></tr>
     ${a.PricingType==='lump' ? '' : `<tr><td class="label">The total number of hours spent:</td><td>${fmtH(hours)}</td></tr>`}
     <tr><td class="label">Amount due:</td><td>${amountDue}</td></tr>
+    ${String(a.UpliftGranted).toLowerCase()==='yes' ? `
+      <tr><td class="label">Performance uplift:</td><td>${esc(a.UpliftPercent)}% (${esc(a.UpliftBase)} \u00d7 ${esc(a.UpliftK1)} \u00d7 ${esc(a.UpliftK2)} \u00d7 ${esc(a.UpliftK3)}) \u2014 ${cur(a.Currency)}${fmtMoney(a.UpliftAmount)}</td></tr>
+      <tr><td class="label">Total payable:</td><td><b>${cur(a.Currency)}${fmtMoney(Math.round((amtRaw + (+a.UpliftAmount||0))*100)/100)}</b></td></tr>` : ''}
     <tr><td class="label">Currency elected for payment:</td><td>${a.PayoutCurrency ? esc(a.PayoutCurrency) : 'Base currency of the contract'}</td></tr>
   </table>
   ${perf}
