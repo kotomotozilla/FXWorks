@@ -64,6 +64,7 @@
   @keyframes sp{to{transform:rotate(360deg)}}
   .modal{position:fixed;inset:0;background:rgba(20,30,40,.4);display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;z-index:10;overflow:auto}
   .modal.top{z-index:30}
+  .modal.topmost{z-index:40}   /* opened on top of a .top dialog, e.g. uplift over acceptance */
   .modal .box{background:#fff;border-radius:16px;max-width:680px;width:100%;margin:auto;padding:22px}
   .modal .box.wide{max-width:1180px}
   .ctgrid{display:flex;gap:18px;align-items:stretch}
@@ -421,7 +422,7 @@
   </div>
 </div></div>
 
-<div id="upliftModal" class="modal top hidden"><div class="box" style="max-width:640px">
+<div id="upliftModal" class="modal topmost hidden"><div class="box" style="max-width:640px">
   <h2><span>Performance uplift</span><button class="x" onclick="closeModal('upliftModal')">×</button></h2>
   <p class="muted">Set the coefficients for this report. Changing them here changes the amount payable and is saved to the report, so the document and the record stay in step.</p>
   <div id="up_err"></div>
@@ -764,7 +765,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.72';
+const BUILD = '2026-08-08.73';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2633,21 +2634,24 @@ async function generateDoc(part, btn){
 // The rate is frozen when the report is created, but until it is submitted the choice can
 // still be corrected — a wrong contract, or work that turned out to be non-contractual.
 let RATE_OPT = null;
-async function loadReportRate(aid){
+async function loadReportRate(aid, preloaded){
   const wrap=$('rm_rateWrap'); if(!wrap) return;
   try{
-    const r = await api('report_rate_options',{assignmentId:aid});
+    // the options travel with the report itself; only fetch them when they did not
+    const r = preloaded || await api('report_rate_options',{assignmentId:aid});
     RATE_OPT = r;
+    const applyBtn = wrap.querySelector('button');
+    wrap.classList.remove('hidden');
+    // the state is set on every load — otherwise a report recalled after being submitted
+    // keeps the controls disabled from the previous time
+    $('rm_rateSrc').disabled = !!r.locked;
+    $('rm_rateOver').disabled = !!r.locked;
+    if(applyBtn) applyBtn.disabled = !!r.locked;
     if(r.locked){
-      wrap.classList.remove('hidden');
       $('rm_rateSrc').innerHTML = '';
-      $('rm_rateSrc').disabled = true; $('rm_rateOver').disabled = true;
       $('rm_rateMsg').innerHTML = 'The report has been submitted — recall it to change the rate.';
-      $('rm_rateSrc').closest('.row').querySelector('button').disabled = true;
       return;
     }
-    wrap.classList.remove('hidden');
-    $('rm_rateSrc').disabled = false; $('rm_rateOver').disabled = false;
     const cpr = r.counterpartyRate || {};
     let html = `<option value="">Counterparty rate${cpr.rate?` (${cur(cpr.currency)}${money(cpr.rate)}/h)`:''} — non-contractual</option>`;
     html += (r.contracts||[]).map(c=>{
@@ -3101,6 +3105,7 @@ async function askAccept(aid){
     $('acc_name').value = r.acceptedBy || 'Konstantin Maiorov';
     $('acc_role').value = r.acceptedTitle || 'Director';
     $('acc_date').value = r.acceptedAt || todayISO();
+    $('acceptModal').classList.remove('hidden');   // show it at once; the uplift block fills in after
     await upLoad(aid);
     const on = !!UP_ST;
     $('acc_upBtn').classList.toggle('hidden', !on);
@@ -3108,6 +3113,7 @@ async function askAccept(aid){
     if(on) $('acc_upHint').innerHTML = UP_ST.granted
       ? `Uplift set: <b>${UP_ST.percent}%</b> — press "Set performance uplift" to change it.`
       : 'No uplift for this report. Press "Set performance uplift" to grant one.';
+    return;
   }catch(e){
     upLoad(aid);
     $('acc_name').value = $('acc_name').value || 'Konstantin Maiorov';
@@ -3180,7 +3186,7 @@ async function viewReport(aid){
     const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes' || !!a.PayoutCurrency;
     $('rm_payout').parentElement.style.display = allowCur ? '' : 'none';
     $('rm_payout').value = a.PayoutCurrency || '';
-    loadReportRate(a.AssignmentID);
+    loadReportRate(a.AssignmentID, r.rateOptions);
     const lump = a.PricingType==='lump';
     const hw = $('rm_hours') ? $('rm_hours').closest('div') : null;
     if(hw) hw.style.display = lump ? 'none' : '';

@@ -22,7 +22,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.72';
+const BUILD = '2026-08-08.73';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2544,7 +2544,9 @@ function adminGetReport_(d) {
   if (!a) return { ok: false, error: 'Report not found' };
   var items = readAll_(SHEETS.entries).filter(function (r) { return r.AssignmentID === a.AssignmentID; });
   a.AllowPayoutCurrency = payoutAllowed_(a) ? 'yes' : 'no';
-  return { ok: true, assignment: a, items: items };
+  // ship the rate options with the report — one round trip instead of two
+  var opts = reportRateOptions_({ assignmentId: a.AssignmentID });
+  return { ok: true, assignment: a, items: items, rateOptions: opts.ok ? opts : null };
 }
 
 // A report freezes its rate when it is created, which is what protects past work.
@@ -2887,7 +2889,9 @@ function employeeGet_(d) {
   if (a.Status === 'recalled') return { ok: false, error: 'This task was recalled by the admin' };
   var items = readAll_(SHEETS.entries).filter(function (r) { return r.AssignmentID === a.AssignmentID; });
   a.AllowPayoutCurrency = payoutAllowed_(a) ? 'yes' : 'no';
-  return { ok: true, assignment: a, items: items };
+  // ship the rate options with the report — one round trip instead of two
+  var opts = reportRateOptions_({ assignmentId: a.AssignmentID });
+  return { ok: true, assignment: a, items: items, rateOptions: opts.ok ? opts : null };
 }
 function employeeWrite_(d, finalize) {
   var emp = verifyEmployee_(d);
