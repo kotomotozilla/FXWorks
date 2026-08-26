@@ -765,7 +765,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.73';
+const BUILD = '2026-08-08.75';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3089,7 +3089,7 @@ function upCalc(){
   const cl=(v,lo,hi)=>{ let n=parseFloat(v); if(isNaN(n)||n<=0) n=lo; return Math.min(hi,Math.max(lo,n)); };
   let b=parseFloat($('acc_upBase').value); if(isNaN(b)||b<0) b=st.base;
   const k1=cl($('acc_upK1').value,st.k1Min,st.k1Max), k2=cl($('acc_upK2').value,st.k2Min,st.k2Max), k3=cl($('acc_upK3').value,st.k3Min,st.k3Max);
-  const pct=Math.round(b*k1*k2*k3*100)/100, amt=Math.floor(fee*pct/100);   // uplift rounded down to a whole unit
+  const pct=Math.round(b*k1*k2*k3*100)/100, amt=Math.round(fee*pct/100);   // uplift rounded to the nearest whole unit
   const capped = (k1!=parseFloat($('acc_upK1').value)||k2!=parseFloat($('acc_upK2').value)||k3!=parseFloat($('acc_upK3').value));
   out.innerHTML = `${b} × ${k1} × ${k2} × ${k3} = <b>${pct}%</b> · uplift <b>${money(amt)} ${esc(cur)}</b>`
     + ` · fee ${money(fee)} → payable <b>${money(Math.round((fee+amt)*100)/100)} ${esc(cur)}</b>`
@@ -3238,12 +3238,22 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
       <div><span class="k">Date:</span> ______________________________</div>
       <div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>
     </div>`;
-  const perf = `
-    <div class="perf">
-      <div><span class="k">Performed by:</span> ${esc(a.EmployeeName||a.EmployeeEmail)}</div>
-      <div><span class="k">Date:</span> ${submitted||'\u2014'}</div>
-      ${withSign ? `<div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>` : ''}
-    </div>`;
+  // Signatures side by side. A table, not flex: print engines lay tables out reliably,
+  // and a stacked block was pushing the signatures onto a page of their own.
+  const signCol = (heading, name, dateStr, extra) => `
+        <div class="sch">${heading}</div>
+        <div class="scv">${name || '&nbsp;'}</div><div class="scl">Name</div>
+        ${extra ? `<div class="scv">${extra}</div><div class="scl">Title</div>` : ''}
+        <div class="scv">${dateStr || '&nbsp;'}</div><div class="scl">Date</div>
+        ${withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : ''}`;
+  const signRow = `
+    <table class="srow"><tr>
+      <td valign="top">${signCol('Performed by the Service Provider', esc(a.EmployeeName||a.EmployeeEmail), submitted||'\u2014', '')}</td>
+      <td valign="top">${signCol('Accepted on behalf of ' + esc(COMPANY),
+                a.AcceptedBy ? esc(a.AcceptedBy) : '',
+                a.AcceptedAt ? esc(fmtDate(a.AcceptedAt)) : '',
+                a.AcceptedTitle ? esc(a.AcceptedTitle) : '')}</td>
+    </tr></table>`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Project Work Completion Report</title>
 <style>
   @page{ margin:20mm 18mm; }
@@ -3258,10 +3268,12 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
   td.label{width:44%;font-weight:bold;background:#f2f2f2}
   ol{margin:2px 0 2px 18px;padding:0} li{margin:3px 0}
   .foot{margin-top:26px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;font-family:Arial,Helvetica,sans-serif}
-  .acc{margin-top:34px;font-size:11pt;border-top:1px solid #cbd3da;padding-top:14px}
-  .acc>div{margin:7px 0} .acch{font-weight:bold;margin-bottom:10px}
-  .perf{margin-top:40px;font-size:11pt} .perf>div{margin:7px 0} .perf .k{font-weight:bold}
-  .sig{margin-top:26px} .sigline{border-bottom:1px solid #333;max-width:340px;height:24px} .siglbl{font-size:9pt;color:#555;margin-top:3px;font-family:Arial,Helvetica,sans-serif}
+  .srow{width:100%;margin-top:24px;font-size:10.5pt;border-collapse:separate;border-spacing:0;page-break-inside:avoid;break-inside:avoid}
+  .srow td{width:50%;border:0;padding:0 26px 0 0;vertical-align:top}
+  .srow td:last-child{padding-right:0;padding-left:26px}
+  .sch{font-weight:bold;margin:0 0 10px;line-height:1.25;height:2.5em;overflow:hidden}
+  .scv{border-bottom:1px solid #333;padding:2px 0 3px;min-height:19px}
+  .scl{font-size:8.5pt;color:#555;margin:2px 0 10px;font-family:Arial,Helvetica,sans-serif}
   @media print{ .no-print{display:none} body{padding:0} }
 </style></head><body>
   <div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>
@@ -3280,8 +3292,7 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
       <tr><td class="label">Total payable:</td><td><b>${cur(a.Currency)}${money(Math.round((amtRaw + (+a.UpliftAmount||0))*100)/100)}</b></td></tr>` : ''}
     <tr><td class="label">Currency elected for payment:</td><td>${a.PayoutCurrency ? esc(a.PayoutCurrency) : 'Base currency of the contract'}</td></tr>
   </table>
-  ${perf}
-  ${accepted}
+  ${signRow}
   <div class="foot">CONFIDENTIAL</div>
   <script>setTimeout(function(){try{window.print();}catch(e){}},500);<\/script>
 </body></html>`;
