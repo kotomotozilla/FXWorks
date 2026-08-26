@@ -22,7 +22,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.71';
+const BUILD = '2026-08-08.72';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2725,7 +2725,10 @@ function computeUplift_(st, feeBase, k1, k2, k3, base) {
       c2 = clampK_(k2, st.k2Min, st.k2Max),
       c3 = clampK_(k3, st.k3Min, st.k3Max);
   var pct = round2_(b * a * c2 * c3);
-  return { base: b, k1: a, k2: c2, k3: c3, percent: pct, amount: round2_(num_(feeBase) * pct / 100) };
+  // The percentage stays exact; only the money is rounded, and always down, so the uplift
+  // never exceeds what the percentage gives. The total is left as it is.
+  var amt = Math.floor(num_(feeBase) * pct / 100);
+  return { base: b, k1: a, k2: c2, k3: c3, percent: pct, amount: amt };
 }
 
 var PAYOUT_CURRENCIES = ['EUR', 'USD', 'AED', 'SGD'];

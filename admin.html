@@ -764,7 +764,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.71';
+const BUILD = '2026-08-08.72';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3085,7 +3085,7 @@ function upCalc(){
   const cl=(v,lo,hi)=>{ let n=parseFloat(v); if(isNaN(n)||n<=0) n=lo; return Math.min(hi,Math.max(lo,n)); };
   let b=parseFloat($('acc_upBase').value); if(isNaN(b)||b<0) b=st.base;
   const k1=cl($('acc_upK1').value,st.k1Min,st.k1Max), k2=cl($('acc_upK2').value,st.k2Min,st.k2Max), k3=cl($('acc_upK3').value,st.k3Min,st.k3Max);
-  const pct=Math.round(b*k1*k2*k3*100)/100, amt=Math.round(fee*pct/100*100)/100;
+  const pct=Math.round(b*k1*k2*k3*100)/100, amt=Math.floor(fee*pct/100);   // uplift rounded down to a whole unit
   const capped = (k1!=parseFloat($('acc_upK1').value)||k2!=parseFloat($('acc_upK2').value)||k3!=parseFloat($('acc_upK3').value));
   out.innerHTML = `${b} × ${k1} × ${k2} × ${k3} = <b>${pct}%</b> · uplift <b>${money(amt)} ${esc(cur)}</b>`
     + ` · fee ${money(fee)} → payable <b>${money(Math.round((fee+amt)*100)/100)} ${esc(cur)}</b>`
