@@ -755,7 +755,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.69';
+const BUILD = '2026-08-08.70';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2626,7 +2626,20 @@ const UPLIFT_DEF = { base:5, k1Min:1, k1Max:1.5, k2Min:1, k2Max:1.6, k3Min:1, k3
 function upliftToggle(){
   const on = $('dc_optUplift') && $('dc_optUplift').checked;
   if($('dc_upliftWrap')) $('dc_upliftWrap').classList.toggle('hidden', !on);
-  if(on) upliftMaxHint();
+  if(on){ upliftFillDefaults(); upliftMaxHint(); }
+}
+// Empty fields would mean "use the defaults" anyway — better to show the numbers
+// than to leave the block blank and make them look unset.
+function upliftFillDefaults(){
+  const set = (id, v) => { const el=$(id); if(el && !String(el.value).trim()) el.value = v; };
+  set('dc_upliftBase', UPLIFT_DEF.base);
+  set('dc_upliftK1Min', UPLIFT_DEF.k1Min.toFixed(2)); set('dc_upliftK1Max', UPLIFT_DEF.k1Max.toFixed(2));
+  set('dc_upliftK2Min', UPLIFT_DEF.k2Min.toFixed(2)); set('dc_upliftK2Max', UPLIFT_DEF.k2Max.toFixed(2));
+  set('dc_upliftK3Min', UPLIFT_DEF.k3Min.toFixed(2)); set('dc_upliftK3Max', UPLIFT_DEF.k3Max.toFixed(2));
+  set('dc_upliftNumber', '2');
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(EDIT_CT));
+  set('dc_upliftDate', (c && c.SignDate) ? fmtDate(c.SignDate) : todayISO());
+  set('dc_upliftFrom', (c && (c.StartDate || c.SignDate)) ? fmtDate(c.StartDate || c.SignDate) : todayISO());
 }
 function upliftVals(){
   const g = (id, d) => { const v = parseFloat(($(id)||{}).value); return (isNaN(v)||v<0) ? d : v; };
