@@ -22,7 +22,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.70';
+const BUILD = '2026-08-08.71';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -161,6 +161,8 @@ function route_(action, d) {
     case 'delete_assignment':  return adminDeleteAssignment_(d);
     case 'admin_get_report':   return adminGetReport_(d);
     case 'admin_save_report':  return adminSaveReport_(d);
+    case 'report_rate_options': requireAdmin_(d); return reportRateOptions_(d);
+    case 'set_report_rate':    return adminSetReportRate_(d);
     // Employee
     case 'list_my_assignments': return employeeList_(d);
     case 'get_assignment':      return employeeGet_(d);
@@ -2543,6 +2545,77 @@ function adminGetReport_(d) {
   var items = readAll_(SHEETS.entries).filter(function (r) { return r.AssignmentID === a.AssignmentID; });
   a.AllowPayoutCurrency = payoutAllowed_(a) ? 'yes' : 'no';
   return { ok: true, assignment: a, items: items };
+}
+
+// A report freezes its rate when it is created, which is what protects past work.
+// Until it is submitted, though, the choice can still be corrected — the wrong contract
+// may have been picked, or the work turned out to be non-contractual after all.
+function reportRateOptions_(d) {
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  if (!a) return { ok: false, error: 'Report not found' };
+  var cp = findRow_(SHEETS.counterparties, 'Email', normEmail_(a.EmployeeEmail));
+  var list = [];
+  if (cp) {
+    readAll_(SHEETS.contracts).forEach(function (c) {
+      if (String(c.CounterpartyID) !== String(cp.CounterpartyID)) return;
+      list.push({ id: c.ContractID, number: trim_(c.Number),
+                  pricing: (trim_(c.PricingType) === 'hourly') ? 'hourly' : 'lump',
+                  amount: num_(c.Amount), currency: trim_(c.Currency) });
+    });
+  }
+  return { ok: true,
+           locked: (trim_(a.Status) === 'submitted' || !!trim_(a.AcceptedBy)),
+           current: { contractId: trim_(a.ContractID), rate: num_(a.Rate),
+                      amount: num_(a.ReportedAmount), currency: trim_(a.Currency),
+                      pricing: trim_(a.PricingType), source: trim_(a.RateSource) },
+           counterpartyRate: cp ? { rate: num_(cp.Rate), currency: trim_(cp.Currency) } : null,
+           contracts: list };
+}
+
+function adminSetReportRate_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  if (!a) return { ok: false, error: 'Report not found' };
+  if (trim_(a.Status) === 'submitted' || trim_(a.AcceptedBy)) {
+    return { ok: false, error: 'The report has been submitted — recall it first to change the rate' };
+  }
+  var cp = findRow_(SHEETS.counterparties, 'Email', normEmail_(a.EmployeeEmail));
+  if (!cp) return { ok: false, error: 'Counterparty not found' };
+
+  var contractId = trim_(d.contractId), upd = {};
+  if (contractId) {
+    var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
+    if (!c) return { ok: false, error: 'Contract not found' };
+    if (String(c.CounterpartyID) !== String(cp.CounterpartyID)) return { ok: false, error: 'That contract belongs to another counterparty' };
+    var pricing = (trim_(c.PricingType) === 'hourly') ? 'hourly' : 'lump';
+    upd.ContractID = contractId;
+    upd.RateSource = 'contract';
+    upd.PricingType = pricing;
+    upd.Currency = CURRENCIES.indexOf(trim_(c.Currency)) >= 0 ? trim_(c.Currency) : trim_(a.Currency);
+    upd.Rate = (pricing === 'lump') ? '' : num_(c.Amount);
+    upd.ReportedAmount = (pricing === 'lump') ? num_(c.Amount) : round2_(num_(a.ReportedHours) * num_(c.Amount));
+    if (pricing === 'lump') upd.ReportedHours = '';
+  } else {
+    upd.ContractID = '';
+    upd.RateSource = 'counterparty';
+    upd.PricingType = 'hourly';
+    upd.Currency = CURRENCIES.indexOf(trim_(cp.Currency)) >= 0 ? trim_(cp.Currency) : 'USD';
+    upd.Rate = num_(cp.Rate);
+    upd.ReportedAmount = round2_(num_(a.ReportedHours) * num_(cp.Rate));
+  }
+  // an override typed by hand wins over whatever the source says
+  if (d.rate !== undefined && trim_(d.rate) !== '') {
+    upd.Rate = num_(d.rate);
+    if (upd.PricingType !== 'lump') upd.ReportedAmount = round2_(num_(a.ReportedHours) * num_(d.rate));
+  }
+  // an uplift computed on the old fee no longer matches, so it is cleared
+  if (truthy_(a.UpliftGranted)) {
+    upd.UpliftGranted = 'no'; upd.UpliftPercent = ''; upd.UpliftAmount = '';
+    upd.UpliftK1 = ''; upd.UpliftK2 = ''; upd.UpliftK3 = ''; upd.UpliftBase = '';
+  }
+  upd.UpdatedAt = new Date().toISOString();
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
+  return { ok: true, rate: upd.Rate, currency: upd.Currency, amount: upd.ReportedAmount, pricing: upd.PricingType };
 }
 
 function adminSaveReport_(d) {

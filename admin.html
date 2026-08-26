@@ -723,6 +723,15 @@
   <h2><span id="rm_title">Report</span><button class="x" onclick="closeModal('repModal')">×</button></h2>
   <div id="rm_sub" class="muted" style="margin-bottom:10px"></div>
   <div id="rm_err"></div>
+  <div id="rm_rateWrap" class="hidden" style="margin-bottom:12px;padding:10px;border:1px dashed var(--line);border-radius:10px">
+    <div class="row" style="align-items:end">
+      <div style="flex:2"><label>Rate for this report</label><select id="rm_rateSrc" onchange="rateSrcChange()"></select></div>
+      <div style="flex:0 0 140px" id="rm_rateOverWrap"><label>Rate override</label><input id="rm_rateOver" type="number" step="0.01" min="0" placeholder="—"></div>
+      <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="applyReportRate(this)">Apply rate</button></div>
+    </div>
+    <div id="rm_rateMsg" class="muted" style="margin-top:8px;font-size:13px"></div>
+  </div>
+
   <div class="row" style="margin-bottom:12px">
     <div style="flex:2"><label>Report title</label><input id="rm_title_in" placeholder="e.g. May 2026 / Phase 1"></div>
     <div><label>Currency elected for payment</label>
@@ -755,7 +764,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.70';
+const BUILD = '2026-08-08.71';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2621,6 +2630,62 @@ async function generateDoc(part, btn){
   finally{ btn.disabled=false; btn.textContent = (part==='sow'?'Generate SOW':'Generate agreement'); }
 }
 
+// The rate is frozen when the report is created, but until it is submitted the choice can
+// still be corrected — a wrong contract, or work that turned out to be non-contractual.
+let RATE_OPT = null;
+async function loadReportRate(aid){
+  const wrap=$('rm_rateWrap'); if(!wrap) return;
+  try{
+    const r = await api('report_rate_options',{assignmentId:aid});
+    RATE_OPT = r;
+    if(r.locked){
+      wrap.classList.remove('hidden');
+      $('rm_rateSrc').innerHTML = '';
+      $('rm_rateSrc').disabled = true; $('rm_rateOver').disabled = true;
+      $('rm_rateMsg').innerHTML = 'The report has been submitted — recall it to change the rate.';
+      $('rm_rateSrc').closest('.row').querySelector('button').disabled = true;
+      return;
+    }
+    wrap.classList.remove('hidden');
+    $('rm_rateSrc').disabled = false; $('rm_rateOver').disabled = false;
+    const cpr = r.counterpartyRate || {};
+    let html = `<option value="">Counterparty rate${cpr.rate?` (${cur(cpr.currency)}${money(cpr.rate)}/h)`:''} — non-contractual</option>`;
+    html += (r.contracts||[]).map(c=>{
+      const kind = c.pricing==='hourly' ? 'hourly' : 'lump sum';
+      const sel = String(r.current.contractId)===String(c.id) ? ' selected' : '';
+      return `<option value="${esc(c.id)}"${sel}>${esc(c.number)} · ${kind}${c.amount?` · ${cur(c.currency)}${money(c.amount)}`:''}</option>`;
+    }).join('');
+    $('rm_rateSrc').innerHTML = html;
+    $('rm_rateOver').value = '';
+    rateSrcChange();
+  }catch(e){ wrap.classList.add('hidden'); RATE_OPT=null; }
+}
+function rateSrcChange(){
+  if(!RATE_OPT) return;
+  const id = $('rm_rateSrc').value;
+  const c = (RATE_OPT.contracts||[]).find(x=>String(x.id)===String(id));
+  const lump = c && c.pricing==='lump';
+  $('rm_rateOverWrap').classList.toggle('hidden', !!lump);
+  const cur0 = RATE_OPT.current;
+  $('rm_rateMsg').innerHTML = lump
+    ? `Lump sum — the report carries the contract amount and no hours.`
+    : `Now: ${cur0.rate?`${cur(cur0.currency)}${money(cur0.rate)}/h`:'—'}`
+      + ` · ${cur0.source==='contract'?'from a contract':'counterparty rate'}`
+      + ` · changing it recalculates the amount and clears any uplift set for this report.`;
+}
+async function applyReportRate(btn){
+  if(!REP) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  try{
+    const r = await api('set_report_rate',{ assignmentId:REP.AssignmentID,
+      contractId:$('rm_rateSrc').value, rate:$('rm_rateOver').value });
+    const rr = await api('admin_get_report',{assignmentId:REP.AssignmentID});
+    REP = rr.assignment;
+    viewReport(REP.AssignmentID);
+    notice('rm_err','ok',`Rate applied: ${r.rate?`${cur(r.currency)}${money(r.rate)}`:'lump sum'} · amount ${cur(r.currency)}${money(r.amount)}`);
+  }catch(e){ notice('rm_err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Apply rate'; }
+}
 // ── Performance uplift ──
 const UPLIFT_DEF = { base:5, k1Min:1, k1Max:1.5, k2Min:1, k2Max:1.6, k3Min:1, k3Max:1.25 };
 function upliftToggle(){
@@ -3115,6 +3180,7 @@ async function viewReport(aid){
     const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes' || !!a.PayoutCurrency;
     $('rm_payout').parentElement.style.display = allowCur ? '' : 'none';
     $('rm_payout').value = a.PayoutCurrency || '';
+    loadReportRate(a.AssignmentID);
     const lump = a.PricingType==='lump';
     const hw = $('rm_hours') ? $('rm_hours').closest('div') : null;
     if(hw) hw.style.display = lump ? 'none' : '';
