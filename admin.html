@@ -112,6 +112,7 @@
       <button id="tab-contracts" onclick="switchTab('contracts')">Contracts</button>
       <button id="tab-invoices" onclick="switchTab('invoices')">Invoices</button>
       <button id="tab-counterparties" onclick="switchTab('counterparties')">Counterparties</button>
+      <button id="tab-perf" onclick="switchTab('perf')">By performer</button>
       <button id="tab-costs" onclick="switchTab('costs')">Costs</button>
       <button id="tab-v2" onclick="switchTab('v2')">Contracts 2.0</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
@@ -158,6 +159,26 @@
         </div>
         <div id="invErr"></div>
         <div class="scroll"><table id="invTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- BY PERFORMER -->
+    <section id="view-perf" class="hidden">
+      <div class="panel">
+        <h2>Reports by performer</h2>
+        <p class="muted">Everything one person has reported, whichever project or contract it belongs to. Click a column heading to sort.</p>
+        <div id="perfErr"></div>
+        <div class="row" style="align-items:end">
+          <div style="flex:2 1 320px"><label>Performer</label><select id="perf_who" onchange="perfRender()"></select></div>
+          <div style="flex:0 0 170px"><label>From</label><input id="perf_from" type="date" onchange="perfRender()"></div>
+          <div style="flex:0 0 170px"><label>To</label><input id="perf_to" type="date" onchange="perfRender()"></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="perfClearDates()">All time</button></div>
+        </div>
+        <div id="perf_summary" style="margin-top:10px"></div>
+      </div>
+
+      <div class="panel">
+        <div class="scroll"><table id="perfTable" class="cost"><tbody><tr><td class="empty">Pick a performer.</td></tr></tbody></table></div>
       </div>
     </section>
 
@@ -801,7 +822,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.86';
+const BUILD = '2026-08-08.87';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -859,9 +880,9 @@ function enterApp(){
 }
 function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){
-  ['projects','contracts','invoices','counterparties','costs','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit();
-  document.querySelector('.wrap').classList.toggle('wide', t==='costs');
+  ['projects','contracts','invoices','counterparties','perf','costs','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit();
+  document.querySelector('.wrap').classList.toggle('wide', t==='costs' || t==='perf');
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
 function ctNumber(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?c.Number:''; }
@@ -2044,6 +2065,84 @@ function v2Export(){
   notice('v2Err','ok','Exported '+esc(name)+' — the file contains the full clause texts, so share it only where that is fine.');
 }
 function v2Toggle(id){ V2.open[id] = !V2.open[id]; v2Render(); }
+
+// ── Reports by performer ──
+const PERF_SORT = { key:'date', dir:-1 };
+function perfInit(){
+  const sel=$('perf_who');
+  const people = COUNTERPARTIES.filter(c=>String(c.HasReportingAccess).toLowerCase()==='yes')
+    .sort((a,b)=>String(a.Name||'').localeCompare(String(b.Name||'')));
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">— pick a performer —</option>'
+    + people.map(c=>`<option value="${esc(c.Email||'')}" ${keep===c.Email?'selected':''}>${esc(c.Name||c.Email)}</option>`).join('');
+  if(!ASSIGNMENTS.length){
+    api('list_projects').then(r=>{ PROJECTS=r.projects||[]; ASSIGNMENTS=r.assignments||[]; perfRender(); })
+      .catch(e=>notice('perfErr','err', esc(e.message)));
+  } else perfRender();
+}
+function perfClearDates(){ $('perf_from').value=''; $('perf_to').value=''; perfRender(); }
+function perfSort(key){
+  if(PERF_SORT.key===key) PERF_SORT.dir = -PERF_SORT.dir; else { PERF_SORT.key=key; PERF_SORT.dir=1; }
+  perfRender();
+}
+function perfRender(){
+  const tb=$('perfTable').querySelector('tbody');
+  const email=String($('perf_who').value||'').toLowerCase();
+  if(!email){ tb.innerHTML='<tr><td class="empty">Pick a performer.</td></tr>'; $('perf_summary').innerHTML=''; return; }
+  const from=$('perf_from').value, to=$('perf_to').value;
+  const dateOf = a => String(a.SubmittedAt || a.AcceptedAt || a.ReleasedAt || '').slice(0,10);
+  const feeOf = a => (a.ReportedAmount!==''&&a.ReportedAmount!=null)
+      ? +a.ReportedAmount : Math.round((+a.ReportedHours||0)*(+a.Rate||0)*100)/100;
+  const upOf = a => String(a.UpliftGranted).toLowerCase()==='yes' ? (+a.UpliftAmount||0) : 0;
+
+  let rows = ASSIGNMENTS.filter(a=>{
+    if(String(a.EmployeeEmail||'').toLowerCase()!==email) return false;
+    const d = dateOf(a);
+    if(from && d && d<from) return false;
+    if(to && d && d>to) return false;
+    return true;
+  });
+
+  const val = (a,k)=>({ date:dateOf(a), project:String(a.ProjectName||''),
+      contract:a.ContractID?String(ctNumber(a.ContractID)):'',
+      hours:+a.ReportedHours||0, fee:feeOf(a), uplift:upOf(a),
+      status:(a.AcceptedBy?'accepted':String(a.Status||'')) }[k]);
+  rows.sort((a,b)=>{
+    const x=val(a,PERF_SORT.key), y=val(b,PERF_SORT.key);
+    if(typeof x==='number' && typeof y==='number') return (x-y)*PERF_SORT.dir;
+    return String(x).localeCompare(String(y),undefined,{numeric:true})*PERF_SORT.dir;
+  });
+
+  const th=(k,label,cls)=>{
+    const arr = PERF_SORT.key===k ? (PERF_SORT.dir===1?' ↑':' ↓') : '';
+    return `<th class="srt ${cls||''}" onclick="perfSort('${k}')">${label}${arr}</th>`;
+  };
+  tb.innerHTML = '<tr>'+th('date','Submitted')+th('project','Project')+th('contract','Contract')
+    + th('hours','Hours','num')+th('fee','Fee','num')+th('uplift','Uplift','num')+th('status','Status')+'</tr>'
+    + (rows.length ? rows.map(a=>{
+        const s=cur(a.Currency), fee=feeOf(a), up=upOf(a);
+        return `<tr>
+          <td class="muted">${esc(dateOf(a)?fmtDate(dateOf(a)):'—')}</td>
+          <td>${esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}</td>
+          <td class="muted">${a.ContractID?esc(ctNumber(a.ContractID)):'—'}</td>
+          <td class="num">${a.PricingType==='lump'?'—':(a.ReportedHours||'—')}</td>
+          <td class="num">${fee?s+money(fee):'—'}</td>
+          <td class="num">${up?`${s}${money(up)} <span class="muted">${esc(a.UpliftPercent)}%</span>`:'—'}</td>
+          <td><span class="tag ${a.AcceptedBy?'submitted':esc(a.Status)}">${esc(a.AcceptedBy?'accepted':statusEn(a.Status))}</span></td>
+        </tr>`;
+      }).join('')
+      : '<tr><td class="empty" colspan="7">No reports in this period.</td></tr>');
+
+  // totals by currency, counting what is owed and what is on its way separately
+  const acc={}, pend={};
+  rows.forEach(a=>{
+    const c=a.Currency||'', t=feeOf(a)+upOf(a);
+    if(a.AcceptedBy) acc[c]=(acc[c]||0)+t;
+    else if(a.Status==='submitted') pend[c]=(pend[c]||0)+t;
+  });
+  const fmt = o => Object.keys(o).length ? Object.keys(o).map(c=>`<b>${cur(c)}${money(Math.round(o[c]*100)/100)}</b>`).join(' · ') : '—';
+  $('perf_summary').innerHTML = `<span class="muted">${rows.length} report(s) · accepted: ${fmt(acc)} · submitted, not yet accepted: ${fmt(pend)}</span>`;
+}
 
 // ── Costs ──
 function bucketText(b){
