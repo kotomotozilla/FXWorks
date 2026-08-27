@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.82';
+const BUILD = '2026-08-08.83';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2770,7 +2770,11 @@ function costReport_(d) {
     });
     var n = 0, nPending = 0;
     assignments.forEach(function (a) {
-      if (!ids[String(trim_(a.ContractID))]) return;
+      // A report reaches a contract two ways: directly, when a contract was chosen for the
+      // report, or through its project, which may itself be linked to a contract.
+      var link = trim_(a.ContractID);
+      if (!link) { var pr = projById[a.ProjectID]; if (pr) link = trim_(pr.ContractID); }
+      if (!ids[String(link)]) return;
       var st = trim_(a.Status), dt = reportDateOf_(a);
       if (st === 'recalled' || st === 'draft' || st === 'released') return;
       if (!inRange(dt)) return;
@@ -2789,7 +2793,9 @@ function costReport_(d) {
   // projects with no contract behind them, grouped by who reported
   var offRows = {};
   assignments.forEach(function (a) {
-    if (trim_(a.ContractID)) return;
+    var link = trim_(a.ContractID);
+    if (!link) { var pr0 = projById[a.ProjectID]; if (pr0) link = trim_(pr0.ContractID); }
+    if (link) return;                      // it belongs to a contract, counted above
     var st = trim_(a.Status), dt = reportDateOf_(a);
     if (st === 'recalled' || st === 'draft' || st === 'released') return;
     if (!inRange(dt)) return;
