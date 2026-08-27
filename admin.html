@@ -855,7 +855,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.91';
+const BUILD = '2026-08-08.92';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2157,8 +2157,13 @@ async function payParse(btn){
 function payRender(){
   $('pay_matchPanel').style.display = PAY_ROWS.length ? '' : 'none';
   const tb=$('payTable').querySelector('tbody');
+  // One report settles one payment, so a report already taken by another line is not
+  // offered again — except on the line that holds it.
+  const taken = {};
+  PAY_ROWS.forEach(x=>{ if(x.match) taken[String(x.match.id)] = 1; });
   const opts = (sel) => '<option value="">— not matched —</option>'
-    + PAY_CAND.map(c=>`<option value="${esc(c.id)}" ${String(sel)===String(c.id)?'selected':''}>`
+    + PAY_CAND.filter(c=>!taken[String(c.id)] || String(sel)===String(c.id))
+        .map(c=>`<option value="${esc(c.id)}" ${String(sel)===String(c.id)?'selected':''}>`
         + `${esc(c.date)} · ${esc(c.project||'')}${c.title?' · '+esc(c.title):''} · ${cur(c.currency)}${money(c.amount)}</option>`).join('');
   tb.innerHTML = '<tr><th>Paid</th><th class="num">Amount</th><th>Reference</th><th>Report it settles</th><th class="num">Difference</th></tr>'
     + PAY_ROWS.map((x,i)=>`<tr>
@@ -2178,7 +2183,7 @@ function payDiff(i){
   const id=$('pay_sel_'+i).value;
   const c=PAY_CAND.find(x=>String(x.id)===String(id));
   PAY_ROWS[i].match = c || null;
-  $('pay_diff_'+i).innerHTML = c ? payDiffText(PAY_ROWS[i].line, c, null) : '—';
+  payRender();   // redraw so a freed report reappears in the other lines
 }
 async function paySave(btn){
   const cp=$('pay_cp').value;
