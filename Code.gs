@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.84';
+const BUILD = '2026-08-08.85';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2756,81 +2756,110 @@ function costReport_(d) {
   var byId = {}, projById = {};
   contracts.forEach(function (c) { byId[c.ContractID] = c; });
   projects.forEach(function (p) { projById[p.ProjectID] = p; });
+  var topOf = function (id) {
+    var c = byId[id];
+    if (!c) return '';
+    return trim_(c.ParentContractID) ? trim_(c.ParentContractID) : String(c.ContractID);
+  };
 
-  // top-level contracts only; a sub-contract is reported inside its parent
-  var rows = [];
-  contracts.forEach(function (c) {
-    if (trim_(c.ParentContractID)) return;
-    var subs = contracts.filter(function (x) { return String(x.ParentContractID) === String(c.ContractID); });
-    var subCost = emptyBucket_(), repCost = emptyBucket_(), pending = emptyBucket_();
-    var ids = {}; ids[String(c.ContractID)] = 1;
-    subs.forEach(function (x) {
-      ids[String(x.ContractID)] = 1;
-      if (inRange(String(trim_(x.SignDate)).slice(0, 10))) addTo_(subCost, x.Currency, x.Amount, trim_(x.SignDate));
-    });
-    var n = 0, nPending = 0;
-    assignments.forEach(function (a) {
-      // A report reaches a contract two ways: directly, when a contract was chosen for the
-      // report, or through its project, which may itself be linked to a contract.
-      var link = trim_(a.ContractID);
-      if (!link) { var pr = projById[a.ProjectID]; if (pr) link = trim_(pr.ContractID); }
-      if (!ids[String(link)]) return;
-      var st = trim_(a.Status), dt = reportDateOf_(a);
-      if (st === 'recalled' || st === 'draft' || st === 'released') return;
-      if (!inRange(dt)) return;
-      if (trim_(a.AcceptedBy)) { addTo_(repCost, a.Currency, reportTotal_(a), dt); n++; }
-      else if (st === 'submitted') { addTo_(pending, a.Currency, reportTotal_(a), dt); nPending++; }
-    });
-    rows.push({
-      id: c.ContractID, number: trim_(c.Number), counterparty: cpName_(c.CounterpartyID),
-      direction: trim_(c.Direction), currency: trim_(c.Currency), amount: num_(c.Amount),
-      amountUsd: num_(c.AmountUSD) || toUsd_(c.Currency, c.Amount, c.SignDate),
-      subCount: subs.length, subCost: subCost, repCost: repCost, pending: pending,
-      reports: n, reportsPending: nPending
-    });
-  });
+  // A report carries two links: the contract the performer works under (their ICA), and the
+  // contract the work is done for (through the project). Both views are needed — one shows
+  // what a performer has earned, the other what a job has cost across everyone on it.
+  var byPerformer = {}, byJob = {};
+  function bucketFor(store, id) {
+    if (!store[id]) store[id] = { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0,
+                                  reportsPending: 0, people: {} };
+    return store[id];
+  }
 
-  // projects with no contract behind them, grouped by who reported
-  var offRows = {};
   assignments.forEach(function (a) {
-    var link = trim_(a.ContractID);
-    if (!link) { var pr0 = projById[a.ProjectID]; if (pr0) link = trim_(pr0.ContractID); }
-    if (link) return;                      // it belongs to a contract, counted above
     var st = trim_(a.Status), dt = reportDateOf_(a);
     if (st === 'recalled' || st === 'draft' || st === 'released') return;
     if (!inRange(dt)) return;
-    var p = projById[a.ProjectID] || {};
+    var amount = reportTotal_(a);
+    var who = trim_(a.EmployeeName) || trim_(a.EmployeeEmail);
+    var accepted = !!trim_(a.AcceptedBy);
+
+    var perfTop = topOf(trim_(a.ContractID));
+    if (perfTop) {
+      var b = bucketFor(byPerformer, perfTop);
+      if (accepted) { addTo_(b.cost, a.Currency, amount, dt); b.reports++; }
+      else if (st === 'submitted') { addTo_(b.pending, a.Currency, amount, dt); b.reportsPending++; }
+    }
+
+    var pr = projById[a.ProjectID];
+    var jobTop = pr ? topOf(trim_(pr.ContractID)) : '';
+    if (jobTop) {
+      var j = bucketFor(byJob, jobTop);
+      if (!j.people[who]) j.people[who] = emptyBucket_();
+      if (accepted) { addTo_(j.cost, a.Currency, amount, dt); addTo_(j.people[who], a.Currency, amount, dt); j.reports++; }
+      else if (st === 'submitted') { addTo_(j.pending, a.Currency, amount, dt); j.reportsPending++; }
+    }
+  });
+
+  var rows = [];
+  contracts.forEach(function (c) {
+    if (trim_(c.ParentContractID)) return;
+    var id = String(c.ContractID);
+    var subs = contracts.filter(function (x) { return String(x.ParentContractID) === id; });
+    var subCost = emptyBucket_();
+    subs.forEach(function (x) {
+      if (inRange(String(trim_(x.SignDate)).slice(0, 10))) addTo_(subCost, x.Currency, x.Amount, trim_(x.SignDate));
+    });
+    var perf = byPerformer[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0 };
+    var job = byJob[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0, people: {} };
+    var people = Object.keys(job.people).map(function (n) { return { who: n, cost: job.people[n] }; })
+                       .sort(function (x, y) { return y.cost.usd - x.cost.usd; });
+    rows.push({
+      id: id, number: trim_(c.Number), counterparty: cpName_(c.CounterpartyID),
+      direction: trim_(c.Direction), currency: trim_(c.Currency), amount: num_(c.Amount),
+      amountUsd: num_(c.AmountUSD) || toUsd_(c.Currency, c.Amount, c.SignDate),
+      subCount: subs.length, subCost: subCost,
+      // what the counterparty of this contract has earned under it
+      ownCost: perf.cost, ownPending: perf.pending, ownReports: perf.reports, ownPending_n: perf.reportsPending,
+      // what the work under this contract has cost, across every performer
+      jobCost: job.cost, jobPending: job.pending, jobReports: job.reports, people: people
+    });
+  });
+
+  // reports that belong to no contract at all, on either side
+  var offRows = {};
+  assignments.forEach(function (a) {
+    var st = trim_(a.Status), dt = reportDateOf_(a);
+    if (st === 'recalled' || st === 'draft' || st === 'released') return;
+    if (!inRange(dt)) return;
+    if (trim_(a.ContractID)) return;
+    var pr = projById[a.ProjectID];
+    if (pr && trim_(pr.ContractID)) return;
     var key = String(a.ProjectID || 'none');
-    if (!offRows[key]) offRows[key] = { project: trim_(a.ProjectName) || trim_(p.Name), customer: trim_(a.Customer),
-                                        people: {}, cost: emptyBucket_(), pending: emptyBucket_(), reports: 0 };
+    if (!offRows[key]) offRows[key] = { project: trim_(a.ProjectName) || (pr ? trim_(pr.Name) : ''),
+                                        customer: trim_(a.Customer), people: {}, cost: emptyBucket_(),
+                                        pending: emptyBucket_(), reports: 0 };
     var row = offRows[key];
     var who = trim_(a.EmployeeName) || trim_(a.EmployeeEmail);
     if (!row.people[who]) row.people[who] = emptyBucket_();
-    if (trim_(a.AcceptedBy)) { addTo_(row.cost, a.Currency, reportTotal_(a), dt); addTo_(row.people[who], a.Currency, reportTotal_(a), dt); row.reports++; }
+    if (trim_(a.AcceptedBy)) { addTo_(row.cost, a.Currency, reportTotal_(a), dt);
+                               addTo_(row.people[who], a.Currency, reportTotal_(a), dt); row.reports++; }
     else if (st === 'submitted') { addTo_(row.pending, a.Currency, reportTotal_(a), dt); }
   });
 
-  // how many projects have no contract at all — so an empty table can say why
   var noContract = 0;
   projects.forEach(function (p) { if (!trim_(p.ContractID)) noContract++; });
 
-  // Where each report ended up, so a blank column can be explained instead of guessed at.
   var trace = [];
   assignments.forEach(function (a) {
     var direct = trim_(a.ContractID);
     var pr = projById[a.ProjectID];
     var viaProject = pr ? trim_(pr.ContractID) : '';
-    var link = direct || viaProject;
-    var c = link ? byId[link] : null;
-    var top = c ? (trim_(c.ParentContractID) || c.ContractID) : '';
     trace.push({
-      project: trim_(a.ProjectName), projectId: trim_(a.ProjectID),
-      who: trim_(a.EmployeeName) || trim_(a.EmployeeEmail),
+      project: trim_(a.ProjectName), who: trim_(a.EmployeeName) || trim_(a.EmployeeEmail),
       status: trim_(a.Status), accepted: !!trim_(a.AcceptedBy), date: reportDateOf_(a),
       amount: reportTotal_(a), currency: trim_(a.Currency),
       directContract: direct ? (byId[direct] ? trim_(byId[direct].Number) : direct + ' (missing)') : '',
       projectContract: viaProject ? (byId[viaProject] ? trim_(byId[viaProject].Number) : viaProject + ' (missing)') : '',
-      countedUnder: top ? (byId[top] ? trim_(byId[top].Number) : top) : '(not counted)'
+      countedUnder: [ topOf(direct) ? trim_((byId[topOf(direct)] || {}).Number) + ' (performer)' : '',
+                      topOf(viaProject) ? trim_((byId[topOf(viaProject)] || {}).Number) + ' (job)' : ''
+                    ].filter(String).join(' · ') || '(not counted)'
     });
   });
 

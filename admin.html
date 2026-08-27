@@ -179,7 +179,7 @@
 
       <div class="panel">
         <h2 style="font-size:16px">By contract</h2>
-        <p class="muted" style="font-size:12px">On a contract we pay, the last column is the budget still available. On one we are paid, the same figure is the margin: the price less what the work cost. Reports linked to a contract count against it either way.</p>
+        <p class="muted" style="font-size:12px"><b>Work done for it</b> — everything reported against this contract through its projects, by everyone who worked on it. <b>Earned under it</b> — what this counterparty reported under their own contract, wherever the work was done. The two are different views of the same reports, so they are not added together. Cost = sub-contracts + work done for it; the last column is what is left of the budget on a contract we pay, or the margin on one we are paid.</p>
         <div class="scroll"><table id="costTable" class="cost"><tbody><tr><td class="empty">Press Show.</td></tr></tbody></table></div>
       </div>
 
@@ -799,7 +799,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.84';
+const BUILD = '2026-08-08.85';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2094,37 +2094,41 @@ async function loadCosts(){
 function renderCosts(r){
   const tb=$('costTable').querySelector('tbody');
   const rows=(r.contracts||[]).slice().sort((a,b)=>
-    ((b.subCost.usd+b.repCost.usd)-(a.subCost.usd+a.repCost.usd)));
-  let totSub=0, totRep=0, totPend=0;
+    ((b.subCost.usd+b.jobCost.usd+b.ownCost.usd)-(a.subCost.usd+a.jobCost.usd+a.ownCost.usd)));
+  let totSub=0, totJob=0, totOwn=0;
   tb.innerHTML = '<tr><th>Contract</th><th>Counterparty</th><th class="num">Price</th>'
-    + '<th class="num">Sub-contracts</th><th class="num">Reports</th><th class="num">Not yet accepted</th>'
-    + '<th class="num">Total cost</th><th class="num">Left / margin</th></tr>'
+    + '<th class="num">Sub-contracts</th><th class="num">Work done for it</th>'
+    + '<th class="num">Earned under it</th><th class="num">Left / margin</th></tr>'
     + (rows.length ? rows.map(c=>{
-        totSub+=c.subCost.usd; totRep+=c.repCost.usd; totPend+=c.pending.usd;
-        const totalUsd = Math.round((c.subCost.usd + c.repCost.usd)*100)/100;
-        // What the difference means depends on which way the money flows: on a contract we pay,
-        // it is the budget still available; on one we are paid, it is the margin left after costs.
-        const left = (c.amountUsd ? Math.round((c.amountUsd - totalUsd)*100)/100 : null);
+        totSub+=c.subCost.usd; totJob+=c.jobCost.usd; totOwn+=c.ownCost.usd;
         const outgoing = c.direction === 'outgoing';
+        // Cost of a contract = its sub-contracts plus the work done for it. What the
+        // counterparty earned under their own contract is a separate figure — adding both
+        // would count the same money twice.
+        const totalUsd = Math.round((c.subCost.usd + c.jobCost.usd)*100)/100;
+        const left = (c.amountUsd ? Math.round((c.amountUsd - totalUsd)*100)/100 : null);
         const leftLabel = outgoing ? 'left of the budget' : 'margin';
+        const people = (c.people||[]).length
+          ? `<br><span class="muted" style="font-size:11px">${c.people.slice(0,4).map(p=>`${esc(p.who)} ${bucketText(p.cost).replace(/<br>/g,', ')}`).join('<br>')}${c.people.length>4?`<br>+${c.people.length-4} more`:''}</span>`
+          : '';
         return `<tr>
           <td><b>${esc(c.number)}</b>${c.subCount?` <span class="muted">· ${c.subCount} sub</span>`:''}
             <br><span class="muted" style="font-size:11px">${outgoing?'we pay':'we are paid'}</span></td>
           <td>${esc(c.counterparty)}</td>
           <td class="num">${c.amount?`${cur(c.currency)}${money(c.amount)}`:'—'}<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span></td>
           <td class="num">${bucketText(c.subCost)}<br><span class="muted">${c.subCost.usd?'$'+money(c.subCost.usd):''}</span></td>
-          <td class="num">${bucketText(c.repCost)}${c.reports?`<br><span class="muted">${c.reports} report(s)${c.repCost.usd?` · $${money(c.repCost.usd)}`:''}</span>`:''}</td>
-          <td class="num muted">${bucketText(c.pending)}${c.reportsPending?`<br>${c.reportsPending} pending`:''}</td>
-          <td class="num"><b>${totalUsd?'$'+money(totalUsd):'—'}</b></td>
-          <td class="num">${left===null?'—':`<span style="color:${left<0?'var(--warn)':'inherit'}" title="${leftLabel}">${left<0?'−':''}$${money(Math.abs(left))}</span><br><span class="muted" style="font-size:11px">${leftLabel}</span>`}</td>
+          <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}</span>`:''}${people}
+            ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
+          <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}</span>`:''}
+            ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
+          <td class="num">${left===null?'—':`<span style="color:${left<0?'var(--warn)':'inherit'}">${left<0?'−':''}$${money(Math.abs(left))}</span><br><span class="muted" style="font-size:11px">${leftLabel}</span>`}</td>
         </tr>`;
       }).join('')
-      : '<tr><td class="empty" colspan="8">Nothing in this period.</td></tr>')
+      : '<tr><td class="empty" colspan="7">Nothing in this period.</td></tr>')
     + (rows.length ? `<tr><td colspan="3" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>
         <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(totSub*100)/100)}</b></td>
-        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(totRep*100)/100)}</b></td>
-        <td class="num muted" style="background:#EEF3F8">$${money(Math.round(totPend*100)/100)}</td>
-        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round((totSub+totRep)*100)/100)}</b></td>
+        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(totJob*100)/100)}</b></td>
+        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(totOwn*100)/100)}</b></td>
         <td style="background:#EEF3F8"></td></tr>` : '');
 
   const ob=$('costOffTable').querySelector('tbody');
