@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.92';
+const BUILD = '2026-08-08.93';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -3333,10 +3333,19 @@ function requireAdmin_(d) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Google Sheets helpers
 // ─────────────────────────────────────────────────────────────────────────────
-function ss_() { return CONFIG.SHEET_ID ? SpreadsheetApp.openById(CONFIG.SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet(); }
+// Opening the spreadsheet is not free either — do it once per request.
+// The header check is what makes the sheets self-healing, but it read row 1 on every single
+// call — and with dozens of lookups per request that alone cost seconds. Check each sheet
+// once per request instead; a write invalidates the cached rows, not this handle.
+var SHEET_HANDLES = {};
 function getSheet_(name) {
+  if (SHEET_HANDLES[name]) return SHEET_HANDLES[name];
   var ss = ss_(), sh = ss.getSheetByName(name), want = HEADERS[keyByName_(name)];
-  if (!sh) { sh = ss.insertSheet(name); sh.appendRow(want); sh.setFrozenRows(1); return sh; }
+  if (!sh) {
+    sh = ss.insertSheet(name); sh.appendRow(want); sh.setFrozenRows(1);
+    SHEET_HANDLES[name] = sh;
+    return sh;
+  }
   var lastCol = sh.getLastColumn();
   var have = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getValues()[0] : [];
   if (!headersMatch_(have, want)) {
@@ -3346,7 +3355,15 @@ function getSheet_(name) {
       migrateSheet_(sh, have, want);   // preserve data: remap by column name
     }
   }
+  SHEET_HANDLES[name] = sh;
   return sh;
+}
+
+var SS_HANDLE = null;
+function ss_() {
+  if (SS_HANDLE) return SS_HANDLE;
+  SS_HANDLE = CONFIG.SHEET_ID ? SpreadsheetApp.openById(CONFIG.SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
+  return SS_HANDLE;
 }
 function migrateSheet_(sh, oldHead, want) {
   var data = sh.getDataRange().getValues(), rows = data.slice(1);
