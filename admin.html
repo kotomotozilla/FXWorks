@@ -17,6 +17,8 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5}
   .wrap{max-width:1040px;margin:0 auto;padding:20px 16px 80px}
+  /* the costs table has many columns — let it use the screen it has */
+  .wrap.wide{max-width:1600px}
   header.top{display:flex;align-items:baseline;justify-content:space-between;padding:14px 0 18px;border-bottom:1px solid var(--line);margin-bottom:22px}
   .brand{font-weight:700}.brand small{display:block;font-weight:500;color:var(--muted);font-size:12px}
   .who{font-size:13px;color:var(--muted)} .who button{background:none;border:0;color:var(--accent);cursor:pointer;font-size:13px;margin-left:10px}
@@ -799,7 +801,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.85';
+const BUILD = '2026-08-08.86';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -859,6 +861,7 @@ function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList();
 function switchTab(t){
   ['projects','contracts','invoices','counterparties','costs','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
   if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit();
+  document.querySelector('.wrap').classList.toggle('wide', t==='costs');
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
 function ctNumber(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?c.Number:''; }
@@ -2116,7 +2119,8 @@ function renderCosts(r){
             <br><span class="muted" style="font-size:11px">${outgoing?'we pay':'we are paid'}</span></td>
           <td>${esc(c.counterparty)}</td>
           <td class="num">${c.amount?`${cur(c.currency)}${money(c.amount)}`:'—'}<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span></td>
-          <td class="num">${bucketText(c.subCost)}<br><span class="muted">${c.subCost.usd?'$'+money(c.subCost.usd):''}</span></td>
+          <td class="num">${bucketText(c.subCost)}${c.subCost.usd?`<br><span class="muted">$${money(c.subCost.usd)}</span>`:''}
+            ${(c.subs||[]).length?`<br><span class="muted" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}`).join('<br>')}</span>`:''}</td>
           <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}</span>`:''}${people}
             ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
           <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}</span>`:''}

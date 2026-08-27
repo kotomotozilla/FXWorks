@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.85';
+const BUILD = '2026-08-08.86';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2802,10 +2802,14 @@ function costReport_(d) {
     if (trim_(c.ParentContractID)) return;
     var id = String(c.ContractID);
     var subs = contracts.filter(function (x) { return String(x.ParentContractID) === id; });
-    var subCost = emptyBucket_();
+    var subCost = emptyBucket_(), subList = [];
     subs.forEach(function (x) {
-      if (inRange(String(trim_(x.SignDate)).slice(0, 10))) addTo_(subCost, x.Currency, x.Amount, trim_(x.SignDate));
+      if (!inRange(String(trim_(x.SignDate)).slice(0, 10))) return;
+      addTo_(subCost, x.Currency, x.Amount, trim_(x.SignDate));
+      subList.push({ number: trim_(x.Number), who: cpName_(x.CounterpartyID),
+                     amount: num_(x.Amount), currency: trim_(x.Currency) });
     });
+    subList.sort(function (a, b) { return num_(b.amount) - num_(a.amount); });
     var perf = byPerformer[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0 };
     var job = byJob[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0, people: {} };
     var people = Object.keys(job.people).map(function (n) { return { who: n, cost: job.people[n] }; })
@@ -2814,7 +2818,7 @@ function costReport_(d) {
       id: id, number: trim_(c.Number), counterparty: cpName_(c.CounterpartyID),
       direction: trim_(c.Direction), currency: trim_(c.Currency), amount: num_(c.Amount),
       amountUsd: num_(c.AmountUSD) || toUsd_(c.Currency, c.Amount, c.SignDate),
-      subCount: subs.length, subCost: subCost,
+      subCount: subs.length, subCost: subCost, subs: subList,
       // what the counterparty of this contract has earned under it
       ownCost: perf.cost, ownPending: perf.pending, ownReports: perf.reports, ownPending_n: perf.reportsPending,
       // what the work under this contract has cost, across every performer
@@ -2822,13 +2826,14 @@ function costReport_(d) {
     });
   });
 
-  // reports that belong to no contract at all, on either side
+  // Work that is not tied to any job contract: the project has none, so nothing was billed
+  // on to a client. The performer may still be on their own contract — that is a different
+  // question, answered by "Earned under it" above.
   var offRows = {};
   assignments.forEach(function (a) {
     var st = trim_(a.Status), dt = reportDateOf_(a);
     if (st === 'recalled' || st === 'draft' || st === 'released') return;
     if (!inRange(dt)) return;
-    if (trim_(a.ContractID)) return;
     var pr = projById[a.ProjectID];
     if (pr && trim_(pr.ContractID)) return;
     var key = String(a.ProjectID || 'none');
@@ -2836,7 +2841,8 @@ function costReport_(d) {
                                         customer: trim_(a.Customer), people: {}, cost: emptyBucket_(),
                                         pending: emptyBucket_(), reports: 0 };
     var row = offRows[key];
-    var who = trim_(a.EmployeeName) || trim_(a.EmployeeEmail);
+    var pc = trim_(a.ContractID) ? trim_((byId[trim_(a.ContractID)] || {}).Number) : '';
+    var who = (trim_(a.EmployeeName) || trim_(a.EmployeeEmail)) + (pc ? ' · ' + pc : '');
     if (!row.people[who]) row.people[who] = emptyBucket_();
     if (trim_(a.AcceptedBy)) { addTo_(row.cost, a.Currency, reportTotal_(a), dt);
                                addTo_(row.people[who], a.Currency, reportTotal_(a), dt); row.reports++; }
