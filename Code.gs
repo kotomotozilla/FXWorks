@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.87';
+const BUILD = '2026-08-08.89';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2817,6 +2817,7 @@ function costReport_(d) {
     rows.push({
       id: id, number: trim_(c.Number), counterparty: cpName_(c.CounterpartyID),
       direction: trim_(c.Direction), currency: trim_(c.Currency), amount: num_(c.Amount),
+      startDate: trim_(c.StartDate) || trim_(c.SignDate), endDate: trim_(c.EndDate),
       amountUsd: num_(c.AmountUSD) || toUsd_(c.Currency, c.Amount, c.SignDate),
       subCount: subs.length, subCost: subCost, subs: subList,
       // what the counterparty of this contract has earned under it

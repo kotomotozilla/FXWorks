@@ -166,7 +166,7 @@
     <section id="view-perf" class="hidden">
       <div class="panel">
         <h2>Reports by performer</h2>
-        <p class="muted">Everything one person has reported, whichever project or contract it belongs to. Click a column heading to sort.</p>
+        <p class="muted">Everything one person has reported, whichever project or contract it belongs to. <b>Their contract</b> is what they are paid under; <b>Work for</b> is the contract the work was billed to, where there is one. Click a column heading to sort.</p>
         <div id="perfErr"></div>
         <div class="row" style="align-items:end">
           <div style="flex:2 1 320px"><label>Performer</label><select id="perf_who" onchange="perfRender()"></select></div>
@@ -822,7 +822,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.87';
+const BUILD = '2026-08-08.89';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1042,6 +1042,7 @@ async function renderCpReports(cpId){
           <td class="muted">${esc(dateOf(a)?fmtDate(dateOf(a)):'—')}</td>
           <td>${esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}</td>
           <td class="muted">${a.ContractID?esc(ctNumber(a.ContractID)):'—'}</td>
+          <td class="muted">${jobOf(a)?esc(jobOf(a)):'—'}</td>
           <td class="num">${a.PricingType==='lump'?'—':(a.ReportedHours||'—')}</td>
           <td class="num">${fee?s+money(fee):'—'}</td>
           <td class="num">${up?`${s}${money(up)} <span class="muted">${esc(a.UpliftPercent)}%</span>`:'—'}</td>
@@ -2103,8 +2104,14 @@ function perfRender(){
     return true;
   });
 
+  // Two contracts may apply: the one the performer works under, and the one the work is
+  // billed to through its project.
+  const jobOf = a => {
+    const p = PROJECTS.find(x=>String(x.ProjectID)===String(a.ProjectID));
+    return (p && p.ContractID) ? String(ctNumber(p.ContractID)) : '';
+  };
   const val = (a,k)=>({ date:dateOf(a), project:String(a.ProjectName||''),
-      contract:a.ContractID?String(ctNumber(a.ContractID)):'',
+      contract:a.ContractID?String(ctNumber(a.ContractID)):'', job:jobOf(a),
       hours:+a.ReportedHours||0, fee:feeOf(a), uplift:upOf(a),
       status:(a.AcceptedBy?'accepted':String(a.Status||'')) }[k]);
   rows.sort((a,b)=>{
@@ -2117,21 +2124,22 @@ function perfRender(){
     const arr = PERF_SORT.key===k ? (PERF_SORT.dir===1?' ↑':' ↓') : '';
     return `<th class="srt ${cls||''}" onclick="perfSort('${k}')">${label}${arr}</th>`;
   };
-  tb.innerHTML = '<tr>'+th('date','Submitted')+th('project','Project')+th('contract','Contract')
-    + th('hours','Hours','num')+th('fee','Fee','num')+th('uplift','Uplift','num')+th('status','Status')+'</tr>'
+  tb.innerHTML = '<tr>'+th('date','Submitted')+th('project','Project')+th('contract','Their contract')
+    + th('job','Work for')+th('hours','Hours','num')+th('fee','Fee','num')+th('uplift','Uplift','num')+th('status','Status')+'</tr>'
     + (rows.length ? rows.map(a=>{
         const s=cur(a.Currency), fee=feeOf(a), up=upOf(a);
         return `<tr>
           <td class="muted">${esc(dateOf(a)?fmtDate(dateOf(a)):'—')}</td>
           <td>${esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}</td>
           <td class="muted">${a.ContractID?esc(ctNumber(a.ContractID)):'—'}</td>
+          <td class="muted">${jobOf(a)?esc(jobOf(a)):'—'}</td>
           <td class="num">${a.PricingType==='lump'?'—':(a.ReportedHours||'—')}</td>
           <td class="num">${fee?s+money(fee):'—'}</td>
           <td class="num">${up?`${s}${money(up)} <span class="muted">${esc(a.UpliftPercent)}%</span>`:'—'}</td>
           <td><span class="tag ${a.AcceptedBy?'submitted':esc(a.Status)}">${esc(a.AcceptedBy?'accepted':statusEn(a.Status))}</span></td>
         </tr>`;
       }).join('')
-      : '<tr><td class="empty" colspan="7">No reports in this period.</td></tr>');
+      : '<tr><td class="empty" colspan="8">No reports in this period.</td></tr>');
 
   // totals by currency, counting what is owed and what is on its way separately
   const acc={}, pend={};
@@ -2145,6 +2153,13 @@ function perfRender(){
 }
 
 // ── Costs ──
+// Dates in the costs table are supporting detail — two digits a piece is enough.
+function shortDate(v){
+  const d=String(v||'').slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return d||'—';
+  const p=d.split('-');
+  return `${p[2]}.${p[1]}.${p[0].slice(2)}`;
+}
 function bucketText(b){
   const keys = Object.keys(b && b.by || {});
   if(!keys.length) return '—';
@@ -2216,7 +2231,7 @@ function renderCosts(r){
         return `<tr>
           <td><b>${esc(c.number)}</b>${c.subCount?` <span class="muted">· ${c.subCount} sub</span>`:''}
             <br><span class="muted" style="font-size:11px">${outgoing?'we pay':'we are paid'}</span></td>
-          <td>${esc(c.counterparty)}</td>
+          <td>${esc(c.counterparty)}${(c.startDate||c.endDate)?`<br><span class="muted" style="font-size:11px">${esc(shortDate(c.startDate))} – ${esc(c.endDate?shortDate(c.endDate):'open')}</span>`:''}</td>
           <td class="num">${c.amount?`${cur(c.currency)}${money(c.amount)}`:'—'}<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span></td>
           <td class="num">${bucketText(c.subCost)}${c.subCost.usd?`<br><span class="muted">$${money(c.subCost.usd)}</span>`:''}
             ${(c.subs||[]).length?`<br><span class="muted" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}`).join('<br>')}</span>`:''}</td>
