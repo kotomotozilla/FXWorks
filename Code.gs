@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.93';
+const BUILD = '2026-08-08.95';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -81,11 +81,15 @@ function doGet(e) {
   catch (err) { return jsonOut_({ ok: false, error: String(err && err.message || err) }, e); }
 }
 function doPost(e) {
+  var t0 = Date.now();
   try {
     var body = {};
     if (e && e.postData && e.postData.contents) body = JSON.parse(e.postData.contents);
-    return jsonOut_(route_(body.action, body), e);
-  } catch (err) { return jsonOut_({ ok: false, error: String(err && err.message || err) }, e); }
+    var res = route_(body.action, body);
+    // how long the server itself took — anything beyond this is network or the browser
+    if (res && typeof res === 'object') res.serverMs = Date.now() - t0;
+    return jsonOut_(res, e);
+  } catch (err) { return jsonOut_({ ok: false, error: String(err && err.message || err), serverMs: Date.now() - t0 }, e); }
 }
 
 function route_(action, d) {

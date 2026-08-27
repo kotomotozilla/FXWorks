@@ -855,7 +855,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.93';
+const BUILD = '2026-08-08.95';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -868,13 +868,17 @@ function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:
 let PIN = sessionStorage.getItem('fx_pin') || '';
 let COUNTERPARTIES = [], CONTRACTS = [], INVOICES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '', EDIT_CT = '', EDIT_INV = '', WR = null;
 
+// Timing of every call is kept, so a slow screen can be traced to the request that caused it.
+window.API_LOG = [];
 async function api(action, payload={}){
   let res;
+  const t0 = performance.now();
   try{
     res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
       headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
   }catch(_){ throw new Error('No connection to the server. Check the web app URL and your connection.'); }
   const text = await res.text();
+  const tookMs = Math.round(performance.now() - t0);
   let data;
   try{ data = JSON.parse(text); }
   catch(_){
@@ -882,6 +886,9 @@ async function api(action, payload={}){
       throw new Error('The server returned a Google sign-in page, not data. Deployment access must be "Anyone" and the URL must end with /exec.');
     throw new Error('The server returned non-JSON (HTTP '+res.status+'). Check the URL (/exec) and publish a new deployment version.');
   }
+  API_LOG.push({ action, totalMs: tookMs, serverMs: data.serverMs ?? null,
+                 networkMs: data.serverMs != null ? tookMs - data.serverMs : null });
+  if(API_LOG.length > 200) API_LOG.shift();
   if(!data.ok) throw new Error(data.error||'Server error');
   return data;
 }
@@ -3561,14 +3568,24 @@ async function acceptNow(btn){
       payload.upliftK1 = $('acc_upK1').value; payload.upliftK2 = $('acc_upK2').value; payload.upliftK3 = $('acc_upK3').value;
       payload.upliftNote = $('acc_upNote').value.trim();
     }
-    await api('accept_assignment', payload);
+    const res = await api('accept_assignment', payload);
     closeModal('acceptModal');
-    // the open report editor holds a copy loaded before acceptance — refresh it,
-    // otherwise a PDF printed from there shows an empty acceptance block
-    if(REP && String(REP.AssignmentID)===String(ACC_ID)){
-      try{ const rr = await api('admin_get_report',{assignmentId:ACC_ID}); REP = rr.assignment; }catch(_){}
-    }
-    await refreshModal();
+    // Patch what is already in memory instead of re-fetching the project, the report and the
+    // whole project list one after another — that was four round trips for one click.
+    const patch = a => {
+      if(!a) return;
+      a.AcceptedBy = payload.acceptedBy; a.AcceptedTitle = payload.acceptedTitle; a.AcceptedAt = payload.acceptedAt;
+      if(res.uplift){
+        a.UpliftGranted = res.uplift.granted ? 'yes' : 'no';
+        a.UpliftPercent = res.uplift.percent ?? ''; a.UpliftAmount = res.uplift.amount ?? '';
+        a.UpliftK1 = res.uplift.k1 ?? ''; a.UpliftK2 = res.uplift.k2 ?? ''; a.UpliftK3 = res.uplift.k3 ?? '';
+        a.UpliftBase = res.uplift.base ?? '';
+      }
+    };
+    if(REP && String(REP.AssignmentID)===String(ACC_ID)) patch(REP);
+    if(CURRENT && CURRENT.assignments) patch(CURRENT.assignments.find(x=>String(x.AssignmentID)===String(ACC_ID)));
+    patch(ASSIGNMENTS.find(x=>String(x.AssignmentID)===String(ACC_ID)));
+    renderProjectModal();
     notice('pm_err','ok','Report accepted — this is the basis for payment.');
   }catch(e){ notice('acc_err','err', esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent='Accept report'; }
@@ -3774,8 +3791,7 @@ async function saveUpliftThenPrint(btn){
 }
 async function printReportPdf(){
   if(!REP) return;
-  // always print from the stored record, so acceptance made in this session is included
-  try{ const rr = await api('admin_get_report',{assignmentId:REP.AssignmentID}); REP = Object.assign({}, REP, rr.assignment); }catch(_){}
+  // REP is kept in step with every change made in this session, so no extra fetch here
   const activities=[...document.querySelectorAll('#rm_items textarea')].map(t=>t.value.trim()).filter(Boolean);
   const hours=parseFloat(($('rm_hours').value||'').replace(',','.'))||0;
   const html = buildReportHtml(REP, activities, hours, $('rm_sign').checked, $('rm_date').value);
