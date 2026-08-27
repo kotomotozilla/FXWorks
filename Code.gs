@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.81';
+const BUILD = '2026-08-08.82';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2804,7 +2804,11 @@ function costReport_(d) {
     else if (st === 'submitted') { addTo_(row.pending, a.Currency, reportTotal_(a), dt); }
   });
 
-  return { ok: true, from: from, to: to, contracts: rows,
+  // how many projects have no contract at all — so an empty table can say why
+  var noContract = 0;
+  projects.forEach(function (p) { if (!trim_(p.ContractID)) noContract++; });
+
+  return { ok: true, from: from, to: to, contracts: rows, projectsNoContract: noContract,
            offContract: Object.keys(offRows).map(function (k) { return offRows[k]; }) };
 }
 
