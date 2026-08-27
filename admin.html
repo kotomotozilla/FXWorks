@@ -176,6 +176,7 @@
 
       <div class="panel">
         <h2 style="font-size:16px">By contract</h2>
+        <p class="muted" style="font-size:12px">On a contract we pay, the last column is the budget still available. On one we are paid, the same figure is the margin: the price less what the work cost. Reports linked to a contract count against it either way.</p>
         <div class="scroll"><table id="costTable"><tbody><tr><td class="empty">Press Show.</td></tr></tbody></table></div>
       </div>
 
@@ -795,7 +796,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.80';
+const BUILD = '2026-08-08.81';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2074,20 +2075,25 @@ function renderCosts(r){
   let totSub=0, totRep=0, totPend=0;
   tb.innerHTML = '<tr><th>Contract</th><th>Counterparty</th><th class="num">Price</th>'
     + '<th class="num">Sub-contracts</th><th class="num">Reports</th><th class="num">Not yet accepted</th>'
-    + '<th class="num">Total cost</th><th class="num">vs price</th></tr>'
+    + '<th class="num">Total cost</th><th class="num">Left / margin</th></tr>'
     + (rows.length ? rows.map(c=>{
         totSub+=c.subCost.usd; totRep+=c.repCost.usd; totPend+=c.pending.usd;
         const totalUsd = Math.round((c.subCost.usd + c.repCost.usd)*100)/100;
+        // What the difference means depends on which way the money flows: on a contract we pay,
+        // it is the budget still available; on one we are paid, it is the margin left after costs.
         const left = (c.amountUsd ? Math.round((c.amountUsd - totalUsd)*100)/100 : null);
+        const outgoing = c.direction === 'outgoing';
+        const leftLabel = outgoing ? 'left of the budget' : 'margin';
         return `<tr>
-          <td><b>${esc(c.number)}</b>${c.subCount?` <span class="muted">· ${c.subCount} sub</span>`:''}</td>
+          <td><b>${esc(c.number)}</b>${c.subCount?` <span class="muted">· ${c.subCount} sub</span>`:''}
+            <br><span class="muted" style="font-size:11px">${outgoing?'we pay':'we are paid'}</span></td>
           <td>${esc(c.counterparty)}</td>
           <td class="num">${c.amount?`${cur(c.currency)}${money(c.amount)}`:'—'}<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span></td>
           <td class="num">${bucketText(c.subCost)}<br><span class="muted">${c.subCost.usd?'$'+money(c.subCost.usd):''}</span></td>
           <td class="num">${bucketText(c.repCost)}${c.reports?`<br><span class="muted">${c.reports} report(s) · $${money(c.repCost.usd)}</span>`:''}</td>
           <td class="num muted">${bucketText(c.pending)}${c.reportsPending?`<br>${c.reportsPending} pending`:''}</td>
           <td class="num"><b>${totalUsd?'$'+money(totalUsd):'—'}</b></td>
-          <td class="num">${left===null?'—':`<span style="color:${left<0?'var(--warn)':'inherit'}">${left<0?'−':''}$${money(Math.abs(left))}</span>`}</td>
+          <td class="num">${left===null?'—':`<span style="color:${left<0?'var(--warn)':'inherit'}" title="${leftLabel}">${left<0?'−':''}$${money(Math.abs(left))}</span><br><span class="muted" style="font-size:11px">${leftLabel}</span>`}</td>
         </tr>`;
       }).join('')
       : '<tr><td class="empty" colspan="8">Nothing in this period.</td></tr>')
