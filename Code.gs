@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.79';
+const BUILD = '2026-08-08.80';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -148,6 +148,7 @@ function route_(action, d) {
     case 'recalc_all_fx':      return adminRecalcAllFx_(d);
     // Projects
     case 'create_project':     return adminCreateProject_(d);
+    case 'cost_report':        requireAdmin_(d); return costReport_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
     case 'orphan_reports':     requireAdmin_(d); return orphanReports_();
     case 'get_project':        return adminGetProject_(d);
@@ -2699,6 +2700,112 @@ function adminInviteCounterparty_(d) {
     '<p style="color:#5B6671;font-size:12px">' + esc_(CONFIG.COMPANY_NAME) + '</p></div>';
   MailApp.sendEmail({ to: cp.Email, subject: 'Access to ' + CONFIG.COMPANY_NAME + ' reporting', htmlBody: html });
   return { ok: true };
+}
+
+// ── Costs per contract and per non-contract project ───────────────────────────
+// Sub-contracts count at their agreed price — the commitment, not what has been
+// reported so far. Reports count separately, split into accepted (already owed) and
+// submitted-but-not-yet-accepted (likely to be owed). Drafts and recalled ones count
+// for nothing. Currencies are kept apart and also converted to USD for comparison.
+function reportDateOf_(a) {
+  return String(trim_(a.AcceptedAt) || trim_(a.SubmittedAt) || trim_(a.ReleasedAt) || '').slice(0, 10);
+}
+function reportTotal_(a) {
+  var fee = num_(a.ReportedAmount);
+  if (!fee) fee = round2_(num_(a.ReportedHours) * num_(a.Rate));
+  var up = truthy_(a.UpliftGranted) ? num_(a.UpliftAmount) : 0;
+  return round2_(fee + up);
+}
+function addTo_(bucket, currency, amount, dateStr) {
+  var c = trim_(currency) || 'USD';
+  bucket.by[c] = round2_((bucket.by[c] || 0) + num_(amount));
+  var usd = toUsd_(c, amount, dateStr);
+  bucket.usd = round2_(bucket.usd + (usd == null ? 0 : usd));
+  return bucket;
+}
+function emptyBucket_() { return { by: {}, usd: 0 }; }
+
+// Convert without hitting the rates API for every row: contracts already store their own
+// USD value, and for the rest one rate per currency is enough for a comparison figure.
+var USD_RATE_CACHE = {};
+function toUsd_(currency, amount, dateStr) {
+  var c = trim_(currency).toUpperCase();
+  if (!c || c === 'USD') return num_(amount);
+  var key = c;
+  if (USD_RATE_CACHE[key] === undefined) {
+    var fx = computeFx_(c, 1, dateStr || new Date().toISOString().slice(0, 10));
+    USD_RATE_CACHE[key] = (fx && num_(fx.FxRate)) ? num_(fx.FxRate) : null;
+  }
+  var r = USD_RATE_CACHE[key];
+  return (r == null) ? null : round2_(num_(amount) * r);
+}
+
+function costReport_(d) {
+  USD_RATE_CACHE = {};
+  var from = trim_(d.from), to = trim_(d.to);
+  var inRange = function (dt) {
+    if (!dt) return !from && !to;
+    if (from && dt < from) return false;
+    if (to && dt > to) return false;
+    return true;
+  };
+
+  var contracts = readAll_(SHEETS.contracts);
+  var projects = readAll_(SHEETS.projects);
+  var assignments = readAll_(SHEETS.assignments);
+  var byId = {}, projById = {};
+  contracts.forEach(function (c) { byId[c.ContractID] = c; });
+  projects.forEach(function (p) { projById[p.ProjectID] = p; });
+
+  // top-level contracts only; a sub-contract is reported inside its parent
+  var rows = [];
+  contracts.forEach(function (c) {
+    if (trim_(c.ParentContractID)) return;
+    var subs = contracts.filter(function (x) { return String(x.ParentContractID) === String(c.ContractID); });
+    var subCost = emptyBucket_(), repCost = emptyBucket_(), pending = emptyBucket_();
+    var ids = {}; ids[String(c.ContractID)] = 1;
+    subs.forEach(function (x) {
+      ids[String(x.ContractID)] = 1;
+      if (inRange(String(trim_(x.SignDate)).slice(0, 10))) addTo_(subCost, x.Currency, x.Amount, trim_(x.SignDate));
+    });
+    var n = 0, nPending = 0;
+    assignments.forEach(function (a) {
+      if (!ids[String(trim_(a.ContractID))]) return;
+      var st = trim_(a.Status), dt = reportDateOf_(a);
+      if (st === 'recalled' || st === 'draft' || st === 'released') return;
+      if (!inRange(dt)) return;
+      if (trim_(a.AcceptedBy)) { addTo_(repCost, a.Currency, reportTotal_(a), dt); n++; }
+      else if (st === 'submitted') { addTo_(pending, a.Currency, reportTotal_(a), dt); nPending++; }
+    });
+    rows.push({
+      id: c.ContractID, number: trim_(c.Number), counterparty: cpName_(c.CounterpartyID),
+      direction: trim_(c.Direction), currency: trim_(c.Currency), amount: num_(c.Amount),
+      amountUsd: num_(c.AmountUSD) || toUsd_(c.Currency, c.Amount, c.SignDate),
+      subCount: subs.length, subCost: subCost, repCost: repCost, pending: pending,
+      reports: n, reportsPending: nPending
+    });
+  });
+
+  // projects with no contract behind them, grouped by who reported
+  var offRows = {};
+  assignments.forEach(function (a) {
+    if (trim_(a.ContractID)) return;
+    var st = trim_(a.Status), dt = reportDateOf_(a);
+    if (st === 'recalled' || st === 'draft' || st === 'released') return;
+    if (!inRange(dt)) return;
+    var p = projById[a.ProjectID] || {};
+    var key = String(a.ProjectID || 'none');
+    if (!offRows[key]) offRows[key] = { project: trim_(a.ProjectName) || trim_(p.Name), customer: trim_(a.Customer),
+                                        people: {}, cost: emptyBucket_(), pending: emptyBucket_(), reports: 0 };
+    var row = offRows[key];
+    var who = trim_(a.EmployeeName) || trim_(a.EmployeeEmail);
+    if (!row.people[who]) row.people[who] = emptyBucket_();
+    if (trim_(a.AcceptedBy)) { addTo_(row.cost, a.Currency, reportTotal_(a), dt); addTo_(row.people[who], a.Currency, reportTotal_(a), dt); row.reports++; }
+    else if (st === 'submitted') { addTo_(row.pending, a.Currency, reportTotal_(a), dt); }
+  });
+
+  return { ok: true, from: from, to: to, contracts: rows,
+           offContract: Object.keys(offRows).map(function (k) { return offRows[k]; }) };
 }
 
 // ── Performance uplift ────────────────────────────────────────────────────────

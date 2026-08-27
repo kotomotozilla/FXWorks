@@ -108,6 +108,7 @@
       <button id="tab-contracts" onclick="switchTab('contracts')">Contracts</button>
       <button id="tab-invoices" onclick="switchTab('invoices')">Invoices</button>
       <button id="tab-counterparties" onclick="switchTab('counterparties')">Counterparties</button>
+      <button id="tab-costs" onclick="switchTab('costs')">Costs</button>
       <button id="tab-v2" onclick="switchTab('v2')">Contracts 2.0</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
     </div>
@@ -153,6 +154,34 @@
         </div>
         <div id="invErr"></div>
         <div class="scroll"><table id="invTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- COSTS -->
+    <section id="view-costs" class="hidden">
+      <div class="panel">
+        <h2>Costs</h2>
+        <p class="muted">What each contract costs: the agreed price of its sub-contracts plus what has been reported against it. Sub-contracts count at their price — the commitment — not at what has been reported so far. Reports count once accepted; those submitted and not yet accepted are shown separately.</p>
+        <div id="costErr"></div>
+        <div class="row" style="align-items:end">
+          <div style="flex:0 0 180px"><label>From</label><input id="cost_from" type="date"></div>
+          <div style="flex:0 0 180px"><label>To</label><input id="cost_to" type="date"></div>
+          <div style="flex:0 0 auto"><button class="btn sm" id="cost_btn" onclick="loadCosts()">Show</button></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsPeriod('month')">This month</button></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsPeriod('quarter')">This quarter</button></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsPeriod('year')">This year</button></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsPeriod('all')">All time</button></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2 style="font-size:16px">By contract</h2>
+        <div class="scroll"><table id="costTable"><tbody><tr><td class="empty">Press Show.</td></tr></tbody></table></div>
+      </div>
+
+      <div class="panel">
+        <h2 style="font-size:16px">Projects without a contract</h2>
+        <div class="scroll"><table id="costOffTable"><tbody><tr><td class="empty">—</td></tr></tbody></table></div>
       </div>
     </section>
 
@@ -766,7 +795,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.79';
+const BUILD = '2026-08-08.80';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -824,8 +853,8 @@ function enterApp(){
 }
 function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){
-  ['projects','contracts','invoices','counterparties','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init();
+  ['projects','contracts','invoices','counterparties','costs','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit();
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
 function ctNumber(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?c.Number:''; }
@@ -2008,6 +2037,87 @@ function v2Export(){
   notice('v2Err','ok','Exported '+esc(name)+' — the file contains the full clause texts, so share it only where that is fine.');
 }
 function v2Toggle(id){ V2.open[id] = !V2.open[id]; v2Render(); }
+
+// ── Costs ──
+function bucketText(b){
+  const keys = Object.keys(b && b.by || {});
+  if(!keys.length) return '—';
+  return keys.map(c=>`${cur(c)}${money(b.by[c])}`).join('<br>');
+}
+function costsInit(){
+  if(!$('cost_from').value && !$('cost_to').value) costsPeriod('year');
+  else loadCosts();
+}
+function costsPeriod(kind){
+  const now = new Date(), y = now.getFullYear(), m = now.getMonth();
+  const iso = d => d.toISOString().slice(0,10);
+  if(kind==='all'){ $('cost_from').value=''; $('cost_to').value=''; }
+  else if(kind==='month'){ $('cost_from').value=iso(new Date(y,m,1)); $('cost_to').value=iso(new Date(y,m+1,0)); }
+  else if(kind==='quarter'){ const q=Math.floor(m/3)*3; $('cost_from').value=iso(new Date(y,q,1)); $('cost_to').value=iso(new Date(y,q+3,0)); }
+  else { $('cost_from').value=iso(new Date(y,0,1)); $('cost_to').value=iso(new Date(y,11,31)); }
+  loadCosts();
+}
+async function loadCosts(){
+  const b=$('cost_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  notice('costErr','info','Calculating…');
+  try{
+    const r = await api('cost_report',{ from:$('cost_from').value, to:$('cost_to').value });
+    renderCosts(r);
+    notice('costErr','','');
+  }catch(e){ notice('costErr','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Show'; }
+}
+function renderCosts(r){
+  const tb=$('costTable').querySelector('tbody');
+  const rows=(r.contracts||[]).slice().sort((a,b)=>
+    ((b.subCost.usd+b.repCost.usd)-(a.subCost.usd+a.repCost.usd)));
+  let totSub=0, totRep=0, totPend=0;
+  tb.innerHTML = '<tr><th>Contract</th><th>Counterparty</th><th class="num">Price</th>'
+    + '<th class="num">Sub-contracts</th><th class="num">Reports</th><th class="num">Not yet accepted</th>'
+    + '<th class="num">Total cost</th><th class="num">vs price</th></tr>'
+    + (rows.length ? rows.map(c=>{
+        totSub+=c.subCost.usd; totRep+=c.repCost.usd; totPend+=c.pending.usd;
+        const totalUsd = Math.round((c.subCost.usd + c.repCost.usd)*100)/100;
+        const left = (c.amountUsd ? Math.round((c.amountUsd - totalUsd)*100)/100 : null);
+        return `<tr>
+          <td><b>${esc(c.number)}</b>${c.subCount?` <span class="muted">· ${c.subCount} sub</span>`:''}</td>
+          <td>${esc(c.counterparty)}</td>
+          <td class="num">${c.amount?`${cur(c.currency)}${money(c.amount)}`:'—'}<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span></td>
+          <td class="num">${bucketText(c.subCost)}<br><span class="muted">${c.subCost.usd?'$'+money(c.subCost.usd):''}</span></td>
+          <td class="num">${bucketText(c.repCost)}${c.reports?`<br><span class="muted">${c.reports} report(s) · $${money(c.repCost.usd)}</span>`:''}</td>
+          <td class="num muted">${bucketText(c.pending)}${c.reportsPending?`<br>${c.reportsPending} pending`:''}</td>
+          <td class="num"><b>${totalUsd?'$'+money(totalUsd):'—'}</b></td>
+          <td class="num">${left===null?'—':`<span style="color:${left<0?'var(--warn)':'inherit'}">${left<0?'−':''}$${money(Math.abs(left))}</span>`}</td>
+        </tr>`;
+      }).join('')
+      : '<tr><td class="empty" colspan="8">Nothing in this period.</td></tr>')
+    + (rows.length ? `<tr><td colspan="3" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>
+        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(totSub*100)/100)}</b></td>
+        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(totRep*100)/100)}</b></td>
+        <td class="num muted" style="background:#EEF3F8">$${money(Math.round(totPend*100)/100)}</td>
+        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round((totSub+totRep)*100)/100)}</b></td>
+        <td style="background:#EEF3F8"></td></tr>` : '');
+
+  const ob=$('costOffTable').querySelector('tbody');
+  const off=(r.offContract||[]).slice().sort((a,b)=>b.cost.usd-a.cost.usd);
+  let offTot=0;
+  ob.innerHTML = '<tr><th>Project</th><th>Customer</th><th>Who reported</th>'
+    + '<th class="num">Cost</th><th class="num">Not yet accepted</th></tr>'
+    + (off.length ? off.map(p=>{
+        offTot+=p.cost.usd;
+        const people = Object.keys(p.people||{});
+        return `<tr>
+          <td>${esc(p.project||'—')}</td>
+          <td class="muted">${esc(p.customer||'—')}</td>
+          <td>${people.length ? people.map(n=>`${esc(n)} <span class="muted">${bucketText(p.people[n]).replace(/<br>/g,', ')}</span>`).join('<br>') : '—'}</td>
+          <td class="num">${bucketText(p.cost)}<br><span class="muted">${p.cost.usd?'$'+money(p.cost.usd):''}</span></td>
+          <td class="num muted">${bucketText(p.pending)}</td></tr>`;
+      }).join('')
+      : '<tr><td class="empty" colspan="5">Nothing in this period.</td></tr>')
+    + (off.length ? `<tr><td colspan="3" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>
+        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(offTot*100)/100)}</b></td>
+        <td style="background:#EEF3F8"></td></tr>` : '');
+}
 
 // ── Sorting & filtering engine (shared by all lists) ──
 const SORT = { contracts:{key:'',dir:1}, invoices:{key:'',dir:1}, projects:{key:'',dir:1}, counterparties:{key:'',dir:1} };
