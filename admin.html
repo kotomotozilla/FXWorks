@@ -113,6 +113,7 @@
       <button id="tab-invoices" onclick="switchTab('invoices')">Invoices</button>
       <button id="tab-counterparties" onclick="switchTab('counterparties')">Counterparties</button>
       <button id="tab-perf" onclick="switchTab('perf')">By performer</button>
+      <button id="tab-pay" onclick="switchTab('pay')">Payments</button>
       <button id="tab-costs" onclick="switchTab('costs')">Costs</button>
       <button id="tab-v2" onclick="switchTab('v2')">Contracts 2.0</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
@@ -159,6 +160,38 @@
         </div>
         <div id="invErr"></div>
         <div class="scroll"><table id="invTable"><tbody><tr><td class="empty">Loading…</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- PAYMENTS -->
+    <section id="view-pay" class="hidden">
+      <div class="panel">
+        <h2>Payments</h2>
+        <p class="muted">Load a bank statement and tie each payment to the report it settles. The system proposes a match where the amount is within 2% and the payment falls on or after the accepted report; nothing is saved until you confirm.</p>
+        <div id="payErr"></div>
+        <div class="row" style="align-items:end">
+          <div style="flex:2 1 300px"><label>Counterparty</label><select id="pay_cp" onchange="payLoadExisting()"></select></div>
+          <div style="flex:2 1 260px"><label>Statement (xls, xlsx or csv)</label>
+            <div class="filebox">
+              <input type="file" class="hiddenfile" id="pay_file" accept=".xls,.xlsx,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onchange="showFileName('pay_file','pay_fname')">
+              <button type="button" class="btn ghost sm" onclick="pickFile('pay_file')">Choose file</button>
+              <span class="fname" id="pay_fname">no file selected</span>
+            </div></div>
+          <div style="flex:0 0 auto"><button class="btn sm" id="pay_btn" onclick="payParse(this)">Read and match</button></div>
+        </div>
+      </div>
+
+      <div class="panel" id="pay_matchPanel" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <h2 style="font-size:16px">Suggested matches</h2>
+          <button class="btn sm" onclick="paySave(this)">Save payments</button>
+        </div>
+        <div class="scroll"><table id="payTable" class="cost"><tbody></tbody></table></div>
+      </div>
+
+      <div class="panel">
+        <h2 style="font-size:16px">Recorded payments</h2>
+        <div class="scroll"><table id="payListTable" class="cost"><tbody><tr><td class="empty">Pick a counterparty.</td></tr></tbody></table></div>
       </div>
     </section>
 
@@ -822,7 +855,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.89';
+const BUILD = '2026-08-08.91';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -880,9 +913,9 @@ function enterApp(){
 }
 function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){
-  ['projects','contracts','invoices','counterparties','perf','costs','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit();
-  document.querySelector('.wrap').classList.toggle('wide', t==='costs' || t==='perf');
+  ['projects','contracts','invoices','counterparties','perf','pay','costs','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
+  document.querySelector('.wrap').classList.toggle('wide', t==='costs' || t==='perf' || t==='pay');
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
 function ctNumber(id){ const c=CONTRACTS.find(x=>String(x.ContractID)===String(id)); return c?c.Number:''; }
@@ -1040,9 +1073,13 @@ async function renderCpReports(cpId){
         const acc = a.AcceptedBy ? `accepted${a.AcceptedAt?' '+fmtDate(a.AcceptedAt):''}` : statusEn(a.Status);
         return `<tr>
           <td class="muted">${esc(dateOf(a)?fmtDate(dateOf(a)):'—')}</td>
+          <td class="muted">${a.AcceptedAt?esc(fmtDate(acceptedOf(a))):'—'}</td>
           <td>${esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}</td>
           <td class="muted">${a.ContractID?esc(ctNumber(a.ContractID)):'—'}</td>
-          <td class="muted">${jobOf(a)?esc(jobOf(a)):'—'}</td>
+          <td class="muted">${(()=>{ const jc=jobContract(a); if(!jc) return '—';
+            const st=jc.StartDate||jc.SignDate, en=jc.EndDate;
+            return `${esc(jc.Number||'')}<br><span style="font-size:11px">${esc(cpName(jc.CounterpartyID))}`
+              + `${(st||en)?`<br>${esc(shortDate(st))} – ${esc(en?shortDate(en):'open')}`:''}</span>`; })()}</td>
           <td class="num">${a.PricingType==='lump'?'—':(a.ReportedHours||'—')}</td>
           <td class="num">${fee?s+money(fee):'—'}</td>
           <td class="num">${up?`${s}${money(up)} <span class="muted">${esc(a.UpliftPercent)}%</span>`:'—'}</td>
@@ -2067,6 +2104,101 @@ function v2Export(){
 }
 function v2Toggle(id){ V2.open[id] = !V2.open[id]; v2Render(); }
 
+// ── Payments ──
+let PAY_ROWS = [], PAY_CAND = [];
+function payInit(){
+  const sel=$('pay_cp'), keep=sel.value;
+  const list = COUNTERPARTIES.slice().sort((a,b)=>String(a.Name||'').localeCompare(String(b.Name||'')));
+  sel.innerHTML = '<option value="">— pick a counterparty —</option>'
+    + list.map(c=>`<option value="${esc(c.CounterpartyID)}" ${keep===c.CounterpartyID?'selected':''}>${esc(c.Name||'')}</option>`).join('');
+  payLoadExisting();
+}
+async function payLoadExisting(){
+  const tb=$('payListTable').querySelector('tbody');
+  const cp=$('pay_cp').value;
+  if(!cp){ tb.innerHTML='<tr><td class="empty">Pick a counterparty.</td></tr>'; return; }
+  try{
+    const r = await api('list_payments',{counterpartyId:cp});
+    const rows=(r.payments||[]).slice().sort((a,b)=>String(b.PaidAt).localeCompare(String(a.PaidAt)));
+    tb.innerHTML = '<tr><th>Paid</th><th class="num">Amount</th><th>Reference</th><th>Settles</th><th></th></tr>'
+      + (rows.length ? rows.map(p=>{
+          const a = ASSIGNMENTS.find(x=>String(x.AssignmentID)===String(p.AssignmentID));
+          return `<tr>
+            <td class="muted">${esc(p.PaidAt?fmtDate(p.PaidAt):'—')}</td>
+            <td class="num">${cur(p.Currency)}${money(p.Amount)}</td>
+            <td class="muted">${esc(p.Reference||'—')}</td>
+            <td>${a?`${esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}`:'<span class="muted">not matched</span>'}</td>
+            <td>${p.AssignmentID?`<a href="#" onclick="payUnmatch('${esc(p.PaymentID)}');return false;">unmatch</a>`:''}</td></tr>`;
+        }).join('')
+        : '<tr><td class="empty" colspan="5">No payments recorded yet.</td></tr>');
+  }catch(e){ notice('payErr','err', esc(e.message)); }
+}
+async function payParse(btn){
+  const cp=$('pay_cp').value, f=($('pay_file').files||[])[0];
+  if(!cp){ notice('payErr','err','Pick a counterparty.'); return; }
+  if(!f){ notice('payErr','err','Choose a statement file.'); return; }
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  notice('payErr','info','Reading the statement…');
+  try{
+    const p = await api('parse_statement',{ fileName:f.name, mimeType:f.type||'application/vnd.ms-excel',
+      dataBase64: await fileToBase64(f) });
+    if(!p.rows || !p.rows.length){
+      notice('payErr','err','No payment lines found. The sheet needs a header row with a date and an amount column.');
+      return;
+    }
+    const m = await api('match_payments',{ counterpartyId:cp, lines:p.rows });
+    PAY_ROWS = m.suggestions||[]; PAY_CAND = m.candidates||[];
+    payRender();
+    const hit = PAY_ROWS.filter(x=>x.match).length;
+    notice('payErr','ok',`${p.rows.length} line(s) read · ${hit} matched automatically · ${PAY_ROWS.length-hit} left to you.`);
+  }catch(e){ notice('payErr','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Read and match'; }
+}
+function payRender(){
+  $('pay_matchPanel').style.display = PAY_ROWS.length ? '' : 'none';
+  const tb=$('payTable').querySelector('tbody');
+  const opts = (sel) => '<option value="">— not matched —</option>'
+    + PAY_CAND.map(c=>`<option value="${esc(c.id)}" ${String(sel)===String(c.id)?'selected':''}>`
+        + `${esc(c.date)} · ${esc(c.project||'')}${c.title?' · '+esc(c.title):''} · ${cur(c.currency)}${money(c.amount)}</option>`).join('');
+  tb.innerHTML = '<tr><th>Paid</th><th class="num">Amount</th><th>Reference</th><th>Report it settles</th><th class="num">Difference</th></tr>'
+    + PAY_ROWS.map((x,i)=>`<tr>
+        <td class="muted">${esc(x.line.date?fmtDate(x.line.date):'—')}</td>
+        <td class="num">${cur(x.line.currency)}${money(x.line.amount)}</td>
+        <td class="muted" style="max-width:280px;font-size:12px">${esc(x.line.reference||'—')}</td>
+        <td><select id="pay_sel_${i}" onchange="payDiff(${i})" style="font-size:12px">${opts(x.match?x.match.id:'')}</select></td>
+        <td class="num" id="pay_diff_${i}">${x.match?payDiffText(x.line, x.match, x.gapDays):'—'}</td></tr>`).join('');
+}
+function payDiffText(line, c, gap){
+  const d = Math.round((+line.amount - +c.amount)*100)/100;
+  const pct = c.amount ? Math.abs(d/c.amount*100) : 0;
+  return `${d===0?'exact':`${d>0?'+':'−'}${cur(c.currency)}${money(Math.abs(d))} · ${pct.toFixed(1)}%`}`
+    + (gap!=null?`<br><span class="muted" style="font-size:11px">${gap} day(s) after</span>`:'');
+}
+function payDiff(i){
+  const id=$('pay_sel_'+i).value;
+  const c=PAY_CAND.find(x=>String(x.id)===String(id));
+  PAY_ROWS[i].match = c || null;
+  $('pay_diff_'+i).innerHTML = c ? payDiffText(PAY_ROWS[i].line, c, null) : '—';
+}
+async function paySave(btn){
+  const cp=$('pay_cp').value;
+  if(!cp || !PAY_ROWS.length) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    const items = PAY_ROWS.map((x,i)=>({ date:x.line.date, amount:x.line.amount, currency:x.line.currency,
+      reference:x.line.reference, assignmentId: ($('pay_sel_'+i)||{}).value || '' }));
+    const r = await api('save_payments',{ counterpartyId:cp, items });
+    PAY_ROWS=[]; payRender();
+    await payLoadExisting();
+    notice('payErr','ok',`${r.added} payment(s) saved.`);
+  }catch(e){ notice('payErr','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Save payments'; }
+}
+async function payUnmatch(id){
+  try{ await api('unmatch_payment',{paymentId:id}); await payLoadExisting(); }
+  catch(e){ notice('payErr','err', esc(e.message)); }
+}
+
 // ── Reports by performer ──
 const PERF_SORT = { key:'date', dir:-1 };
 function perfInit(){
@@ -2106,11 +2238,13 @@ function perfRender(){
 
   // Two contracts may apply: the one the performer works under, and the one the work is
   // billed to through its project.
-  const jobOf = a => {
+  const jobContract = a => {
     const p = PROJECTS.find(x=>String(x.ProjectID)===String(a.ProjectID));
-    return (p && p.ContractID) ? String(ctNumber(p.ContractID)) : '';
+    return (p && p.ContractID) ? CONTRACTS.find(x=>String(x.ContractID)===String(p.ContractID)) : null;
   };
-  const val = (a,k)=>({ date:dateOf(a), project:String(a.ProjectName||''),
+  const jobOf = a => { const c = jobContract(a); return c ? String(c.Number||'') : ''; };
+  const acceptedOf = a => String(a.AcceptedAt||'').slice(0,10);
+  const val = (a,k)=>({ date:dateOf(a), accepted:acceptedOf(a), project:String(a.ProjectName||''),
       contract:a.ContractID?String(ctNumber(a.ContractID)):'', job:jobOf(a),
       hours:+a.ReportedHours||0, fee:feeOf(a), uplift:upOf(a),
       status:(a.AcceptedBy?'accepted':String(a.Status||'')) }[k]);
@@ -2124,22 +2258,26 @@ function perfRender(){
     const arr = PERF_SORT.key===k ? (PERF_SORT.dir===1?' ↑':' ↓') : '';
     return `<th class="srt ${cls||''}" onclick="perfSort('${k}')">${label}${arr}</th>`;
   };
-  tb.innerHTML = '<tr>'+th('date','Submitted')+th('project','Project')+th('contract','Their contract')
+  tb.innerHTML = '<tr>'+th('date','Submitted')+th('accepted','Accepted')+th('project','Project')+th('contract','Their contract')
     + th('job','Work for')+th('hours','Hours','num')+th('fee','Fee','num')+th('uplift','Uplift','num')+th('status','Status')+'</tr>'
     + (rows.length ? rows.map(a=>{
         const s=cur(a.Currency), fee=feeOf(a), up=upOf(a);
         return `<tr>
           <td class="muted">${esc(dateOf(a)?fmtDate(dateOf(a)):'—')}</td>
+          <td class="muted">${a.AcceptedAt?esc(fmtDate(acceptedOf(a))):'—'}</td>
           <td>${esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}</td>
           <td class="muted">${a.ContractID?esc(ctNumber(a.ContractID)):'—'}</td>
-          <td class="muted">${jobOf(a)?esc(jobOf(a)):'—'}</td>
+          <td class="muted">${(()=>{ const jc=jobContract(a); if(!jc) return '—';
+            const st=jc.StartDate||jc.SignDate, en=jc.EndDate;
+            return `${esc(jc.Number||'')}<br><span style="font-size:11px">${esc(cpName(jc.CounterpartyID))}`
+              + `${(st||en)?`<br>${esc(shortDate(st))} – ${esc(en?shortDate(en):'open')}`:''}</span>`; })()}</td>
           <td class="num">${a.PricingType==='lump'?'—':(a.ReportedHours||'—')}</td>
           <td class="num">${fee?s+money(fee):'—'}</td>
           <td class="num">${up?`${s}${money(up)} <span class="muted">${esc(a.UpliftPercent)}%</span>`:'—'}</td>
           <td><span class="tag ${a.AcceptedBy?'submitted':esc(a.Status)}">${esc(a.AcceptedBy?'accepted':statusEn(a.Status))}</span></td>
         </tr>`;
       }).join('')
-      : '<tr><td class="empty" colspan="8">No reports in this period.</td></tr>');
+      : '<tr><td class="empty" colspan="9">No reports in this period.</td></tr>');
 
   // totals by currency, counting what is owed and what is on its way separately
   const acc={}, pend={};

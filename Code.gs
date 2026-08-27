@@ -27,15 +27,17 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.89';
+const BUILD = '2026-08-08.91';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
   documents:   ['DocumentID', 'ContractID', 'Kind', 'Number', 'SignDate', 'EffectiveFrom', 'Status', 'Source',
                 'AttachmentID', 'FileName', 'Profile', 'Notes', 'Snapshot', 'CreatedAt'],
+  payments:    ['PaymentID', 'CounterpartyID', 'PaidAt', 'Amount', 'Currency', 'Reference', 'Note',
+                'AssignmentID', 'MatchedBy', 'MatchedAt', 'CreatedAt'],
   terms:       ['TermID', 'ContractID', 'Field', 'Value', 'ValidFrom', 'FromClause', 'DocumentID', 'Note', 'CreatedAt'],
   blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
@@ -149,6 +151,11 @@ function route_(action, d) {
     // Projects
     case 'create_project':     return adminCreateProject_(d);
     case 'cost_report':        requireAdmin_(d); return costReport_(d);
+    case 'parse_statement':    return adminParseStatement_(d);
+    case 'match_payments':     requireAdmin_(d); return matchPayments_(d);
+    case 'save_payments':      return adminSavePayments_(d);
+    case 'list_payments':      requireAdmin_(d); return { ok: true, payments: paymentsOf_(trim_(d.counterpartyId)) };
+    case 'unmatch_payment':    return adminUnmatchPayment_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
     case 'orphan_reports':     requireAdmin_(d); return orphanReports_();
     case 'get_project':        return adminGetProject_(d);
@@ -2702,6 +2709,185 @@ function adminInviteCounterparty_(d) {
   return { ok: true };
 }
 
+// ── Bank statements: read the file, then match each line to a report ───────────
+// A spreadsheet is converted through Drive, which handles xls, xlsx and csv alike.
+function adminParseStatement_(d) {
+  requireAdmin_(d);
+  if (!d.dataBase64) return { ok: false, error: 'No file' };
+  var name = trim_(d.fileName) || 'statement';
+  var tmp = null, conv = null;
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), trim_(d.mimeType) || 'application/vnd.ms-excel', name);
+    tmp = DriveApp.createFile(blob);
+    // Drive API v3 directly, so no advanced service has to be switched on by hand
+    var url = 'https://www.googleapis.com/drive/v3/files/' + tmp.getId() + '/copy?supportsAllDrives=true';
+    var resp = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+      payload: JSON.stringify({ name: name + ' (converted)', mimeType: MimeType.GOOGLE_SHEETS }),
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() !== 200) {
+      return { ok: false, error: 'Could not convert the file (' + resp.getResponseCode() + '). Is it a spreadsheet?' };
+    }
+    conv = SpreadsheetApp.openById(JSON.parse(resp.getContentText()).id);
+    var values = conv.getSheets()[0].getDataRange().getValues();
+    var rows = readStatementRows_(values);
+    return { ok: true, rows: rows, sheetRows: values.length };
+  } catch (e) {
+    return { ok: false, error: 'Could not read the file: ' + e };
+  } finally {
+    try { if (conv) DriveApp.getFileById(conv.getId()).setTrashed(true); } catch (e2) {}
+    try { if (tmp) tmp.setTrashed(true); } catch (e3) {}
+  }
+}
+
+// Statements differ from bank to bank, so the columns are found by their headings.
+function readStatementRows_(values) {
+  if (!values || !values.length) return [];
+  var headRow = -1, cols = {};
+  for (var i = 0; i < Math.min(values.length, 15); i++) {
+    var row = values[i].map(function (v) { return String(v == null ? '' : v).toLowerCase().trim(); });
+    var found = {};
+    row.forEach(function (h, j) {
+      if (!h) return;
+      if (found.date === undefined && /(^|\b)(date|value date|posting date|дата)/.test(h)) found.date = j;
+      if (found.amount === undefined && /(amount|credit|debit|sum|сумма)/.test(h) && !/currency/.test(h)) found.amount = j;
+      if (found.currency === undefined && /(currency|ccy|валюта)/.test(h)) found.currency = j;
+      if (found.ref === undefined && /(reference|details|description|purpose|narrative|назначение|описание)/.test(h)) found.ref = j;
+    });
+    if (found.date !== undefined && found.amount !== undefined) { headRow = i; cols = found; break; }
+  }
+  if (headRow < 0) return [];
+
+  var out = [];
+  for (var r = headRow + 1; r < values.length; r++) {
+    var v = values[r];
+    var dt = statementDate_(v[cols.date]);
+    var amt = statementAmount_(v[cols.amount]);
+    if (!dt || !amt) continue;
+    out.push({
+      date: dt, amount: Math.abs(amt),
+      currency: (cols.currency !== undefined ? trim_(v[cols.currency]).toUpperCase() : ''),
+      reference: (cols.ref !== undefined ? trim_(v[cols.ref]) : ''),
+      row: r + 1
+    });
+  }
+  return out;
+}
+function statementDate_(v) {
+  if (v instanceof Date && !isNaN(v)) return Utilities.formatDate(v, 'UTC', 'yyyy-MM-dd');
+  var t = trim_(v);
+  var m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = t.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})/);
+  if (m) {
+    var y = m[3].length === 2 ? '20' + m[3] : m[3];
+    var a = +m[1], b = +m[2];
+    // 15/06 can only be day/month; 6/15 can only be month/day — decide by the value
+    var day = (a > 12 || b > 12) ? (a > 12 ? a : b) : a;
+    var mon = (a > 12 || b > 12) ? (a > 12 ? b : a) : b;
+    return y + '-' + ('0' + mon).slice(-2) + '-' + ('0' + day).slice(-2);
+  }
+  return '';
+}
+function statementAmount_(v) {
+  if (typeof v === 'number') return v;
+  var t = trim_(v).replace(/\s|\u00a0/g, '');
+  if (!t) return 0;
+  // 1.234,56 and 1,234.56 both occur
+  if (/,\d{1,2}$/.test(t)) t = t.replace(/\./g, '').replace(',', '.');
+  else t = t.replace(/,/g, '');
+  var n = parseFloat(t.replace(/[^0-9.\-]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+// Suggest a report for each line: the amount within 2% and the payment on or after the
+// report, closest in time. Nothing is written until the admin confirms.
+function matchPayments_(d) {
+  var cpId = trim_(d.counterpartyId);
+  var lines = d.lines;
+  if (typeof lines === 'string') lines = JSON.parse(lines);
+  if (!cpId || !lines || !lines.length) return { ok: false, error: 'Pick a counterparty and load a statement' };
+  var cp = findRow_(SHEETS.counterparties, 'CounterpartyID', cpId);
+  if (!cp) return { ok: false, error: 'Counterparty not found' };
+  var email = normEmail_(cp.Email);
+
+  var taken = {};
+  paymentsOf_(cpId).forEach(function (p) { if (trim_(p.AssignmentID)) taken[trim_(p.AssignmentID)] = 1; });
+
+  var candidates = readAll_(SHEETS.assignments).filter(function (a) {
+    if (normEmail_(a.EmployeeEmail) !== email) return false;
+    if (!trim_(a.AcceptedBy)) return false;                 // only accepted work is paid
+    return !taken[trim_(a.AssignmentID)];
+  }).map(function (a) {
+    return { id: trim_(a.AssignmentID), project: trim_(a.ProjectName), title: trim_(a.Title),
+             date: String(trim_(a.AcceptedAt) || trim_(a.SubmittedAt)).slice(0, 10),
+             amount: reportTotal_(a), currency: trim_(a.Currency) };
+  });
+
+  var used = {}, out = [];
+  lines.forEach(function (ln) {
+    var best = null, bestGap = 1e9;
+    candidates.forEach(function (c) {
+      if (used[c.id]) return;
+      if (ln.currency && c.currency && ln.currency !== c.currency) return;
+      var diff = Math.abs(num_(c.amount) - num_(ln.amount));
+      if (num_(c.amount) <= 0) return;
+      if (diff / num_(c.amount) > 0.02) return;             // 2% tolerance
+      if (c.date && ln.date && ln.date < c.date) return;    // a payment follows its report
+      var gap = (c.date && ln.date) ? dayGap_(c.date, ln.date) : 9999;
+      if (gap < bestGap) { bestGap = gap; best = c; }
+    });
+    if (best) used[best.id] = 1;
+    out.push({ line: ln, match: best, gapDays: best ? bestGap : null,
+               diff: best ? round2_(num_(ln.amount) - num_(best.amount)) : null });
+  });
+  return { ok: true, suggestions: out, candidates: candidates };
+}
+function dayGap_(a, b) {
+  return Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
+}
+
+function paymentsOf_(cpId) {
+  return readAll_(SHEETS.payments).filter(function (p) { return String(p.CounterpartyID) === String(cpId); });
+}
+
+function adminSavePayments_(d) {
+  requireAdmin_(d);
+  var cpId = trim_(d.counterpartyId);
+  var items = d.items;
+  if (typeof items === 'string') items = JSON.parse(items);
+  if (!cpId || !items || !items.length) return { ok: false, error: 'Nothing to save' };
+  var now = new Date().toISOString(), who = trim_(d.savedBy) || CONFIG.DEFAULT_SIGNATORY, n = 0;
+  var existing = paymentsOf_(cpId);
+  items.forEach(function (it) {
+    var dt = trim_(it.date), amt = num_(it.amount);
+    if (!dt || !amt) return;
+    var dup = existing.some(function (p) {
+      return String(p.PaidAt).slice(0, 10) === dt && Math.abs(num_(p.Amount) - amt) < 0.005
+             && trim_(p.Reference) === trim_(it.reference);
+    });
+    if (dup) return;
+    appendRow_(SHEETS.payments, {
+      PaymentID: Utilities.getUuid(), CounterpartyID: cpId, PaidAt: dt, Amount: amt,
+      Currency: trim_(it.currency), Reference: trim_(it.reference), Note: trim_(it.note),
+      AssignmentID: trim_(it.assignmentId), MatchedBy: trim_(it.assignmentId) ? who : '',
+      MatchedAt: trim_(it.assignmentId) ? now.slice(0, 10) : '', CreatedAt: now
+    });
+    n++;
+  });
+  return { ok: true, added: n };
+}
+
+function adminUnmatchPayment_(d) {
+  requireAdmin_(d);
+  var p = findRow_(SHEETS.payments, 'PaymentID', trim_(d.paymentId));
+  if (!p) return { ok: false, error: 'Payment not found' };
+  updateRow_(SHEETS.payments, 'PaymentID', p.PaymentID, { AssignmentID: '', MatchedBy: '', MatchedAt: '' });
+  return { ok: true };
+}
+
 // ── Costs per contract and per non-contract project ───────────────────────────
 // Sub-contracts count at their agreed price — the commitment, not what has been
 // reported so far. Reports count separately, split into accepted (already owed) and
@@ -3312,7 +3498,7 @@ function testFx() {
 }
 
 function setup() {
-  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.documents); getSheet_(SHEETS.blocks); getSheet_(SHEETS.terms); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
+  getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.documents); getSheet_(SHEETS.blocks); getSheet_(SHEETS.terms); getSheet_(SHEETS.payments); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
   ensureCounterparties_();
   SpreadsheetApp.getActive().toast('Sheets created.');
 }
