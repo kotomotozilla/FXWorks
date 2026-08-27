@@ -173,6 +173,7 @@
           <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsPeriod('quarter')">This quarter</button></div>
           <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsPeriod('year')">This year</button></div>
           <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsPeriod('all')">All time</button></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsTrace()">Where reports land</button></div>
         </div>
       </div>
 
@@ -798,7 +799,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.83';
+const BUILD = '2026-08-08.84';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2060,11 +2061,31 @@ function costsPeriod(kind){
   else { $('cost_from').value=iso(new Date(y,0,1)); $('cost_to').value=iso(new Date(y,11,31)); }
   loadCosts();
 }
+// Diagnostic view: every report and which contract it was counted under, so a blank
+// column can be traced to the actual link instead of guessed at.
+let COST_DATA = null;
+function costsTrace(){
+  if(!COST_DATA){ notice('costErr','err','Press Show first.'); return; }
+  const t = COST_DATA.trace || [];
+  const tb = $('costTable').querySelector('tbody');
+  tb.innerHTML = '<tr><th>Project</th><th>Who</th><th>Status</th><th>Contract on the report</th>'
+    + '<th>Contract on the project</th><th>Counted under</th><th class="num">Amount</th></tr>'
+    + (t.length ? t.map(x=>`<tr>
+        <td>${esc(x.project||'—')}</td><td>${esc(x.who||'—')}</td>
+        <td class="muted">${esc(x.accepted?'accepted':x.status)}${x.date?' · '+esc(fmtDate(x.date)):''}</td>
+        <td>${esc(x.directContract||'—')}</td>
+        <td>${esc(x.projectContract||'—')}</td>
+        <td><b>${esc(x.countedUnder)}</b></td>
+        <td class="num">${x.amount?cur(x.currency)+money(x.amount):'—'}</td></tr>`).join('')
+      : '<tr><td class="empty" colspan="7">No reports at all.</td></tr>');
+  notice('costErr','info','Showing where each report lands. Press Show to go back to the totals.');
+}
 async function loadCosts(){
   const b=$('cost_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   notice('costErr','info','Calculating…');
   try{
     const r = await api('cost_report',{ from:$('cost_from').value, to:$('cost_to').value });
+    COST_DATA = r;
     renderCosts(r);
     notice('costErr','','');
   }catch(e){ notice('costErr','err', esc(e.message)); }

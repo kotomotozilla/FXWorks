@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.83';
+const BUILD = '2026-08-08.84';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2814,7 +2814,27 @@ function costReport_(d) {
   var noContract = 0;
   projects.forEach(function (p) { if (!trim_(p.ContractID)) noContract++; });
 
-  return { ok: true, from: from, to: to, contracts: rows, projectsNoContract: noContract,
+  // Where each report ended up, so a blank column can be explained instead of guessed at.
+  var trace = [];
+  assignments.forEach(function (a) {
+    var direct = trim_(a.ContractID);
+    var pr = projById[a.ProjectID];
+    var viaProject = pr ? trim_(pr.ContractID) : '';
+    var link = direct || viaProject;
+    var c = link ? byId[link] : null;
+    var top = c ? (trim_(c.ParentContractID) || c.ContractID) : '';
+    trace.push({
+      project: trim_(a.ProjectName), projectId: trim_(a.ProjectID),
+      who: trim_(a.EmployeeName) || trim_(a.EmployeeEmail),
+      status: trim_(a.Status), accepted: !!trim_(a.AcceptedBy), date: reportDateOf_(a),
+      amount: reportTotal_(a), currency: trim_(a.Currency),
+      directContract: direct ? (byId[direct] ? trim_(byId[direct].Number) : direct + ' (missing)') : '',
+      projectContract: viaProject ? (byId[viaProject] ? trim_(byId[viaProject].Number) : viaProject + ' (missing)') : '',
+      countedUnder: top ? (byId[top] ? trim_(byId[top].Number) : top) : '(not counted)'
+    });
+  });
+
+  return { ok: true, from: from, to: to, contracts: rows, projectsNoContract: noContract, trace: trace,
            offContract: Object.keys(offRows).map(function (k) { return offRows[k]; }) };
 }
 
