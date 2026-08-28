@@ -190,7 +190,10 @@
       </div>
 
       <div class="panel">
-        <h2 style="font-size:16px">Recorded payments</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <h2 style="font-size:16px">Recorded payments</h2>
+          <button class="btn warn sm" onclick="payClear(this)">Clear all for this counterparty</button>
+        </div>
         <div class="scroll"><table id="payListTable" class="cost"><tbody><tr><td class="empty">Pick a counterparty.</td></tr></tbody></table></div>
       </div>
     </section>
@@ -855,7 +858,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.99';
+const BUILD = '2026-08-08.101';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2112,6 +2115,41 @@ function v2Export(){
 function v2Toggle(id){ V2.open[id] = !V2.open[id]; v2Render(); }
 
 // ── Payments ──
+// The supporting detail behind a matched report: what it was worth, when it was submitted
+// and accepted, and which client contract the work belonged to.
+function reportBrief(a){
+  const fee = (a.ReportedAmount!==''&&a.ReportedAmount!=null)
+      ? +a.ReportedAmount : Math.round((+a.ReportedHours||0)*(+a.Rate||0)*100)/100;
+  const up = String(a.UpliftGranted).toLowerCase()==='yes' ? (+a.UpliftAmount||0) : 0;
+  const total = Math.round((fee+up)*100)/100;
+  const bits = [];
+  bits.push(`${cur(a.Currency)}${money(total)}${up?` (incl. uplift ${cur(a.Currency)}${money(up)})`:''}`);
+  const sub = a.SubmittedAt ? fmtDate(String(a.SubmittedAt).slice(0,10)) : '';
+  const acc = a.AcceptedAt ? fmtDate(String(a.AcceptedAt).slice(0,10)) : '';
+  if(sub || acc) bits.push(`submitted ${sub||'—'} · accepted ${acc||'—'}`);
+  const p = PROJECTS.find(x=>String(x.ProjectID)===String(a.ProjectID));
+  const c = (p && p.ContractID) ? CONTRACTS.find(x=>String(x.ContractID)===String(p.ContractID)) : null;
+  if(c){
+    const st=c.StartDate||c.SignDate, en=c.EndDate;
+    bits.push(`${esc(cpName(c.CounterpartyID))}${(st||en)?` (${shortDate(st)} – ${en?shortDate(en):'open'})`:''}`);
+  }
+  return bits.join(' · ');
+}
+async function payClear(btn){
+  const cp=$('pay_cp').value;
+  if(!cp){ notice('payErr','err','Pick a counterparty first.'); return; }
+  const name=(COUNTERPARTIES.find(c=>String(c.CounterpartyID)===String(cp))||{}).Name||'';
+  if(!confirm(`Delete every recorded payment for ${name}? The reports themselves are not touched.`)) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    const r = await api('delete_payments',{counterpartyId:cp});
+    await payLoadExisting();
+    notice('payErr','ok',`${r.deleted} payment(s) deleted.`);
+  }catch(e){ notice('payErr','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Clear all for this counterparty'; }
+}
+
+
 let PAY_ROWS = [], PAY_CAND = [];
 async function payInit(){
   const sel=$('pay_cp'), keep=sel.value;
@@ -2137,7 +2175,9 @@ async function payLoadExisting(){
             <td class="muted">${esc(p.PaidAt?fmtDate(p.PaidAt):'—')}</td>
             <td class="num">${cur(p.Currency)}${money(p.Amount)}</td>
             <td class="muted">${esc(p.Reference||'—')}</td>
-            <td>${a?`<a href="#" onclick="payOpenProject('${esc(a.ProjectID)}');return false;">${esc(a.ProjectName||'(project)')}</a>${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}`:'<span class="muted">not matched</span>'}</td>
+            <td>${a?`<a href="#" onclick="payOpenProject('${esc(a.ProjectID)}');return false;">${esc(a.ProjectName||'(project)')}</a>${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}`
+              + `<div class="muted" style="font-size:11px">${reportBrief(a)}</div>`
+              :'<span class="muted">not matched</span>'}</td>
             <td>${p.AssignmentID?`<a href="#" onclick="payUnmatch('${esc(p.PaymentID)}');return false;">unmatch</a>`:''}</td></tr>`;
         }).join('')
         : '<tr><td class="empty" colspan="5">No payments recorded yet.</td></tr>');
@@ -3770,7 +3810,7 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
     ${a.PricingType==='lump' ? '' : `<tr><td class="label">The total number of hours spent:</td><td>${hrs(hours)}</td></tr>`}
     <tr><td class="label">Amount due:</td><td>${amountDue}</td></tr>
     ${String(a.UpliftGranted).toLowerCase()==='yes' ? `
-      <tr><td class="label">Performance uplift:</td><td>${esc(a.UpliftPercent)}% (${esc(a.UpliftBase)} \u00d7 ${esc(a.UpliftK1)} \u00d7 ${esc(a.UpliftK2)} \u00d7 ${esc(a.UpliftK3)}) \u2014 ${cur(a.Currency)}${money(a.UpliftAmount)}</td></tr>
+      <tr><td class="label">Performance uplift:</td><td>${esc(a.UpliftPercent)}% \u2014 ${cur(a.Currency)}${money(a.UpliftAmount)}</td></tr>
       <tr><td class="label">Total payable:</td><td><b>${cur(a.Currency)}${money(Math.round((amtRaw + (+a.UpliftAmount||0))*100)/100)}</b></td></tr>` : ''}
     <tr><td class="label">Currency elected for payment:</td><td>${a.PayoutCurrency ? esc(a.PayoutCurrency) : 'Base currency of the contract'}</td></tr>
   </table>

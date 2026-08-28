@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.99';
+const BUILD = '2026-08-08.101';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -160,6 +160,7 @@ function route_(action, d) {
     case 'save_payments':      return adminSavePayments_(d);
     case 'list_payments':      requireAdmin_(d); return { ok: true, payments: paymentsOf_(trim_(d.counterpartyId)) };
     case 'unmatch_payment':    return adminUnmatchPayment_(d);
+    case 'delete_payments':    return adminDeletePayments_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
     case 'orphan_reports':     requireAdmin_(d); return orphanReports_();
     case 'get_project':        return adminGetProject_(d);
@@ -2882,6 +2883,17 @@ function adminSavePayments_(d) {
     n++;
   });
   return { ok: true, added: n };
+}
+
+// Wipe the recorded payments of one counterparty — a statement loaded by mistake would
+// otherwise have to be unpicked line by line.
+function adminDeletePayments_(d) {
+  requireAdmin_(d);
+  var cpId = trim_(d.counterpartyId);
+  if (!cpId) return { ok: false, error: 'Pick a counterparty' };
+  var n = paymentsOf_(cpId).length;
+  deleteRowsWhere_(SHEETS.payments, 'CounterpartyID', cpId);
+  return { ok: true, deleted: n };
 }
 
 function adminUnmatchPayment_(d) {
