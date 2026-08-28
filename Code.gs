@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.103';
+const BUILD = '2026-08-08.104';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2846,16 +2846,18 @@ function matchPayments_(d) {
     if (payCur && payCur !== baseCur) {
       expectedCur = payCur;
       indicative = true;
+      var fxRate = num_(a.PayoutFxRate), fxAsOf = String(trim_(a.PayoutFxAsOf)).slice(0, 10);
       if (!payAmt) {                                  // no rate stored — work one out now
         var x = crossRate_(baseCur, payCur, String(trim_(a.AcceptedAt) || trim_(a.SubmittedAt)).slice(0, 10));
-        payAmt = x ? round2_(base * x.rate) : 0;
+        if (x) { payAmt = round2_(base * x.rate); fxRate = x.rate; fxAsOf = x.asOf; }
       }
       expected = payAmt;
     }
     return { id: trim_(a.AssignmentID), project: trim_(a.ProjectName), title: trim_(a.Title),
              date: String(trim_(a.AcceptedAt) || trim_(a.SubmittedAt)).slice(0, 10),
              amount: expected, currency: expectedCur, indicative: indicative,
-             baseAmount: base, baseCurrency: baseCur };
+             baseAmount: base, baseCurrency: baseCur,
+             fxRate: indicative ? fxRate : '', fxAsOf: indicative ? fxAsOf : '' };
   }).filter(function (c) { return num_(c.amount) > 0; });
 
   var used = {}, out = [];

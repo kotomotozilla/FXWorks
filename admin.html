@@ -859,7 +859,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.103';
+const BUILD = '2026-08-08.104';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2245,7 +2245,7 @@ function payRender(){
           return `<option value="${esc(c.id)}" ${String(sel)===String(c.id)?'selected':''}>`
         + `${esc(c.date)} · ${esc(c.project||'')}${c.title?' · '+esc(c.title):''}`
         + `${jc?' · '+esc(jc):''} · ${cur(c.currency)}${money(c.amount)}`
-        + `${c.indicative?` (≈ from ${cur(c.baseCurrency)}${money(c.baseAmount)})`:''}</option>`; }).join('');
+        + `${c.indicative?` (≈ from ${cur(c.baseCurrency)}${money(c.baseAmount)} at ${c.fxRate||'?'}${c.fxAsOf?' on '+c.fxAsOf:''})`:''}</option>`; }).join('');
   tb.innerHTML = '<tr><th>Paid</th><th class="num">Amount</th><th>Reference</th><th>Report it settles</th><th class="num">Difference</th></tr>'
     + PAY_ROWS.map((x,i)=>`<tr>
         <td class="muted">${esc(x.line.date?fmtDate(x.line.date):'—')}</td>
@@ -2259,7 +2259,7 @@ function payDiffText(line, c, gap){
   const d = Math.round((+line.amount - +c.amount)*100)/100;
   const pct = c.amount ? Math.abs(d/c.amount*100) : 0;
   return `${d===0?'exact':`${d>0?'+':'−'}${cur(c.currency)}${money(Math.abs(d))} · ${pct.toFixed(1)}%`}`
-    + (c.indicative?`<br><span class="muted" style="font-size:11px">converted — the rate has moved since acceptance</span>`:'')
+    + (c.indicative?`<br><span class="muted" style="font-size:11px">converted at ${esc(c.fxRate||'?')}${c.fxAsOf?` on ${esc(fmtDate(c.fxAsOf))}`:''} — the rate has moved since</span>`:'')
     + (gap!=null?`<br><span class="muted" style="font-size:11px">${gap} day(s) after</span>`:'');
 }
 function payDiff(i){
@@ -3452,6 +3452,7 @@ function renderProjectModal(){
         <span class="tag ${esc(a.Status)}">${statusEn(a.Status)}</span>
       </div>
       <div class="muted" style="font-size:12px">${a.ContractID?('Contract: '+esc(ctNumber(a.ContractID))+(a.PricingType==='lump'?' · lump sum':' · hourly')):'Counterparty rate · non-contractual'}</div>
+      ${a.PayoutEstimate?`<div class="muted" style="font-size:12px">≈ ${cur(a.PayoutCurrency)}${money(a.PayoutEstimate)} at ${esc(a.PayoutFxRate)}${a.PayoutFxAsOf?' on '+esc(fmtDate(a.PayoutFxAsOf)):''} <span title="Indicative only: payment converts at the rate on the day it is made">(indicative)</span></div>`:''}
       ${a.AcceptedBy?`<div class="muted" style="font-size:12px">✓ Accepted by ${esc(a.AcceptedBy)}${a.AcceptedTitle?', '+esc(a.AcceptedTitle):''}${a.AcceptedAt?' on '+esc(fmtDate(a.AcceptedAt)):''}${String(a.UpliftGranted).toLowerCase()==='yes'?` · uplift ${esc(a.UpliftPercent)}% = ${cur(a.Currency)}${money(a.UpliftAmount)}`:''}${a.PayoutCurrency?' · payout in '+esc(a.PayoutCurrency):''}</div>`:(a.PayoutCurrency?`<div class="muted" style="font-size:12px">Payout currency: ${esc(a.PayoutCurrency)}</div>`:'')}
       ${(a.ReportedHours!==''&&a.ReportedHours!=null)?`<div class="muted" style="margin-bottom:4px">Reported: ${hrs(a.ReportedHours)} h · ${s}${money(a.ReportedAmount||0)}</div>`:''}
       <div class="muted" style="margin-bottom:8px">Submitted: ${a.SubmittedAt?fmtDate(a.SubmittedAt):'—'}</div>
@@ -3717,7 +3718,10 @@ async function viewReport(aid){
     const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes';
     $('rm_payout').value = a.PayoutCurrency || '';
     const hint = $('rm_payoutHint');
-    if(hint) hint.innerHTML = allowCur
+    if(hint && a.PayoutEstimate){
+      hint.innerHTML = `≈ <b>${cur(a.PayoutCurrency)}${money(a.PayoutEstimate)}</b> at ${esc(a.PayoutFxRate)}`
+        + `${a.PayoutFxAsOf?` on ${esc(fmtDate(a.PayoutFxAsOf))}`:''} — indicative; payment converts at the rate on the day it is made.`;
+    } else if(hint) hint.innerHTML = allowCur
       ? 'The contractor may choose this in their own report.'
       : '<span style="color:var(--warn)">Their ICA does not allow choosing a currency — set it here only if it was agreed separately.</span>';
     loadReportRate(a.AssignmentID, r.rateOptions);
