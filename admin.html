@@ -855,7 +855,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.98';
+const BUILD = '2026-08-08.99';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2145,13 +2145,12 @@ async function payLoadExisting(){
 }
 // Jump straight to the project from a payment line — checking a match usually means
 // looking at the report behind it.
-// Opening a project from the payments screen should not lose the payments screen:
-// remember where we came from and go back when the project window is closed.
-let RETURN_TAB = '';
+// The project window is modal, so it can open over the payments screen without switching
+// tabs at all — nothing is lost, not even an unsaved statement being matched.
+let PROJ_OVERLAY = false;
 function payOpenProject(pid){
   if(!pid) return;
-  RETURN_TAB = 'pay';
-  switchTab('projects');
+  PROJ_OVERLAY = true;
   openProject(pid);
 }
 async function payParse(btn){
@@ -3848,7 +3847,14 @@ async function pdfFromList(aid){
   }catch(e){ try{w.close();}catch(_){} alert(e.message); }
 }
 function closeModal(id){
-  if(id==='projModal' && RETURN_TAB){ const back=RETURN_TAB; RETURN_TAB=''; $(id).classList.add('hidden'); switchTab(back); return; }
+  if(id==='projModal' && PROJ_OVERLAY){
+    PROJ_OVERLAY = false;
+    $(id).classList.add('hidden');
+    // the list under it may now be stale — refresh quietly, without leaving this screen
+    loadProjects();
+    api('list_projects').then(r=>{ PROJECTS=r.projects||[]; ASSIGNMENTS=r.assignments||[]; }).catch(()=>{});
+    return;
+  }
   if(id==='ctModal'){ EXTRACTED_EXTRAS=null; if($('ext_extra')) $('ext_extra').innerHTML=''; const p=$('ext_preview'); if(p){ p.classList.add('hidden'); $('ext_frame').src=''; } const b=document.querySelector('#ctModal .box'); if(b) b.classList.remove('wide'); } $(id).classList.add('hidden'); }
 
 // ── Data ──
