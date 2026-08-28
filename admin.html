@@ -550,6 +550,7 @@
   <div style="height:10px"></div>
   <div style="max-width:220px"><label>Date of acceptance</label><input id="acc_date" type="date"></div>
 
+  <div id="acc_fxHint" class="muted hidden" style="margin-top:10px;font-size:13px"></div>
   <div id="acc_upHint" class="muted hidden" style="margin-top:10px;font-size:13px"></div>
   <div style="height:14px"></div>
   <div class="acts"><button class="btn sm" id="acc_go" onclick="acceptNow(this)">Accept report</button>
@@ -858,7 +859,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.101';
+const BUILD = '2026-08-08.102';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3616,6 +3617,13 @@ async function askAccept(aid){
     $('acceptModal').classList.remove('hidden');   // show it at once; the uplift block fills in after
     await upLoad(aid);
     const on = !!UP_ST;
+    // an elected payout currency gets an indicative conversion recorded on acceptance
+    const rep = (CURRENT&&CURRENT.assignments||[]).find(x=>String(x.AssignmentID)===String(aid))
+             || ASSIGNMENTS.find(x=>String(x.AssignmentID)===String(aid));
+    const pc = rep && rep.PayoutCurrency && rep.PayoutCurrency !== rep.Currency ? rep.PayoutCurrency : '';
+    $('acc_fxHint').classList.toggle('hidden', !pc);
+    if(pc) $('acc_fxHint').innerHTML = `Payout currency elected: <b>${esc(pc)}</b>. `
+      + `The rate on the date of acceptance will be recorded as an indication — payment itself converts at the rate on the day it is made.`;
     $('acc_upBtn').classList.toggle('hidden', !on);
     $('acc_upHint').classList.toggle('hidden', !on);
     if(on) $('acc_upHint').innerHTML = UP_ST.granted
@@ -3648,6 +3656,7 @@ async function acceptNow(btn){
     const patch = a => {
       if(!a) return;
       a.AcceptedBy = payload.acceptedBy; a.AcceptedTitle = payload.acceptedTitle; a.AcceptedAt = payload.acceptedAt;
+      if(res.payout){ a.PayoutFxRate=res.payout.rate; a.PayoutFxAsOf=res.payout.asOf; a.PayoutEstimate=res.payout.estimate; }
       if(res.uplift){
         a.UpliftGranted = res.uplift.granted ? 'yes' : 'no';
         a.UpliftPercent = res.uplift.percent ?? ''; a.UpliftAmount = res.uplift.amount ?? '';
@@ -3659,7 +3668,8 @@ async function acceptNow(btn){
     if(CURRENT && CURRENT.assignments) patch(CURRENT.assignments.find(x=>String(x.AssignmentID)===String(ACC_ID)));
     patch(ASSIGNMENTS.find(x=>String(x.AssignmentID)===String(ACC_ID)));
     renderProjectModal();
-    notice('pm_err','ok','Report accepted — this is the basis for payment.');
+    notice('pm_err','ok','Report accepted — this is the basis for payment.'
+      + (res.payout ? ` Indicative: ${cur(res.payout.currency)}${money(res.payout.estimate)} at ${res.payout.rate} on ${fmtDate(res.payout.asOf)}.` : ''));
   }catch(e){ notice('acc_err','err', esc(e.message)); }
   finally{ btn.disabled=false; btn.textContent='Accept report'; }
 }
@@ -3813,6 +3823,8 @@ function buildReportHtml(a, activities, hours, withSign, dateStr){
       <tr><td class="label">Performance uplift:</td><td>${esc(a.UpliftPercent)}% \u2014 ${cur(a.Currency)}${money(a.UpliftAmount)}</td></tr>
       <tr><td class="label">Total payable:</td><td><b>${cur(a.Currency)}${money(Math.round((amtRaw + (+a.UpliftAmount||0))*100)/100)}</b></td></tr>` : ''}
     <tr><td class="label">Currency elected for payment:</td><td>${a.PayoutCurrency ? esc(a.PayoutCurrency) : 'Base currency of the contract'}</td></tr>
+    ${a.PayoutEstimate ? `
+      <tr><td class="label">Indicative equivalent:</td><td>${cur(a.PayoutCurrency)}${money(a.PayoutEstimate)} &mdash; at ${esc(a.PayoutFxRate)} on ${esc(fmtDate(a.PayoutFxAsOf))}. For information only: payment is converted at the rate applying on the date the payment is made.</td></tr>` : ''}
   </table>
   ${signRow}
   <div class="foot">CONFIDENTIAL</div>

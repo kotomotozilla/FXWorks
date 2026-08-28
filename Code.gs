@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.101';
+const BUILD = '2026-08-08.102';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -66,7 +66,8 @@ const HEADERS = {
                 'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt', 'PayoutCurrency', 'AcceptedBy', 'AcceptedTitle', 'AcceptedAt',
                 'ContractID', 'RateSource', 'PricingType',
                 'UpliftGranted', 'UpliftBase', 'UpliftK1', 'UpliftK2', 'UpliftK3',
-                'UpliftPercent', 'UpliftAmount', 'UpliftNote', 'UpliftSetBy', 'UpliftSetAt'],
+                'UpliftPercent', 'UpliftAmount', 'UpliftNote', 'UpliftSetBy', 'UpliftSetAt',
+                'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
 
@@ -2714,6 +2715,16 @@ function adminInviteCounterparty_(d) {
   return { ok: true };
 }
 
+// A rate between two currencies, both quoted against USD. Only ever a guide: the contract
+// converts at the rate on the date the payment is made, which is not known at acceptance.
+function crossRate_(from, to, dateStr) {
+  var a = trim_(from).toUpperCase(), b = trim_(to).toUpperCase();
+  if (!a || !b || a === b) return null;
+  var ra = fxRateToUsd_(a, dateStr), rb = fxRateToUsd_(b, dateStr);
+  if (!ra || !rb || !rb.rate) return null;
+  return { rate: Math.round((ra.rate / rb.rate) * 1000000) / 1000000, asOf: ra.asOf || rb.asOf };
+}
+
 // ── Bank statements: read the file, then match each line to a report ───────────
 // A spreadsheet is converted through Drive, which handles xls, xlsx and csv alike.
 function adminParseStatement_(d) {
@@ -3243,6 +3254,24 @@ function adminAcceptAssignment_(d) {
   var up = applyUpliftFields_(a, d, by);
   for (var k in up.fields) upd[k] = up.fields[k];
   res.uplift = up.info;
+
+  // If a payout currency was elected, record what the amount is worth on the day of
+  // acceptance — an indication only, the contract pays at the rate on the payment date.
+  var payout = trim_(a.PayoutCurrency);
+  if (payout && payout !== trim_(a.Currency)) {
+    var total = num_(a.ReportedAmount);
+    if (!total) total = round2_(num_(a.ReportedHours) * num_(a.Rate));
+    if (up.info && up.info.granted) total = round2_(total + num_(up.info.amount));
+    var x = crossRate_(a.Currency, payout, date);
+    if (x) {
+      upd.PayoutFxRate = x.rate;
+      upd.PayoutFxAsOf = date;
+      upd.PayoutEstimate = round2_(total * x.rate);
+      res.payout = { currency: payout, rate: x.rate, asOf: date, estimate: upd.PayoutEstimate };
+    }
+  } else {
+    upd.PayoutFxRate = ''; upd.PayoutFxAsOf = ''; upd.PayoutEstimate = '';
+  }
   updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, upd);
   return res;
 }
