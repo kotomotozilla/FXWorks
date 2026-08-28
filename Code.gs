@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.102';
+const BUILD = '2026-08-08.103';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -2837,10 +2837,26 @@ function matchPayments_(d) {
     if (!trim_(a.AcceptedBy)) return false;                 // only accepted work is paid
     return !taken[trim_(a.AssignmentID)];
   }).map(function (a) {
+    // A payment arrives in the currency actually sent. Where a payout currency was elected,
+    // compare against the amount in that currency, not against the base one.
+    var base = reportTotal_(a), baseCur = trim_(a.Currency);
+    var payCur = trim_(a.PayoutCurrency);
+    var payAmt = num_(a.PayoutEstimate);
+    var expected = base, expectedCur = baseCur, indicative = false;
+    if (payCur && payCur !== baseCur) {
+      expectedCur = payCur;
+      indicative = true;
+      if (!payAmt) {                                  // no rate stored — work one out now
+        var x = crossRate_(baseCur, payCur, String(trim_(a.AcceptedAt) || trim_(a.SubmittedAt)).slice(0, 10));
+        payAmt = x ? round2_(base * x.rate) : 0;
+      }
+      expected = payAmt;
+    }
     return { id: trim_(a.AssignmentID), project: trim_(a.ProjectName), title: trim_(a.Title),
              date: String(trim_(a.AcceptedAt) || trim_(a.SubmittedAt)).slice(0, 10),
-             amount: reportTotal_(a), currency: trim_(a.Currency) };
-  });
+             amount: expected, currency: expectedCur, indicative: indicative,
+             baseAmount: base, baseCurrency: baseCur };
+  }).filter(function (c) { return num_(c.amount) > 0; });
 
   var used = {}, out = [];
   lines.forEach(function (ln) {
@@ -2850,7 +2866,10 @@ function matchPayments_(d) {
       if (ln.currency && c.currency && ln.currency !== c.currency) return;
       var diff = Math.abs(num_(c.amount) - num_(ln.amount));
       if (num_(c.amount) <= 0) return;
-      if (diff / num_(c.amount) > 0.02) return;             // 2% tolerance
+      // 2% as agreed; where the figure came from a conversion the rate has moved since the
+      // report was accepted, so a wider band is needed or nothing would ever match
+      var tol = c.indicative ? 0.08 : 0.02;
+      if (diff / num_(c.amount) > tol) return;
       if (c.date && ln.date && ln.date < c.date) return;    // a payment follows its report
       var gap = (c.date && ln.date) ? dayGap_(c.date, ln.date) : 9999;
       if (gap < bestGap) { bestGap = gap; best = c; }

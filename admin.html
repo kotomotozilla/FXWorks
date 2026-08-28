@@ -859,7 +859,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.102';
+const BUILD = '2026-08-08.103';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2244,7 +2244,8 @@ function payRender(){
         .map(c=>{ const jc = jobOfId(c.id);
           return `<option value="${esc(c.id)}" ${String(sel)===String(c.id)?'selected':''}>`
         + `${esc(c.date)} · ${esc(c.project||'')}${c.title?' · '+esc(c.title):''}`
-        + `${jc?' · '+esc(jc):''} · ${cur(c.currency)}${money(c.amount)}</option>`; }).join('');
+        + `${jc?' · '+esc(jc):''} · ${cur(c.currency)}${money(c.amount)}`
+        + `${c.indicative?` (≈ from ${cur(c.baseCurrency)}${money(c.baseAmount)})`:''}</option>`; }).join('');
   tb.innerHTML = '<tr><th>Paid</th><th class="num">Amount</th><th>Reference</th><th>Report it settles</th><th class="num">Difference</th></tr>'
     + PAY_ROWS.map((x,i)=>`<tr>
         <td class="muted">${esc(x.line.date?fmtDate(x.line.date):'—')}</td>
@@ -2258,6 +2259,7 @@ function payDiffText(line, c, gap){
   const d = Math.round((+line.amount - +c.amount)*100)/100;
   const pct = c.amount ? Math.abs(d/c.amount*100) : 0;
   return `${d===0?'exact':`${d>0?'+':'−'}${cur(c.currency)}${money(Math.abs(d))} · ${pct.toFixed(1)}%`}`
+    + (c.indicative?`<br><span class="muted" style="font-size:11px">converted — the rate has moved since acceptance</span>`:'')
     + (gap!=null?`<br><span class="muted" style="font-size:11px">${gap} day(s) after</span>`:'');
 }
 function payDiff(i){
