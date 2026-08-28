@@ -855,7 +855,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.95';
+const BUILD = '2026-08-08.97';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2113,11 +2113,14 @@ function v2Toggle(id){ V2.open[id] = !V2.open[id]; v2Render(); }
 
 // ── Payments ──
 let PAY_ROWS = [], PAY_CAND = [];
-function payInit(){
+async function payInit(){
   const sel=$('pay_cp'), keep=sel.value;
   const list = COUNTERPARTIES.slice().sort((a,b)=>String(a.Name||'').localeCompare(String(b.Name||'')));
   sel.innerHTML = '<option value="">— pick a counterparty —</option>'
     + list.map(c=>`<option value="${esc(c.CounterpartyID)}" ${keep===c.CounterpartyID?'selected':''}>${esc(c.Name||'')}</option>`).join('');
+  if(!ASSIGNMENTS.length){
+    try{ const r = await api('list_projects'); PROJECTS=r.projects||[]; ASSIGNMENTS=r.assignments||[]; }catch(_){}
+  }
   payLoadExisting();
 }
 async function payLoadExisting(){
@@ -2134,11 +2137,18 @@ async function payLoadExisting(){
             <td class="muted">${esc(p.PaidAt?fmtDate(p.PaidAt):'—')}</td>
             <td class="num">${cur(p.Currency)}${money(p.Amount)}</td>
             <td class="muted">${esc(p.Reference||'—')}</td>
-            <td>${a?`${esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}`:'<span class="muted">not matched</span>'}</td>
+            <td>${a?`<a href="#" onclick="payOpenProject('${esc(a.ProjectID)}');return false;">${esc(a.ProjectName||'(project)')}</a>${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}`:'<span class="muted">not matched</span>'}</td>
             <td>${p.AssignmentID?`<a href="#" onclick="payUnmatch('${esc(p.PaymentID)}');return false;">unmatch</a>`:''}</td></tr>`;
         }).join('')
         : '<tr><td class="empty" colspan="5">No payments recorded yet.</td></tr>');
   }catch(e){ notice('payErr','err', esc(e.message)); }
+}
+// Jump straight to the project from a payment line — checking a match usually means
+// looking at the report behind it.
+function payOpenProject(pid){
+  if(!pid) return;
+  switchTab('projects');
+  openProject(pid);
 }
 async function payParse(btn){
   const cp=$('pay_cp').value, f=($('pay_file').files||[])[0];
@@ -2168,16 +2178,36 @@ function payRender(){
   // offered again — except on the line that holds it.
   const taken = {};
   PAY_ROWS.forEach(x=>{ if(x.match) taken[String(x.match.id)] = 1; });
+  // The counterparty the work was billed to helps tell apart two reports of the same size.
+  const jobOfId = id => {
+    const a = ASSIGNMENTS.find(x=>String(x.AssignmentID)===String(id));
+    if(!a) return '';
+    const p = PROJECTS.find(x=>String(x.ProjectID)===String(a.ProjectID));
+    if(!p || !p.ContractID) return '';
+    const c = CONTRACTS.find(x=>String(x.ContractID)===String(p.ContractID));
+    if(!c) return '';
+    // the term of that contract, so two engagements with the same client are told apart
+    const st = c.StartDate || c.SignDate, en = c.EndDate;
+    const term = (st || en) ? ` (${shortDate(st)} – ${en?shortDate(en):'open'})` : '';
+    return cpName(c.CounterpartyID) + term;
+  };
+  const projectOfId = id => {
+    const a = ASSIGNMENTS.find(x=>String(x.AssignmentID)===String(id));
+    return a ? a.ProjectID : '';
+  };
   const opts = (sel) => '<option value="">— not matched —</option>'
     + PAY_CAND.filter(c=>!taken[String(c.id)] || String(sel)===String(c.id))
-        .map(c=>`<option value="${esc(c.id)}" ${String(sel)===String(c.id)?'selected':''}>`
-        + `${esc(c.date)} · ${esc(c.project||'')}${c.title?' · '+esc(c.title):''} · ${cur(c.currency)}${money(c.amount)}</option>`).join('');
+        .map(c=>{ const jc = jobOfId(c.id);
+          return `<option value="${esc(c.id)}" ${String(sel)===String(c.id)?'selected':''}>`
+        + `${esc(c.date)} · ${esc(c.project||'')}${c.title?' · '+esc(c.title):''}`
+        + `${jc?' · '+esc(jc):''} · ${cur(c.currency)}${money(c.amount)}</option>`; }).join('');
   tb.innerHTML = '<tr><th>Paid</th><th class="num">Amount</th><th>Reference</th><th>Report it settles</th><th class="num">Difference</th></tr>'
     + PAY_ROWS.map((x,i)=>`<tr>
         <td class="muted">${esc(x.line.date?fmtDate(x.line.date):'—')}</td>
         <td class="num">${cur(x.line.currency)}${money(x.line.amount)}</td>
         <td class="muted" style="max-width:280px;font-size:12px">${esc(x.line.reference||'—')}</td>
-        <td><select id="pay_sel_${i}" onchange="payDiff(${i})" style="font-size:12px">${opts(x.match?x.match.id:'')}</select></td>
+        <td><select id="pay_sel_${i}" onchange="payDiff(${i})" style="font-size:12px">${opts(x.match?x.match.id:'')}</select>
+          ${x.match&&projectOfId(x.match.id)?`<div style="margin-top:4px"><a href="#" onclick="payOpenProject('${esc(projectOfId(x.match.id))}');return false;" style="font-size:12px">open the project</a></div>`:''}</td>
         <td class="num" id="pay_diff_${i}">${x.match?payDiffText(x.line, x.match, x.gapDays):'—'}</td></tr>`).join('');
 }
 function payDiffText(line, c, gap){
