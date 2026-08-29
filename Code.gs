@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.106';
+const BUILD = '2026-08-08.108';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -119,6 +119,8 @@ function route_(action, d) {
     // Contracts 2.0 — clause-level structure (experimental, separate sheets)
     case 'v2_parse':           return v2Parse_(d);
     case 'v2_parse_upload':    return v2ParseUpload_(d);
+    case 'v2_parse_more':      return v2ParseMore_(d);
+    case 'v2_check_model':     requireAdmin_(d); return v2CheckModel_();
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
     case 'v2_set_key':         return v2SetKey_(d);
@@ -621,19 +623,32 @@ function detectProfile_(text) {
   return '';
 }
 
+// Apps Script kills a request at around six minutes. Keep a budget, and when it runs out
+// return what has been parsed so far instead of losing everything to a timeout.
+var PARSE_DEADLINE = 0;
 function v2Blocks_(text, profile) {
   var key = geminiKey_();
   if (!key) return { ok: false, error: 'AI key is not configured — Contracts 2.0 needs it to split the text into clauses' };
   var chunks = v2Chunks_(text, 9000);
-  var all = [], notes = [], failed = 0;
+  var all = [], notes = [], failed = 0, stoppedAt = 0;
   for (var i = 0; i < chunks.length; i++) {
+    if (PARSE_DEADLINE && Date.now() > PARSE_DEADLINE) {
+      stoppedAt = i;
+      notes.push('stopped after part ' + i + ' of ' + chunks.length + ' — out of time');
+      break;
+    }
     var r = v2BlocksPart_(key, chunks[i], 'part ' + (i + 1), 0, profile);
     all = all.concat(r.blocks);
     notes = notes.concat(r.notes);
     if (!r.ok) failed++;
   }
-  if (!all.length) return { ok: false, error: notes.join('; ') || 'The model returned no clauses' };
-  return { ok: true, blocks: all, chunks: chunks.length, failedChunks: failed, notes: notes };
+  if (!all.length) {
+    return { ok: false, chars: String(text).length, chunks: chunks.length,
+             error: (notes.length ? notes.join(' · ') : 'The model returned no clauses')
+                    + ' [' + chunks.length + ' part(s), ' + String(text).length + ' characters]' };
+  }
+  return { ok: true, blocks: all, chunks: chunks.length, failedChunks: failed, notes: notes,
+           partial: !!stoppedAt, done: stoppedAt || chunks.length };
 }
 
 // Test mode: parse any file without linking it to a contract. Everything lands under the
@@ -650,6 +665,83 @@ function v2ParseUpload_(d) {
   return v2ParseFile_('__sandbox', file.getId(), fileName, '', 'agreement', trim_(d.counterpartyName), trim_(d.profile));
 }
 
+// A quick round trip to the model, to tell "the key or the quota is the problem" from
+// "the document is too big".
+function v2CheckModel_() {
+  var key = geminiKey_();
+  if (!key) return { ok: false, error: 'AI key is not configured (Script Properties → gemini_key)' };
+  var t0 = Date.now();
+  var call = geminiCall_(key, JSON.stringify({
+    contents: [{ parts: [{ text: 'Reply with exactly: {"ok":true}' }] }],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json', maxOutputTokens: 64 }
+  }));
+  if (!call.ok) return { ok: false, error: call.error, ms: Date.now() - t0, model: geminiModel_() };
+  return { ok: true, ms: Date.now() - t0, model: geminiModel_(), reply: String(call.body).slice(0, 200) };
+}
+
+// Carry on where a timed-out parse stopped: same file, skip the parts already stored,
+// append the rest to the same document.
+function v2ParseMore_(d) {
+  requireAdmin_(d);
+  var doc = findRow_(SHEETS.documents, 'DocumentID', trim_(d.documentId));
+  if (!doc) return { ok: false, error: 'Document not found' };
+  var att = trim_(doc.AttachmentID) ? findRow_(SHEETS.attachments, 'AttachmentID', doc.AttachmentID) : null;
+  var fileId = att ? trim_(att.DriveFileID) : trim_(d.driveFileId);
+  if (!fileId) return { ok: false, error: 'The source file is no longer available — parse it again' };
+
+  var t0 = Date.now();
+  var r = ocrText_(fileId);
+  if (!r.ok) return { ok: false, error: r.error };
+  var text = dedupePages_(fixOcrText_(String(r.text || '')));
+  var c = findRow_(SHEETS.contracts, 'ContractID', doc.ContractID);
+  var cpName = c ? cpName_(c.CounterpartyID) : '';
+  var masked = maskForAI_(text, cpName);
+
+  var chunks = v2Chunks_(masked, 9000);
+  var from = num_(d.fromPart) || 0;
+  if (from >= chunks.length) return { ok: false, error: 'Nothing left to parse' };
+
+  var key = geminiKey_();
+  if (!key) return { ok: false, error: 'AI key is not configured' };
+  PARSE_DEADLINE = t0 + 4.5 * 60 * 1000;
+
+  var all = [], notes = [], i;
+  for (i = from; i < chunks.length; i++) {
+    if (Date.now() > PARSE_DEADLINE) { notes.push('stopped after part ' + i + ' of ' + chunks.length); break; }
+    var res = v2BlocksPart_(key, chunks[i], 'part ' + (i + 1), 0, trim_(doc.Profile));
+    all = all.concat(res.blocks);
+    notes = notes.concat(res.notes);
+  }
+
+  var head = HEADERS.blocks, now = new Date().toISOString();
+  var existing = readAll_(SHEETS.blocks).filter(function (b) { return String(b.DocumentID) === String(doc.DocumentID); });
+  var start = existing.length;
+  var rows = dedupeBlocks_(all).map(function (b, n) {
+    var k = trim_(b.semanticKey);
+    var rec = {
+      BlockID: Utilities.getUuid(), DocumentID: doc.DocumentID, ContractID: doc.ContractID,
+      SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
+      Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath),
+      ReplacesIn: (trim_(b.replacesIn) === 'annex' ? 'annex' : (trim_(b.replacesPath) ? 'agreement' : '')),
+      ReplacementText: unmaskAI_(String(b.replacementText || ''), cpName),
+      Level: num_(b.level) || 2, Title: trim_(b.title),
+      Text: unmaskAI_(String(b.text || ''), cpName), Params: '', Origin: 'external',
+      SortOrder: start + n + 1, CreatedAt: now
+    };
+    return head.map(function (h) { return rec[h] != null ? rec[h] : ''; });
+  });
+  if (rows.length) {
+    var sh = getSheet_(SHEETS.blocks), at = sh.getLastRow() + 1;
+    sh.getRange(at, head.indexOf('Path') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(at, head.indexOf('ReplacesPath') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(at, head.indexOf('ReplacesIn') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(at, head.indexOf('SemanticKey') + 1, rows.length, 1).setNumberFormat('@');
+    sh.getRange(at, 1, rows.length, head.length).setValues(rows);
+  }
+  return { ok: true, blocks: rows.length, partsDone: i, partsTotal: chunks.length,
+           partial: i < chunks.length, notes: notes };
+}
+
 // Shared by both entry points: OCR -> mask -> split into clauses -> store.
 function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpName, profile) {
   var t0 = Date.now();
@@ -657,9 +749,13 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   if (!r.ok) return { ok: false, error: r.error };
   var text = dedupePages_(fixOcrText_(String(r.text || '')));
   var tOcr = Date.now() - t0;
-  if (text.replace(/\s/g, '').length < 40) return { ok: false, error: 'No readable text in this file' };
+  if (text.replace(/\s/g, '').length < 40) {
+    return { ok: false, error: 'No readable text in this file — is it a scan without a text layer? '
+             + '(OCR returned ' + String(r.text || '').length + ' characters in ' + tOcr + ' ms)' };
+  }
 
   var t1 = Date.now();
+  PARSE_DEADLINE = t0 + 4.5 * 60 * 1000;    // leave time to store what has been parsed
   var masked = maskForAI_(text, cpName || '');
   var meta = v2DocMeta_(geminiKey_(), masked);       // what this document is, from the document itself
   var autoProfile = trim_(profile);
@@ -739,6 +835,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   }
 
   return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null, diff: diff, profile: autoProfile,
+           partial: !!res.partial, partsDone: res.done, partsTotal: res.chunks,
            timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_(),
                      parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
            notes: res.notes || [] };

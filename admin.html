@@ -275,6 +275,7 @@
               <option value="table">mostly tables</option>
             </select></div>
           <div style="flex:0 0 auto"><button class="btn sm" id="v2_parseBtn" onclick="v2Parse()">Parse into clauses</button></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="v2CheckModel(this)" title="Check the AI key and quota">Test the model</button></div>
         </div>
         <div style="height:10px"></div>
         <div class="row" style="align-items:end" id="v2_tplRow">
@@ -873,7 +874,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.106';
+const BUILD = '2026-08-08.108';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1538,6 +1539,29 @@ async function v2LoadContract(){
     v2Render();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
+// Continue a parse that ran out of time, appending to the same document.
+// Is it the model or the document? One short call answers that.
+async function v2CheckModel(btn){
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  try{
+    const r = await api('v2_check_model');
+    notice('v2Err','ok',`Model <b>${esc(r.model)}</b> answered in ${r.ms} ms — the key and the quota are fine.`);
+  }catch(e){ notice('v2Err','err','The model did not answer: '+esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Test the model'; }
+}
+async function v2ParseMore(btn){
+  if(!V2.resume) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  notice('v2Err','info','Carrying on with the rest of the document…');
+  try{
+    const r = await api('v2_parse_more',{ documentId:V2.resume.documentId, fromPart:V2.resume.from });
+    V2.resume = r.partial ? { documentId:V2.resume.documentId, from:r.partsDone, total:r.partsTotal } : null;
+    await v2LoadContract();
+    notice('v2Err','ok',`${r.blocks} more clause(s) · parts ${r.partsDone} of ${r.partsTotal}.`
+      + (V2.resume?`<div style="margin-top:8px"><button class="btn sm" onclick="v2ParseMore(this)">Carry on from part ${V2.resume.from+1} of ${V2.resume.total}</button></div>`:''));
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+  finally{ btn.disabled=false; btn.textContent='Carry on'; }
+}
 async function v2Parse(){
   const sandbox = V2.contractId==='__sandbox';
   const attIds = sandbox ? [] : Array.from($('v2_att').selectedOptions).map(o=>o.value).filter(Boolean);
@@ -1549,7 +1573,8 @@ async function v2Parse(){
 
   const total = sandbox ? files.length : attIds.length;
   const b=$('v2_parseBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  const done=[], lines=[];
+  const done=[], lines=[], lastResults=[];
+  V2.resume = null;
   const secs = ms => (ms==null?'—':(ms/1000).toFixed(1)+'s');
   try{
     for(let i=0;i<total;i++){
@@ -1565,6 +1590,7 @@ async function v2Parse(){
         lines.push(`<b>${esc(sandbox?files[i].name:'document '+(i+1))}</b>: connection dropped — the server may have finished`);
         continue;
       }
+      lastResults.push(r);
       const t=r.timing||{}, name = esc(sandbox?files[i].name:'document '+(i+1));
       const n = (r.blocks==null) ? 0 : r.blocks;
       done.push(n);
@@ -1573,12 +1599,16 @@ async function v2Parse(){
         + (t.parts>1?` · ${t.parts} parts`:'')
         + (t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:'')
         + ((r.diff&&r.diff.length)?`<div class="muted" style="font-size:12px;margin-left:12px">vs previous parse: ${r.diff.map(esc).join(' · ')}</div>`:'')
+        + (r.partial?` · <b style="color:var(--warn)">stopped at part ${r.partsDone} of ${r.partsTotal}</b>`:'')
         + (r.profile?` · shape: <b>${esc(r.profile)}</b>`:'')
         + (r.meta?` · recognised as <b>${esc(V2_KIND[r.meta.kind]||r.meta.kind)}</b>${r.meta.number?' '+esc(r.meta.number):''}${r.meta.date?' of '+esc(r.meta.date):''}${r.meta.parentNumber?` (to agreement ${esc(r.meta.parentNumber)})`:''}`:'')
         + ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-left:12px">${r.notes.map(esc).join('<br>')}</div>`:''));
     }
     await v2LoadContract();
     const sum = done.reduce((a,c)=>a+c,0);
+    // a long document may run out of time — offer to carry on rather than start over
+    const unfinished = lastResults.find(x=>x && x.partial);
+    if(unfinished) V2.resume = { documentId: unfinished.documentId, from: unfinished.partsDone, total: unfinished.partsTotal };
     notice('v2Err', sum?'ok':'err',
       (sum ? `Parsed ${total} document(s) into ${sum} clauses.` : 'Nothing was parsed — try again or split the document.')
       + `<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`);
