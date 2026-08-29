@@ -27,19 +27,23 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.123';
+const BUILD = '2026-08-08.125';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
+                 queue: 'ParseQueue', queueText: 'ParseQueueText', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
   documents:   ['DocumentID', 'ContractID', 'Kind', 'Number', 'SignDate', 'EffectiveFrom', 'Status', 'Source',
-                'AttachmentID', 'FileName', 'Profile', 'Notes', 'Snapshot', 'SentTextID', 'CreatedAt'],
+                'AttachmentID', 'FileName', 'Profile', 'Notes', 'Snapshot', 'SentTextID', 'GroupKey', 'CreatedAt'],
   payments:    ['PaymentID', 'CounterpartyID', 'PaidAt', 'Amount', 'Currency', 'Reference', 'Note',
                 'AssignmentID', 'MatchedBy', 'MatchedAt', 'CreatedAt'],
   terms:       ['TermID', 'ContractID', 'Field', 'Value', 'ValidFrom', 'FromClause', 'DocumentID', 'Note', 'CreatedAt'],
   sentText:    ['DocumentID', 'Seq', 'Chunk'],
+  queue:       ['QueueID', 'BatchID', 'ContractID', 'FileName', 'DriveFileID', 'TextSource', 'Profile',
+                'Status', 'Message', 'DocumentID', 'Blocks', 'CreatedAt', 'StartedAt', 'FinishedAt'],
+  queueText:   ['QueueID', 'Seq', 'Chunk'],
   blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
@@ -123,6 +127,11 @@ function route_(action, d) {
     case 'v2_parse_more':      return v2ParseMore_(d);
     case 'v2_check_model':     requireAdmin_(d); return v2CheckModel_();
     case 'v2_ocr_pages':       return v2OcrPages_(d);
+    case 'v2_queue_add':       return v2QueueAdd_(d);
+    case 'v2_queue_list':      return v2QueueList_(d);
+    case 'v2_queue_run':       requireAdmin_(d); return v2QueueTick();
+    case 'v2_queue_background':return v2QueueBackground_(d);
+    case 'v2_queue_clear':     return v2QueueClear_(d);
     case 'v2_sent_text':       return v2SentText_(d);
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
@@ -799,6 +808,178 @@ function textLooksBroken_(t) {
   return hits > x.length / 1500;
 }
 
+// An agreement, its annexes and its amendments belong together. The model already reads the
+// document's own number and, for an annex or amendment, the number of the agreement it
+// belongs to — that number is the group. Without it a batch of ten files is a flat list.
+function v2GroupKey_(contractId, kind, meta, fileName) {
+  var own = meta ? trim_(meta.number) : '';
+  var parent = meta ? trim_(meta.parentNumber) : '';
+  if (kind === 'agreement') return own || fileName;
+  if (parent) return parent;
+  // No parent stated: fall back to the newest agreement parsed under the same contract.
+  var agreements = readAll_(SHEETS.documents).filter(function (r) {
+    return String(r.ContractID) === contractId && String(r.Kind) === 'agreement';
+  });
+  if (agreements.length) {
+    var last = agreements[agreements.length - 1];
+    return trim_(last.GroupKey) || trim_(last.Number) || trim_(last.FileName);
+  }
+  return own || fileName;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parsing in the background.
+//
+// A batch of files is more work than one request can hold: each document takes a minute or
+// two of model time, and the browser cannot be asked to sit and wait. The browser does what
+// only it can — upload the file and read its text layer — and the rest is queued. A timed
+// trigger takes one document per run, so nothing hits the six-minute limit, and when the
+// batch empties an email goes out.
+// ─────────────────────────────────────────────────────────────────────────────
+function v2QueueAdd_(d) {
+  requireAdmin_(d);
+  var fileName = trim_(d.fileName) || 'document';
+  if (!d.dataBase64) return { ok: false, error: 'No file data' };
+  var file;
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), trim_(d.mimeType) || 'application/pdf', fileName);
+    file = attachmentsFolder_().createFile(blob);
+  } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
+
+  var id = Utilities.getUuid();
+  var text = String(d.textLayer || '');
+  if (text) {
+    var rows = [], seq = 0;
+    for (var at = 0; at < text.length; at += SENT_TEXT_CHUNK) rows.push([id, ++seq, text.substr(at, SENT_TEXT_CHUNK)]);
+    var sh = getSheet_(SHEETS.queueText);
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, HEADERS.queueText.length).setValues(rows);
+    invalidateCache_(SHEETS.queueText);
+  }
+  appendRow_(SHEETS.queue, {
+    QueueID: id, BatchID: trim_(d.batchId) || Utilities.getUuid(),
+    ContractID: trim_(d.contractId) || '__sandbox', FileName: fileName,
+    DriveFileID: file.getId(), TextSource: trim_(d.textSource), Profile: trim_(d.profile),
+    Status: 'queued', CreatedAt: new Date().toISOString()
+  });
+  return { ok: true, queueId: id };
+}
+
+function v2QueueText_(queueId) {
+  var parts = readAll_(SHEETS.queueText).filter(function (r) { return String(r.QueueID) === queueId; });
+  parts.sort(function (a, b) { return (+a.Seq || 0) - (+b.Seq || 0); });
+  return parts.map(function (r) { return String(r.Chunk || ''); }).join('');
+}
+
+// One document per run. Called by the trigger, and by the page while it stays open.
+function v2QueueTick() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(2000)) return { ok: true, busy: true };
+  try {
+    var all = readAll_(SHEETS.queue);
+    var next = null;
+    for (var i = 0; i < all.length; i++) if (String(all[i].Status) === 'queued') { next = all[i]; break; }
+    if (!next) return { ok: true, idle: true };
+
+    var id = String(next.QueueID);
+    updateRow_(SHEETS.queue, 'QueueID', id, { Status: 'running', StartedAt: new Date().toISOString() });
+    var res;
+    try {
+      var contractId = String(next.ContractID) || '__sandbox';
+      var c = contractId === '__sandbox' ? null : findRow_(SHEETS.contracts, 'ContractID', contractId);
+      res = v2ParseFile_(contractId, String(next.DriveFileID), String(next.FileName), '', 'agreement',
+                         c ? cpName_(c.CounterpartyID) : '', String(next.Profile || ''),
+                         v2QueueText_(id), String(next.TextSource || ''));
+    } catch (e) {
+      res = { ok: false, error: String(e).slice(0, 200) };
+    }
+    updateRow_(SHEETS.queue, 'QueueID', id, {
+      Status: res.ok ? 'done' : 'failed',
+      Message: res.ok ? '' : String(res.error || 'failed').slice(0, 300),
+      DocumentID: res.ok ? String(res.documentId || '') : '',
+      Blocks: res.ok ? (res.blocks || 0) : 0,
+      FinishedAt: new Date().toISOString()
+    });
+    deleteRowsWhere_(SHEETS.queueText, 'QueueID', id);
+    v2QueueNotify_(String(next.BatchID));
+    return { ok: true, done: String(next.FileName), blocks: res.ok ? res.blocks : 0, error: res.ok ? '' : res.error };
+  } finally { lock.releaseLock(); }
+}
+
+// Once nothing of the batch is left waiting, report what came out of it.
+function v2QueueNotify_(batchId) {
+  var rows = readAll_(SHEETS.queue).filter(function (r) { return String(r.BatchID) === batchId; });
+  if (!rows.length) return;
+  if (rows.some(function (r) { return String(r.Status) === 'queued' || String(r.Status) === 'running'; })) return;
+  if (rows.some(function (r) { return String(r.Message) === 'notified'; })) return;
+
+  var okRows = rows.filter(function (r) { return String(r.Status) === 'done'; });
+  var bad = rows.filter(function (r) { return String(r.Status) === 'failed'; });
+  var lines = rows.map(function (r) {
+    return String(r.Status) === 'done'
+      ? '• ' + r.FileName + ' — ' + (r.Blocks || 0) + ' clauses'
+      : '• ' + r.FileName + ' — FAILED: ' + (r.Message || '');
+  });
+  var subject = 'FXWorks: ' + okRows.length + ' document(s) parsed'
+              + (bad.length ? ', ' + bad.length + ' failed' : '');
+  try {
+    MailApp.sendEmail(CONFIG.ADMIN_EMAIL, subject,
+      lines.join('\n') + '\n\nOpen the mapping: ' + CONFIG.ADMIN_BASE_URL + '\n');
+  } catch (e) {}
+  rows.forEach(function (r) {
+    if (String(r.Status) === 'done') updateRow_(SHEETS.queue, 'QueueID', String(r.QueueID), { Message: 'notified' });
+  });
+}
+
+function v2QueueList_(d) {
+  requireAdmin_(d);
+  var rows = readAll_(SHEETS.queue).map(function (r) {
+    return { queueId: String(r.QueueID), batchId: String(r.BatchID), fileName: String(r.FileName),
+             status: String(r.Status), message: String(r.Message === 'notified' ? '' : r.Message || ''),
+             blocks: +r.Blocks || 0, createdAt: String(r.CreatedAt || '') };
+  });
+  return { ok: true, queue: rows.slice(-60), background: v2QueueTriggerOn_() };
+}
+
+function v2QueueTriggerOn_() {
+  return ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'v2QueueTick'; });
+}
+
+function v2QueueBackground_(d) {
+  requireAdmin_(d);
+  var on = v2QueueTriggerOn_();
+  if (d.enable && !on) {
+    ScriptApp.newTrigger('v2QueueTick').timeBased().everyMinutes(1).create();
+  } else if (!d.enable && on) {
+    ScriptApp.getProjectTriggers().forEach(function (t) {
+      if (t.getHandlerFunction() === 'v2QueueTick') ScriptApp.deleteTrigger(t);
+    });
+  }
+  return { ok: true, background: v2QueueTriggerOn_() };
+}
+
+function v2QueueClear_(d) {
+  requireAdmin_(d);
+  var rows = readAll_(SHEETS.queue);
+  var gone = 0;
+  rows.forEach(function (r) {
+    if (d.all || String(r.Status) === 'queued' || String(r.Status) === 'done' || String(r.Status) === 'failed') {
+      deleteRowsWhere_(SHEETS.queueText, 'QueueID', String(r.QueueID));
+      gone++;
+    }
+  });
+  if (gone) {
+    // keep whatever is running right now
+    var keep = readAll_(SHEETS.queue).filter(function (r) { return String(r.Status) === 'running' && !d.all; });
+    var sh = getSheet_(SHEETS.queue);
+    sh.clear();
+    sh.getRange(1, 1, 1, HEADERS.queue.length).setValues([HEADERS.queue]);
+    sh.setFrozenRows(1);
+    invalidateCache_(SHEETS.queue);
+    keep.forEach(function (r) { appendRow_(SHEETS.queue, r); });
+  }
+  return { ok: true, removed: gone };
+}
+
 // Some PDFs carry a text layer with no ligature glyphs mapped: "Software" is stored as
 // "So ware", and a reader that guesses turns it into "So#ware", "informa'on", "Definihons".
 // The information is only on the picture, so those pages are rendered in the browser and
@@ -952,7 +1133,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     Number: (meta && meta.number) ? meta.number : fileName,
     SignDate: dateFinal, EffectiveFrom: dateFinal, Status: 'signed', Source: 'external',
     AttachmentID: attachmentId || '', FileName: fileName,
-    SentTextID: '', CreatedAt: now
+    SentTextID: '', GroupKey: v2GroupKey_(contractId, kindFinal, meta, fileName), CreatedAt: now
   });
 
   var list = v2InheritKeys_(dedupeBlocks_(res.blocks));

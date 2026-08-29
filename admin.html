@@ -275,6 +275,7 @@
               <option value="table">mostly tables</option>
             </select></div>
           <div style="flex:0 0 auto"><button class="btn sm" id="v2_parseBtn" onclick="v2Parse()">Parse into clauses</button></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" id="v2_queueBtn" onclick="v2QueueParse()" title="Upload the files, then let the server parse them one by one — the tab can be closed">Queue in the background</button></div>
           <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="v2CheckModel(this)" title="Check the AI key and quota">Test the model</button></div>
         </div>
         <div style="height:10px"></div>
@@ -306,6 +307,7 @@
             <button class="btn sm" onclick="v2Generate()" title="Assemble the clauses in force into a Google Doc, PDF and Word">Assemble document</button>
           </div>
         </div>
+        <div id="v2_queue" style="margin:6px 0"></div>
         <div id="v2_docs" class="muted" style="margin:6px 0"></div>
         <div id="v2_cover" style="margin:6px 0"></div>
         <div id="v2_params"></div>
@@ -875,7 +877,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.123';
+const BUILD = '2026-08-08.125';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1784,6 +1786,94 @@ async function v2Parse(){
 }
 // Testing needs a clean slate: forget every document parsed against this contract
 // (or against the sandbox), with its clauses, terms and stored text.
+// Queue a batch: the browser does what only it can — upload each file and read its text
+// layer, rendering the pages when the layer is unusable — and the server parses them one at
+// a time afterwards. From here on the tab may be closed.
+async function v2QueueParse(){
+  const sandbox = V2.contractId==='__sandbox';
+  const files = $('v2_file').files;
+  if(sandbox && !files.length){ notice('v2Err','err','Choose the files first.'); return; }
+  if(!sandbox){ notice('v2Err','err','Background parsing works from the sandbox for now — pick "test parsing".'); return; }
+  const b=$('v2_queueBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const batchId = 'b'+Date.now();
+  try{
+    for(let i=0;i<files.length;i++){
+      const nm = esc(files[i].name);
+      notice('v2Err','info',`Preparing <b>${nm}</b> (${i+1} of ${files.length})…`);
+      let layerText='', layerSource='';
+      try{
+        if(/pdf/i.test(files[i].type||files[i].name)){
+          const bytes = await fileToBytes(files[i]);
+          const t = await pdfTextLayer(bytes.slice());
+          if(t && !textLayerLooksBroken(t.text)){ layerText=t.text; layerSource='text layer'; }
+          else if(t){
+            // the layer is unusable and only the browser can rasterise: do it now, not later
+            notice('v2Err','info',`<b>${nm}</b>: text damaged — recognising the pages…`);
+            const imgs = await pdfRenderPages(bytes.slice(), (p,n)=>notice('v2Err','info',`<b>${nm}</b>: rendering page ${p} of ${n}…`));
+            layerText = await ocrRenderedPages(imgs, (p,n)=>notice('v2Err','info',`<b>${nm}</b>: recognising page ${p} of ${n}…`));
+            layerSource = 'page OCR';
+          }
+        }
+      }catch(e){ layerText=''; layerSource=''; }
+      await api('v2_queue_add',{ batchId, contractId:'__sandbox', fileName:files[i].name,
+        mimeType:files[i].type||'application/pdf', profile:$('v2_profile').value,
+        dataBase64: await fileToBase64(files[i]), textLayer:layerText, textSource:layerSource });
+    }
+    const st = await api('v2_queue_background',{enable:true}).catch(()=>({background:false}));
+    notice('v2Err','ok', `${files.length} file(s) queued.`
+      + (st.background ? ' The server will work through them and email you when the batch is done — you can close this tab.'
+                       : ' Background runs are off, so keep this tab open while they are processed.'));
+    v2QueueWatch();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+  finally{ b.disabled=false; b.textContent='Queue in the background'; }
+}
+
+// Show the queue, and keep it moving while the page is open (the timed trigger does the
+// same job when it is not).
+let V2_QUEUE_TIMER = null;
+async function v2QueueWatch(){
+  if(V2_QUEUE_TIMER) clearInterval(V2_QUEUE_TIMER);
+  await v2QueueRefresh();
+  V2_QUEUE_TIMER = setInterval(v2QueueRefresh, 12000);
+}
+async function v2QueueRefresh(){
+  let r;
+  try{ r = await api('v2_queue_list',{}); }catch(e){ return; }
+  const rows = r.queue||[];
+  const waiting = rows.filter(x=>x.status==='queued').length;
+  const running = rows.filter(x=>x.status==='running').length;
+  const el = $('v2_queue');
+  if(!rows.length){ el.innerHTML=''; if(V2_QUEUE_TIMER) clearInterval(V2_QUEUE_TIMER); return; }
+  const tag = st => st==='done' ? '<span class="tag accepted">done</span>'
+             : st==='failed' ? '<span class="tag rejected">failed</span>'
+             : st==='running' ? '<span class="tag submitted">parsing…</span>' : '<span class="tag draft">queued</span>';
+  el.innerHTML = `<div style="border:1px dashed var(--line);border-radius:10px;padding:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <b style="font-size:13px">Parsing queue</b>
+      <span class="muted" style="font-size:12px">${waiting} waiting · ${running} in progress
+        · background ${r.background?'on':'<b style="color:var(--warn)">off</b>'}</span>
+      <span class="acts">
+        <button class="btn ghost sm" onclick="v2QueueBackground(${r.background?'false':'true'})">${r.background?'Turn background off':'Turn background on'}</button>
+        <button class="btn ghost sm" onclick="v2QueueClear()">Clear finished</button>
+      </span>
+    </div>
+    ${rows.map(x=>`<div style="font-size:13px;padding:2px 0">${tag(x.status)} ${esc(x.fileName)}`
+      + (x.blocks?` <span class="muted">· ${x.blocks} clauses</span>`:'')
+      + (x.message?` <span style="color:var(--warn)">· ${esc(x.message)}</span>`:'')+`</div>`).join('')}
+  </div>`;
+  // nudge the queue along while the tab is open, whether or not the trigger is set
+  if(waiting && !running){ try{ await api('v2_queue_run',{}); }catch(e){} }
+  if(!waiting && !running){ if(V2_QUEUE_TIMER) clearInterval(V2_QUEUE_TIMER); await v2LoadContract(); }
+}
+async function v2QueueBackground(on){
+  try{ await api('v2_queue_background',{enable:on}); await v2QueueRefresh(); }
+  catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+async function v2QueueClear(){
+  try{ await api('v2_queue_clear',{}); await v2QueueRefresh(); }
+  catch(e){ notice('v2Err','err', esc(e.message)); }
+}
+
 async function v2Clear(){
   const where = V2.contractId ? 'this contract' : 'the sandbox';
   if(!confirm(`Remove ALL parsed documents of ${where}? The files themselves stay untouched.`)) return;
@@ -2265,8 +2355,9 @@ async function v2Generate(){
 function v2Render(){
   const tb=$('v2Table').querySelector('tbody');
   const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
-  $('v2_docs').innerHTML = V2.documents.length
-    ? V2.documents.map(d=>`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0">
+  // An agreement, its annexes and its amendments are shown together: after a batch of ten
+  // files a flat list tells you nothing about which paper belongs to which contract.
+  const docCard = d => `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0">
         <b>${esc(d.FileName||d.Number||'')}</b>
         <select style="width:auto;font-size:12px;padding:3px 6px" onchange="v2SetDoc('${esc(d.DocumentID)}','kind',this.value)">
           ${['agreement','annex','amendment'].map(k=>`<option value="${k}" ${d.Kind===k?'selected':''}>${V2_KIND[k]}</option>`).join('')}
@@ -2282,7 +2373,20 @@ function v2Render(){
         <input value="${esc(d.Notes||'')}" placeholder="notes on this document shape…" style="flex:1 1 220px;font-size:12px;padding:3px 6px"
                onchange="v2SetDoc('${esc(d.DocumentID)}','notes',this.value)">
         ${d.Profile?`<span class="tag draft">${esc(d.Profile)}</span>`:''}
-      </div>`).join('')
+      </div>`;
+  const groups = {};
+  V2.documents.forEach(d=>{ const g = d.GroupKey || d.Number || d.FileName || '—'; (groups[g]=groups[g]||[]).push(d); });
+  const order = { agreement:0, annex:1, amendment:2 };
+  $('v2_docs').innerHTML = V2.documents.length
+    ? Object.keys(groups).map(g=>{
+        const list = groups[g].slice().sort((a,b)=>(order[a.Kind]??9)-(order[b.Kind]??9)
+                      || String(a.SignDate||'').localeCompare(String(b.SignDate||'')));
+        return `<div style="margin:8px 0;padding:8px 10px;border-left:3px solid var(--line)">
+          <div style="font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)">${esc(g)}
+            <span class="muted">· ${list.length} document(s)</span></div>
+          ${list.map(docCard).join('')}
+        </div>`;
+      }).join('')
     : 'No documents parsed yet.';
   if(!V2.blocks.length){ $('v2_cover').innerHTML=''; tb.innerHTML='<tr><td class="empty">Nothing parsed for this contract yet.</td></tr>'; return; }
 
@@ -2367,18 +2471,40 @@ async function v2Export(){
   // A clause number that appears in the text but in no block means the parse skipped it.
   // Counted per document: an agreement and its SOW both have a "3.1", so a gap in one
   // would be hidden by the other if they were pooled.
+  const clauseNo = line => {
+    const m = line.match(/^\s*"?\s*(\d{1,2}(?:\.\d{1,3}){0,3})[.)]\s+\S/);
+    return m ? m[1] : '';
+  };
   V2.documents.forEach(d=>{
-    const inMap = new Set(V2.blocks.filter(b=>b.DocumentID===d.DocumentID)
-      .map(b=>String(b.Path||'').replace(/\.$/,'')).filter(Boolean));
+    const mine = V2.blocks.filter(b=>b.DocumentID===d.DocumentID);
+    const inMap = new Set(mine.map(b=>String(b.Path||'').replace(/\.$/,'')).filter(Boolean));
+    // A section heading needs no block of its own as long as its clauses are all there.
+    const covered = n => inMap.has(n) || mine.some(b=>String(b.Path||'').indexOf(n+'.')===0);
+    // An amendment quotes the wording it inserts, numbered in the OTHER document's scheme:
+    // "5.2. Obligations. The Service Provider shall…" is not a clause of the amendment.
+    // Quoted wording sits in ReplacementText when the model filled it in, and always inside
+    // quotation marks in the clause text — an inserted clause ("The following new clause 4.4
+    // is inserted: \"4.4. Prior Innovations …\"") often has no ReplacementText at all.
+    const quoted = new Set();
+    mine.forEach(b=>{
+      String(b.ReplacementText||'').split('\n').forEach(l=>{ const n=clauseNo(l); if(n) quoted.add(n); });
+      const q = String(b.Text||'').match(/"[^"]{20,}"/gs) || [];
+      q.forEach(chunk=>chunk.split('\n').forEach(l=>{ const n=clauseNo(l); if(n) quoted.add(n); }));
+      const ins = String(b.Text||'').match(/\bnew clause\s+(\d{1,2}(?:\.\d{1,3}){0,3})/i);
+      if(ins) quoted.add(ins[1]);
+    });
+    mine.forEach(b=>{ const r=String(b.ReplacesPath||'').trim(); if(r) quoted.add(r); });
+
     const inText = new Set();
     String(sent[d.DocumentID]||'').split('\n').forEach(line=>{
-      const m = line.match(/^\s*(\d{1,2}(?:\.\d{1,3}){0,3})[.)]\s+\S/);
-      if(m) inText.add(m[1]);
+      const n = clauseNo(line);
+      if(n && !quoted.has(n)) inText.add(n);
     });
     if(!inText.size) return;
-    const skipped = [...inText].filter(p=>!inMap.has(p)).sort();
+    const skipped = [...inText].filter(p=>!covered(p)).sort();
     L.push('- '+(d.FileName||d.Number||d.DocumentID)+': '+inMap.size+' clauses · numbers in the text but not in the mapping: '
-      + (skipped.length ? skipped.length+' — '+skipped.slice(0,40).join(', ')+(skipped.length>40?' …':'') : 'none'));
+      + (skipped.length ? skipped.length+' — '+skipped.slice(0,40).join(', ')+(skipped.length>40?' …':'') : 'none')
+      + (quoted.size ? ' · '+quoted.size+' number(s) ignored as quoted wording' : ''));
   });
   if(unused.length) L.push('- keys not present: '+unused.join(', '));
 
@@ -2398,6 +2524,24 @@ async function v2Export(){
                                              : 'matched by clause number')+':');
       list.forEach(x=>L.push('- '+(x.Path||'—')+' ['+x.SemanticKey+']: '
              +String(x.Text||'').replace(/\s+/g,' ').slice(0,140)));
+    });
+  }
+
+  // With a batch of documents the flat list is unreadable: give each contract its own
+  // section — the agreement, its annexes, its amendments and what they replace.
+  const groups = {};
+  V2.documents.forEach(d=>{ const g = d.GroupKey || d.Number || d.FileName || '—'; (groups[g]=groups[g]||[]).push(d); });
+  if(Object.keys(groups).length > 1){
+    L.push('');
+    L.push('## Contracts in this batch');
+    Object.keys(groups).forEach(g=>{
+      const list = groups[g];
+      const ids = new Set(list.map(d=>d.DocumentID));
+      const n = V2.blocks.filter(b=>ids.has(b.DocumentID)).length;
+      L.push('');
+      L.push('### '+g+'  ('+n+' clauses)');
+      list.forEach(d=>L.push('- '+(V2_KIND[d.Kind]||d.Kind)+': '+(d.FileName||d.Number||'')
+        +(d.SignDate?' · signed '+fmtDate(d.SignDate):'')));
     });
   }
 
