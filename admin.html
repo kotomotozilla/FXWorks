@@ -274,8 +274,8 @@
               <option value="scanned">scan or photo</option>
               <option value="table">mostly tables</option>
             </select></div>
-          <div style="flex:0 0 auto"><button class="btn sm" id="v2_parseBtn" onclick="v2Parse()">Parse into clauses</button></div>
-          <div style="flex:0 0 auto"><button class="btn ghost sm" id="v2_queueBtn" onclick="v2QueueParse()" title="Upload the files, then let the server parse them one by one — the tab can be closed">Queue in the background</button></div>
+          <div style="flex:0 0 auto"><button class="btn sm" id="v2_parseBtn" onclick="v2Parse()" title="Parse right now, while this tab stays open">Parse now</button></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" id="v2_queueBtn" onclick="v2QueueParse()" title="Upload the files and let the server parse them one by one. No need to press Parse afterwards — the tab can be closed.">Queue in the background</button></div>
           <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="v2CheckModel(this)" title="Check the AI key and quota">Test the model</button></div>
         </div>
         <div style="height:10px"></div>
@@ -877,7 +877,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.131';
+const BUILD = '2026-08-08.132';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1663,6 +1663,7 @@ async function v2LoadContract(){
     notice('v2Err','','');
     try{ const r = await api('v2_list',{contractId:'__sandbox'});
       V2.documents=r.documents||[]; V2.blocks=r.blocks||[]; V2.keys=r.keys||[]; v2Render();
+      v2QueueWatch();     // whatever is still being parsed should be visible on arrival
     }catch(e){ notice('v2Err','err', esc(e.message)); }
     return;
   }
@@ -1857,7 +1858,7 @@ async function v2QueueParse(){
                        : ' <b style="color:var(--warn)">Background runs are off — keep this tab open</b>, otherwise nothing will be parsed.'));
     v2QueueWatch();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Queue in the background'; }
+  finally{ b.disabled=false; b.textContent='Queue in the background'; v2QueueWatch(); }
 }
 
 // Show the queue, and keep it moving while the page is open (the timed trigger does the
@@ -1869,12 +1870,17 @@ async function v2QueueWatch(){
   V2_QUEUE_TIMER = setInterval(v2QueueRefresh, 12000);
 }
 async function v2QueueRefresh(){
+  const el = $('v2_queue'); if(!el) return;
   let r;
-  try{ r = await api('v2_queue_list',{}); }catch(e){ return; }
+  try{ r = await api('v2_queue_list',{}); }
+  catch(e){
+    el.innerHTML = `<div class="notice err" style="font-size:13px">Could not read the parsing queue: ${esc(e.message)}</div>`;
+    if(V2_QUEUE_TIMER) clearInterval(V2_QUEUE_TIMER);
+    return;
+  }
   const rows = r.queue||[];
   const waiting = rows.filter(x=>x.status==='queued'||x.status==='preparing').length;
   const running = rows.filter(x=>x.status==='running').length;
-  const el = $('v2_queue');
   if(!rows.length){ el.innerHTML=''; if(V2_QUEUE_TIMER) clearInterval(V2_QUEUE_TIMER); return; }
   const tag = st => st==='done' ? '<span class="tag accepted">done</span>'
              : st==='preparing' ? '<span class="tag draft">uploading…</span>'
@@ -1883,7 +1889,8 @@ async function v2QueueRefresh(){
   el.innerHTML = `<div style="border:1px dashed var(--line);border-radius:10px;padding:10px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
       <b style="font-size:13px">Parsing queue</b>
-      <span class="muted" style="font-size:12px">${waiting} waiting · ${running} in progress
+      <span class="muted" style="font-size:12px">${waiting} waiting · ${running} in progress${
+        running ? ' (' + esc((rows.find(x=>x.status==='running')||{}).fileName||'') + ')' : ''}
         · background ${r.background?'on':'<b style="color:var(--warn)">off</b>'}</span>
       <span class="acts">
         <button class="btn ghost sm" onclick="v2QueueBackground(${r.background?'false':'true'})">${r.background?'Turn background off':'Turn background on'}</button>
