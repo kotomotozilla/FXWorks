@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.109';
+const BUILD = '2026-08-08.110';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -35,7 +35,7 @@ const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTer
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
   documents:   ['DocumentID', 'ContractID', 'Kind', 'Number', 'SignDate', 'EffectiveFrom', 'Status', 'Source',
-                'AttachmentID', 'FileName', 'Profile', 'Notes', 'Snapshot', 'CreatedAt'],
+                'AttachmentID', 'FileName', 'Profile', 'Notes', 'Snapshot', 'SentTextID', 'CreatedAt'],
   payments:    ['PaymentID', 'CounterpartyID', 'PaidAt', 'Amount', 'Currency', 'Reference', 'Note',
                 'AssignmentID', 'MatchedBy', 'MatchedAt', 'CreatedAt'],
   terms:       ['TermID', 'ContractID', 'Field', 'Value', 'ValidFrom', 'FromClause', 'DocumentID', 'Note', 'CreatedAt'],
@@ -121,6 +121,8 @@ function route_(action, d) {
     case 'v2_parse_upload':    return v2ParseUpload_(d);
     case 'v2_parse_more':      return v2ParseMore_(d);
     case 'v2_check_model':     requireAdmin_(d); return v2CheckModel_();
+    case 'v2_ocr_pages':       return v2OcrPages_(d);
+    case 'v2_sent_text':       return v2SentText_(d);
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
     case 'v2_set_key':         return v2SetKey_(d);
@@ -663,7 +665,57 @@ function v2ParseUpload_(d) {
     file = attachmentsFolder_().createFile(blob);
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
   return v2ParseFile_('__sandbox', file.getId(), fileName, '', 'agreement',
-                      trim_(d.counterpartyName), trim_(d.profile), d.textLayer);
+                      trim_(d.counterpartyName), trim_(d.profile), d.textLayer, d.textSource);
+}
+
+// The text a document was parsed from, kept next to the document so a mapping can be
+// checked against what the model actually read. Sheets caps a cell at 50 000 characters
+// and a contract is easily twice that, so it lives as a file on Drive.
+function v2StoreSentText_(docId, fileName, text) {
+  try {
+    var body = String(text || '');
+    if (!body) return '';
+    var name = 'FXWorks sent text — ' + String(fileName || docId) + '.txt';
+    var file = attachmentsFolder_().createFile(Utilities.newBlob(body, 'text/plain', name));
+    return file.getId();
+  } catch (e) { return ''; }
+}
+
+function v2SentText_(d) {
+  requireAdmin_(d);
+  var doc = findRow_(SHEETS.documents, 'DocumentID', trim_(d.documentId));
+  if (!doc) return { ok: false, error: 'Document not found' };
+  var id = trim_(doc.SentTextID);
+  if (!id) return { ok: true, text: '', missing: true };
+  try {
+    return { ok: true, text: DriveApp.getFileById(id).getBlob().getDataAsString() };
+  } catch (e) { return { ok: true, text: '', missing: true }; }
+}
+
+// Some PDFs carry a text layer with no ligature glyphs mapped: "Software" is stored as
+// "So ware", and a reader that guesses turns it into "So#ware", "informa'on", "Definihons".
+// The information is only on the picture, so those pages are rendered in the browser and
+// sent here as images — Drive then really recognises them instead of reading a broken layer.
+function v2OcrPages_(d) {
+  requireAdmin_(d);
+  var pages = (d && d.pages) || [];
+  if (!pages.length) return { ok: false, error: 'No pages to recognise' };
+  if (pages.length > 8) return { ok: false, error: 'Too many pages in one request' };
+  var folder = attachmentsFolder_(), out = [], failed = 0;
+  for (var i = 0; i < pages.length; i++) {
+    var file = null;
+    try {
+      var blob = Utilities.newBlob(Utilities.base64Decode(String(pages[i])), 'image/jpeg', 'FXWorks page.jpg');
+      file = folder.createFile(blob);
+      var r = ocrText_(file.getId());
+      if (r.ok) { out.push(String(r.text || '')); } else { out.push(''); failed++; }
+    } catch (e) {
+      out.push(''); failed++;
+    } finally {
+      if (file) { try { file.setTrashed(true); } catch (e2) {} }
+    }
+  }
+  return { ok: true, pages: out, failed: failed };
 }
 
 // A quick round trip to the model, to tell "the key or the quota is the problem" from
@@ -691,7 +743,7 @@ function v2ParseMore_(d) {
   if (!fileId) return { ok: false, error: 'The source file is no longer available — parse it again' };
 
   var t0 = Date.now();
-  var r = v2SourceText_(d.textLayer, fileId);
+  var r = v2SourceText_(d.textLayer, fileId, d.textSource);
   if (!r.ok) return { ok: false, error: r.error };
   var text = r.text;
   var c = findRow_(SHEETS.contracts, 'ContractID', doc.ContractID);
@@ -744,9 +796,9 @@ function v2ParseMore_(d) {
 }
 
 // Shared by both entry points: read the text -> mask -> split into clauses -> store.
-function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpName, profile, textLayer) {
+function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpName, profile, textLayer, textSource) {
   var t0 = Date.now();
-  var r = v2SourceText_(textLayer, driveFileId);
+  var r = v2SourceText_(textLayer, driveFileId, textSource);
   if (!r.ok) return { ok: false, error: r.error };
   var text = r.text;
   var tOcr = Date.now() - t0;
@@ -769,6 +821,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   readAll_(SHEETS.documents).forEach(function (doc) {
     var same = attachmentId ? (String(doc.AttachmentID) === attachmentId) : (String(doc.FileName) === fileName);
     if (String(doc.ContractID) === contractId && same) {
+      if (trim_(doc.SentTextID)) { try { DriveApp.getFileById(trim_(doc.SentTextID)).setTrashed(true); } catch (e) {} }
       deleteRowsWhere_(SHEETS.blocks, 'DocumentID', doc.DocumentID);
       deleteRowsWhere_(SHEETS.documents, 'DocumentID', doc.DocumentID);
     }
@@ -781,7 +834,8 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     DocumentID: docId, ContractID: contractId, Kind: kindFinal,
     Number: (meta && meta.number) ? meta.number : fileName,
     SignDate: dateFinal, EffectiveFrom: dateFinal, Status: 'signed', Source: 'external',
-    AttachmentID: attachmentId || '', FileName: fileName, CreatedAt: now
+    AttachmentID: attachmentId || '', FileName: fileName,
+    SentTextID: v2StoreSentText_(docId, fileName, masked), CreatedAt: now
   });
 
   var list = dedupeBlocks_(res.blocks);
@@ -853,7 +907,7 @@ function v2Parse_(d) {
   var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
   var kind = (trim_(a.DocType) === 'amendment') ? 'amendment' : (trim_(a.DocType) === 'annex' ? 'annex' : 'agreement');
   var res = v2ParseFile_(contractId, a.DriveFileID, trim_(a.FileName), attId, kind,
-                         c ? cpName_(c.CounterpartyID) : '', trim_(d.profile), d.textLayer);
+                         c ? cpName_(c.CounterpartyID) : '', trim_(d.profile), d.textLayer, d.textSource);
   if (res.ok) {
     // keep the dates and status of the source attachment on the document row
     var upd = { Status: (trim_(a.DocType) === 'draft') ? 'draft' : 'signed' };
@@ -1330,6 +1384,8 @@ function v2List_(d) {
 function v2DeleteDoc_(d) {
   requireAdmin_(d);
   var id = trim_(d.documentId);
+  var doc = findRow_(SHEETS.documents, 'DocumentID', id);
+  if (doc && trim_(doc.SentTextID)) { try { DriveApp.getFileById(trim_(doc.SentTextID)).setTrashed(true); } catch (e) {} }
   deleteRowsWhere_(SHEETS.blocks, 'DocumentID', id);
   deleteRowsWhere_(SHEETS.documents, 'DocumentID', id);
   return { ok: true };
@@ -1752,10 +1808,15 @@ function ocrText_(driveFileId) {
 // is permanent. The browser therefore reads the text layer with pdf.js and sends it here;
 // OCR stays as the fallback for scans and for anything the browser could not read.
 // ─────────────────────────────────────────────────────────────────────────────
-function v2SourceText_(textLayer, driveFileId) {
+function v2SourceText_(textLayer, driveFileId, textSource) {
   var supplied = String(textLayer || '');
   if (supplied.replace(/\s/g, '').length >= 200) {
-    return { ok: true, source: 'text layer', text: normalizeText_(stripRunningLines_(supplied)), rawChars: supplied.length };
+    // Pages recognised from images carry ordinary OCR damage, so they still go through the
+    // repair pass; a clean text layer must not, or the repairs would invent errors of their own.
+    var fromPages = (trim_(textSource) === 'page OCR');
+    var body = fromPages ? fixOcrText_(supplied) : supplied;
+    return { ok: true, source: fromPages ? 'page OCR' : 'text layer',
+             text: normalizeText_(stripRunningLines_(body)), rawChars: supplied.length };
   }
   var r = ocrText_(driveFileId);
   if (!r.ok) return r;

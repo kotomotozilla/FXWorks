@@ -874,7 +874,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.109';
+const BUILD = '2026-08-08.110';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1353,8 +1353,8 @@ async function pdfTextLayer(bytes){
   if(!total || chars/total < 100) return null;      // a scan, or a picture with a stray caption
   return { text, pages: total, chars };
 }
-// Same for a document already attached to a contract: fetch the bytes, then read them here.
-async function pdfTextLayerFromAttachment(attachmentId){
+// Bytes of a document already attached to a contract.
+async function pdfBytesFromAttachment(attachmentId){
   if(!attachmentId) return null;
   const r = await api('attachment_data',{attachmentId});
   if(!r.dataBase64) return null;
@@ -1362,7 +1362,51 @@ async function pdfTextLayerFromAttachment(attachmentId){
   const bin = atob(r.dataBase64);
   const arr = new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
-  return await pdfTextLayer(arr);
+  return arr;
+}
+// Some PDFs store no ligature glyphs: "Software" sits in the file as "So ware", and a reader
+// that fills the gap from the font's own encoding produces "So#ware", "informa'on",
+// "Definihons", "plajorm". Such a text layer is unusable — the pages have to be recognised
+// from the picture instead. The give-away is how often those shapes appear.
+function textLayerLooksBroken(t){
+  const s = String(t||'');
+  if(s.length < 400) return true;
+  const hits = (s.match(/[a-z](?:hon|hng|hve|hca|hfic|hzed|hcal)[a-z]?/gi)||[]).length
+             + (s.match(/[A-Za-z]#[A-Za-z]/g)||[]).length
+             + (s.match(/[a-z]'(?!(?:s|t|re|ve|ll|d|m)\b)[a-z]/g)||[]).length;
+  return hits > s.length/1500;
+}
+// Render every page to a JPEG. 180 dpi is enough for 10 pt text and keeps a page near 300 KB.
+async function pdfRenderPages(bytes, onProgress){
+  const lib = await loadPdfJs();
+  const doc = await lib.getDocument({data:bytes}).promise;
+  const total = doc.numPages, out = [];
+  try{
+    for(let p=1;p<=total;p++){
+      const page = await doc.getPage(p);
+      const vp = page.getViewport({scale:180/72});
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);   // OCR wants a white page, not transparency
+      await page.render({canvasContext:ctx, viewport:vp}).promise;
+      out.push(cv.toDataURL('image/jpeg',0.82).split(',')[1]);
+      page.cleanup(); cv.width = cv.height = 0;
+      if(onProgress) onProgress(p, total);
+    }
+  } finally { try{ await doc.destroy(); }catch(_){} }
+  return out;
+}
+// Recognise the rendered pages server-side, a few at a time: small requests keep every call
+// well inside the Apps Script time limit and let the progress show honestly.
+async function ocrRenderedPages(images, onProgress){
+  const texts = [], step = 4;
+  for(let k=0;k<images.length;k+=step){
+    const r = await api('v2_ocr_pages',{ pages: images.slice(k,k+step) });
+    (r.pages||[]).forEach(t=>texts.push(t||''));
+    if(onProgress) onProgress(Math.min(k+step, images.length), images.length);
+  }
+  return texts.join('\f');
 }
 
 // ── Attachments (private files in owner's Google Drive) ──
@@ -1631,7 +1675,8 @@ async function v2ParseMore(btn){
   notice('v2Err','info','Carrying on with the rest of the document…');
   try{
     const r = await api('v2_parse_more',{ documentId:V2.resume.documentId, fromPart:V2.resume.from,
-                                          textLayer: V2.resume.textLayer||'' });
+                                          textLayer: V2.resume.textLayer||'',
+                                          textSource: V2.resume.textSource||'' });
     V2.resume = r.partial ? { documentId:V2.resume.documentId, from:r.partsDone, total:r.partsTotal } : null;
     await v2LoadContract();
     notice('v2Err','ok',`${r.blocks} more clause(s) · parts ${r.partsDone} of ${r.partsTotal}.`
@@ -1655,29 +1700,41 @@ async function v2Parse(){
   const secs = ms => (ms==null?'—':(ms/1000).toFixed(1)+'s');
   try{
     for(let i=0;i<total;i++){
-      notice('v2Err','info',`Reading document ${i+1} of ${total} — this can take a minute…`
+      const name0 = esc(sandbox?files[i].name:'document '+(i+1));
+      const step = (msg)=>notice('v2Err','info',`<b>${name0}</b>: ${msg}`
         + (lines.length?`<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`:''));
-      let layer = null, layerNote = '';
+      let layerText = '', layerSource = '', layerNote = '';
       try{
-        layer = sandbox
-          ? (/pdf/i.test(files[i].type||files[i].name) ? await pdfTextLayer(await fileToBytes(files[i])) : null)
-          : await pdfTextLayerFromAttachment(attIds[i]);
+        const isPdf = sandbox ? /pdf/i.test(files[i].type||files[i].name) : true;
+        const bytes = isPdf ? (sandbox ? await fileToBytes(files[i]) : await pdfBytesFromAttachment(attIds[i])) : null;
+        if(bytes){
+          const t = await pdfTextLayer(bytes.slice());     // pdf.js may take the buffer over, so hand it a copy
+          if(t && !textLayerLooksBroken(t.text)){
+            layerText = t.text; layerSource = 'text layer';
+          }else{
+            // no usable text in the file: render the pages and let Drive recognise the picture
+            layerNote = t ? ' · text layer has no ligatures — pages recognised instead' : ' · no text layer — pages recognised instead';
+            const imgs = await pdfRenderPages(bytes.slice(), (p,n)=>step(`rendering page ${p} of ${n}…`));
+            layerText = await ocrRenderedPages(imgs, (p,n)=>step(`recognising page ${p} of ${n}…`));
+            layerSource = 'page OCR';
+          }
+        }
+      }catch(err){ layerText=''; layerSource=''; layerNote = ' · reading in the browser failed ('+esc(err.message)+') — fell back to Drive'; }
 
-      }catch(err){ layerNote = ' · text layer unavailable ('+esc(err.message)+') — falling back to OCR'; }
-
+      step('splitting into clauses — this can take a minute…');
       let r;
       try{
         r = sandbox
           ? await api('v2_parse_upload',{ fileName:files[i].name, mimeType:files[i].type||'application/pdf',
               profile: $('v2_profile').value, dataBase64: await fileToBase64(files[i]),
-              textLayer: layer ? layer.text : '' })
+              textLayer: layerText, textSource: layerSource })
           : await api('v2_parse',{contractId:V2.contractId, attachmentId:attIds[i], profile: $('v2_profile').value,
-              textLayer: layer ? layer.text : ''});
+              textLayer: layerText, textSource: layerSource});
       }catch(err){
         lines.push(`<b>${esc(sandbox?files[i].name:'document '+(i+1))}</b>: connection dropped — the server may have finished`);
         continue;
       }
-      r.textLayer = layer ? layer.text : '';
+      r.textLayer = layerText; r.textSource = layerSource;
       lastResults.push(r);
       if(r.sample){ V2.samples.push(r.sample); }
       const t=r.timing||{}, name = esc(sandbox?files[i].name:'document '+(i+1));
@@ -1700,7 +1757,8 @@ async function v2Parse(){
     // a long document may run out of time — offer to carry on rather than start over
     const unfinished = lastResults.find(x=>x && x.partial);
     if(unfinished) V2.resume = { documentId: unfinished.documentId, from: unfinished.partsDone,
-                                 total: unfinished.partsTotal, textLayer: unfinished.textLayer||'' };
+                                 total: unfinished.partsTotal, textLayer: unfinished.textLayer||'',
+                                 textSource: unfinished.textSource||'' };
     notice('v2Err', sum?'ok':'err',
       (sum ? `Parsed ${total} document(s) into ${sum} clauses.` : 'Nothing was parsed — try again or split the document.')
       + `<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`);
@@ -1992,6 +2050,7 @@ function v2ExportTerms(){
       });
   }
 
+
   L.push('');
   L.push('## Raw JSON');
   L.push('```json');
@@ -2195,8 +2254,16 @@ function v2Render(){
       + rows.map(b=>v2BlockRow(b, docs, eff, superseded, true)).join('');
   }
 }
-function v2Export(){
+async function v2Export(){
   if(!V2.blocks.length){ notice('v2Err','err','Nothing parsed yet.'); return; }
+  // The text the model read is what a mapping has to be judged against, so it travels
+  // with the export instead of having to be fished out of Drive later.
+  notice('v2Err','info','Collecting the text that was sent to the AI…');
+  const sent = {};
+  for(const d of V2.documents){
+    try{ const r = await api('v2_sent_text',{documentId:d.DocumentID}); sent[d.DocumentID] = r.text||''; }
+    catch(_){ sent[d.DocumentID] = ''; }
+  }
   const c = CONTRACTS.find(x=>String(x.ContractID)===String(V2.contractId)) || (V2.contractId==='__sandbox' ? {Number:'test parsing'} : {});
   const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
   const used={}; V2.blocks.forEach(b=>used[b.SemanticKey]=(used[b.SemanticKey]||0)+1);
@@ -2233,6 +2300,24 @@ function v2Export(){
         L.push('');
         L.push(String(b.Text||'').trim());
       });
+  });
+
+  L.push('');
+  L.push('## Text sent to the AI');
+  L.push('');
+  L.push('Masked exactly as the model received it. Documents parsed before build 2026-08-08.110');
+  L.push('have no stored text — parse them again to record it.');
+  V2.documents.forEach(d=>{
+    L.push('');
+    L.push('### '+(d.FileName||d.Number||d.DocumentID));
+    L.push('');
+    if(sent[d.DocumentID]){
+      L.push('```text');
+      L.push(sent[d.DocumentID]);
+      L.push('```');
+    }else{
+      L.push('_not recorded_');
+    }
   });
   L.push('');
   L.push('## Raw JSON');
