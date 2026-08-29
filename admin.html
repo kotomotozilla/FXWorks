@@ -874,7 +874,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.111';
+const BUILD = '2026-08-08.112';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2292,7 +2292,7 @@ async function v2Export(){
   L.push('Type: '+(c.TemplateType==='ica'?'Independent Contractor Agreement':'B2B agreement')
         +' · '+(c.PricingType==='hourly'?'hourly rate':'lump sum')
         +' · '+(c.Amount||'')+' '+(c.Currency||''));
-  L.push('Exported: '+todayISO()+' · build '+BUILD);
+  L.push('Exported: '+todayISO()+' · page build '+BUILD+' · server build '+(BE_BUILD||'unknown'));
   L.push('');
   L.push('## Documents');
   V2.documents.forEach(d=>L.push('- '+(V2_KIND[d.Kind]||d.Kind)+': '+(d.FileName||d.Number||'')

@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.111';
+const BUILD = '2026-08-08.112';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -533,7 +533,9 @@ function v2BlocksChunk_(key, chunk, partNo, total, profile) {
     '- semanticKey: exactly one of: ' + SEMANTIC_KEYS.join(', ') + '\n' +
     'Keep the original order. Do not merge clauses. Do not invent clauses. Skip tables of contents.\n' +
     'Inside the text use plain straight quotes only; escape them properly so the JSON stays valid.\n' +
-    'The parties appear as PARTY_US and PARTY_OTHER; personal data is masked — keep those tokens as they are.\n' +
+    'The parties appear as PARTY_US and PARTY_OTHER; names, contacts and bank details are replaced by\n' +
+    'numbered placeholders such as [COMPANY_1], [NAME_2], [ACCOUNT_3]. Copy every placeholder through\n' +
+    'unchanged — they are restored to the real wording afterwards.\n' +
     ((PARSE_PROFILES[profile || ''] || '') ? (PARSE_PROFILES[profile] + '\n') : '') +
     (total > 1 ? ('This is part ' + partNo + ' of ' + total + ' — parse only what is here.\n') : '') +
     '\nCONTRACT TEXT:\n' + chunk;
@@ -2168,38 +2170,85 @@ function dedupeBlocks_(blocks) {
 
 // Names of everyone we know (counterparties and signatories) plus bank lines are masked,
 // so no personal or banking data reaches the model.
+// ─────────────────────────────────────────────────────────────────────────────
+// Masking, and putting it back.
+//
+// Every masked fragment gets a numbered token and is remembered for the length of the
+// request, so the model sees a placeholder while the clause text stored afterwards is the
+// original wording. Before this, "[NAME]" was expanded into our own company name on the way
+// back: "Eller s.r.o." became "Fraktalex Limited s.r.o.", and an ordinary word that happened
+// to match a counterparty ("technical solutions") became "technical Fraktalex Limited".
+// ─────────────────────────────────────────────────────────────────────────────
+var MASK_MAP = {}, MASK_SEQ = 0;
+function maskReset_() { MASK_MAP = {}; MASK_SEQ = 0; }
+function maskToken_(kind, value) {
+  for (var k in MASK_MAP) if (MASK_MAP[k] === value) return k;   // same text, same token
+  var tok = '[' + kind + '_' + (++MASK_SEQ) + ']';
+  MASK_MAP[tok] = value;
+  return tok;
+}
+
+// A run of digits and dots is a clause number or a date far more often than a bank account,
+// and masking those two destroys the very things the parse depends on.
+function looksLikeClauseNumber_(x) {
+  if (!/^\d{1,2}(?:\.\d{1,3}){1,3}\.?$/.test(x)) return false;
+  return x.split('.').every(function (p) { return p === '' || +p < 200; });
+}
+function looksLikeDate_(x) {
+  return /^\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}$/.test(x) || /^\d{4}-\d{1,2}-\d{1,2}$/.test(x);
+}
+
 function maskNamesAndBanks_(t) {
-  var names = [];
-  readAll_(SHEETS.counterparties).forEach(function (c) { if (trim_(c.Name).length > 3) names.push(trim_(c.Name)); });
+  // Company names of counterparties are hidden as companies, not as people: they identify
+  // the other side, but they are not personal data and must come back exactly as written.
+  var companies = [], people = [];
+  readAll_(SHEETS.counterparties).forEach(function (c) {
+    var n = trim_(c.Name);
+    if (n.length <= 3) return;
+    if (String(c.Type || '').toLowerCase() === 'individual') people.push(n); else companies.push(n);
+  });
   readAll_(SHEETS.requisites).forEach(function (r) {
-    ['SignatoryName', 'BeneficiaryName', 'LegalName'].forEach(function (f) {
-      if (trim_(r[f]).length > 3) names.push(trim_(r[f]));
+    ['SignatoryName', 'BeneficiaryName'].forEach(function (f) {
+      if (trim_(r[f]).length > 3) people.push(trim_(r[f]));
+    });
+    if (trim_(r.LegalName).length > 3) companies.push(trim_(r.LegalName));
+  });
+  var esc = function (x) { return String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); };
+
+  // Whole names only. Splitting a company name into words is what turned "solutions",
+  // "systems" or "group" into a placeholder wherever they appeared in ordinary prose.
+  companies.sort(function (a, b) { return b.length - a.length; });
+  companies.forEach(function (n) {
+    t = t.replace(new RegExp(esc(n), 'gi'), function (m) { return maskToken_('COMPANY', m); });
+  });
+  people.sort(function (a, b) { return b.length - a.length; });
+  people.forEach(function (n) {
+    t = t.replace(new RegExp(esc(n), 'gi'), function (m) { return maskToken_('NAME', m); });
+    // Given and family names on their own are still personal data.
+    n.split(/\s+/).filter(function (p) { return p.length > 3; }).forEach(function (p) {
+      t = t.replace(new RegExp('\\b' + esc(p) + '\\b', 'gi'), function (m) { return maskToken_('NAME', m); });
     });
   });
-  names.sort(function (a, b) { return b.length - a.length; });          // longest first
-  names.forEach(function (n) {
-    var esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    t = t.replace(new RegExp(esc, 'gi'), '[NAME]');
-    var parts = n.split(/\s+/).filter(function (p) { return p.length > 3; });
-    parts.forEach(function (p) {
-      t = t.replace(new RegExp('\\b' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), '[NAME]');
-    });
-  });
+
   // whole lines that carry banking details
   t = t.split('\n').map(function (line) {
-    return /(account\s*(no|number)|iban|swift|correspondent bank|beneficiary)/i.test(line) ? '[BANK DETAILS]' : line;
+    return /(account\s*(no|number)|iban|swift|correspondent bank|beneficiary)/i.test(line)
+      ? maskToken_('BANK', line) : line;
   }).join('\n');
-  // account-like numbers with dots/dashes, e.g. 000-55.036.222
-  t = t.replace(/\b\d[\d]*(?:[.\-]\d+){2,}\b/g, '[ACCOUNT]');
+
+  // account-like numbers with dots or dashes, e.g. 000-55.036.222 — but not "19.2.1" or "18.8.2026"
+  t = t.replace(/\b\d[\d]*(?:[.\-]\d+){2,}\b/g, function (m) {
+    return (looksLikeClauseNumber_(m) || looksLikeDate_(m)) ? m : maskToken_('ACCOUNT', m);
+  });
   return t;
 }
 
-
 function maskForAI_(text, counterpartyName) {
+  maskReset_();
   var t = fixOcrText_(text);
 
   // Party pseudonyms FIRST — otherwise the general name masking turns our own company
-  // into [NAME] and the model loses the only clue about who is who.
+  // into a placeholder and the model loses the only clue about who is who.
   var esc = function (x) { return String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); };
   var usFull = String(CONFIG.COMPANY_NAME || 'Fraktalex');
   var usShort = usFull.split(/\s+/)[0];
@@ -2212,24 +2261,31 @@ function maskForAI_(text, counterpartyName) {
     if (first && first.length > 3) t = t.replace(new RegExp('\\b' + esc(first) + '\\b', 'gi'), 'PARTY_OTHER');
   }
 
-  // Now the rest: people, banks, contacts, identifiers.
+  // Now the rest: people, companies, banks, contacts, identifiers. Every one of them is
+  // remembered, so unmaskAI_ can put the exact original back.
   t = maskNamesAndBanks_(t);
-  t = t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]');
-  t = t.replace(/(?:\+\d[\d ()\-]{7,}\d)/g, '[PHONE]');
-  t = t.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/g, '[IBAN]');
+  t = t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, function (m) { return maskToken_('EMAIL', m); });
+  t = t.replace(/(?:\+\d[\d ()\-]{7,}\d)/g, function (m) { return maskToken_('PHONE', m); });
+  t = t.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b/g, function (m) { return maskToken_('IBAN', m); });
   // A SWIFT code must be labelled or contain digits — otherwise plain capitalised words match.
-  t = t.replace(/(SWIFT|BIC)(\s*(?:code)?\s*:?\s*)([A-Z0-9]{8,11})/gi, '$1$2[SWIFT]');
-  t = t.replace(/\b(?=[A-Z0-9]{8,11}\b)(?=[A-Z0-9]*\d)[A-Z0-9]{8,11}\b/g, '[SWIFT]');
-  t = t.replace(/\b\d{8,20}\b/g, '[ACCOUNT]');
-  t = t.replace(/\b\d{2,4}(?:[-. ]\d{2,4}){2,}\b/g, '[ACCOUNT]');
+  t = t.replace(/(SWIFT|BIC)(\s*(?:code)?\s*:?\s*)([A-Z0-9]{8,11})/gi,
+                function (m, a, b, c) { return a + b + maskToken_('SWIFT', c); });
+  t = t.replace(/\b(?=[A-Z0-9]{8,11}\b)(?=[A-Z0-9]*\d)[A-Z0-9]{8,11}\b/g, function (m) { return maskToken_('SWIFT', m); });
+  t = t.replace(/\b\d{8,20}\b/g, function (m) { return maskToken_('ACCOUNT', m); });
+  t = t.replace(/\b\d{2,4}(?:[-. ]\d{2,4}){2,}\b/g, function (m) {
+    return (looksLikeClauseNumber_(m) || looksLikeDate_(m)) ? m : maskToken_('ACCOUNT', m);
+  });
   // Only mask an account when what follows really looks like an account number —
   // otherwise "to the bank account of the Supplier upon receipt of a corresponding invoice"
   // gets eaten and the clause text is destroyed.
-  t = t.replace(/(Account\s*(?:No\.?|number)\s*:?\s*)([A-Z]{0,2}[\d][\d\-. ]{5,30})/gi, '$1[ACCOUNT]');
+  t = t.replace(/(Account\s*(?:No\.?|number)\s*:?\s*)([A-Z]{0,2}[\d][\d\-. ]{5,30})/gi,
+                function (m, a, b) { return a + maskToken_('ACCOUNT', b); });
   // Same for addresses: only when the line is a labelled address field, not any sentence
   // that happens to contain the word.
-  t = t.replace(/^([ \t]*(?:Bank\s+)?Address\s*:\s*)([^\n]{5,120})$/gim, '$1[ADDRESS]');
-  t = t.replace(/(having its (?:principal )?place of business at\s+)([^\n,]{5,120})/gi, '$1[ADDRESS]');
+  t = t.replace(/^([ \t]*(?:Bank\s+)?Address\s*:\s*)([^\n]{5,120})$/gim,
+                function (m, a, b) { return a + maskToken_('ADDRESS', b); });
+  t = t.replace(/(having its (?:principal )?place of business at\s+)([^\n,]{5,120})/gi,
+                function (m, a, b) { return a + maskToken_('ADDRESS', b); });
   return t;
 }
 
@@ -2239,7 +2295,9 @@ function unmaskAI_(value, counterpartyName) {
   return value
     .replace(/PARTY_US/g, CONFIG.COMPANY_NAME || 'Fraktalex')
     .replace(/PARTY_OTHER/g, counterpartyName || 'the Counterparty')
-    .replace(/\[NAME\]/g, CONFIG.COMPANY_NAME || 'Fraktalex')
+    // Numbered tokens come back as the exact text they replaced; a token from another
+    // request (or one the model invented) is left alone rather than filled with a guess.
+    .replace(/\[[A-Z]+_\d+\]/g, function (m) { return MASK_MAP[m] != null ? MASK_MAP[m] : m; })
     .replace(/\[PERSON\]/g, 'the authorised representative');
 }
 
@@ -2251,11 +2309,12 @@ function geminiExtract_(text, counterpartyName) {
   var sent = text;
   var prompt =
     'You are reading a commercial contract. The parties are written as PARTY_US (our company) and PARTY_OTHER.\n' +
-    'Personal data, bank details and addresses have been masked as [EMAIL], [PHONE], [IBAN], [ACCOUNT], [ADDRESS] — ignore them.\n' +
+    'Personal data, bank details and addresses appear as numbered placeholders such as [EMAIL_1],\n' +
+    '[PHONE_2], [ACCOUNT_3] — ignore them, and never invent one of your own.\n' +
     'Extract the fields below and reply with ONE JSON object and nothing else — no prose, no markdown fences.\n' +
     'Use null for anything the text does not state. Never invent values.\n' +
     'Numbers are often written in words with digits in brackets — "within twenty (20) days" means 20. Always return the digits.\n' +
-    'In text fields (subject, sowScope) write PARTY_US and PARTY_OTHER for the parties; never copy [NAME], [PERSON] or other placeholders.\n\n' +
+    'In text fields (subject, sowScope) write PARTY_US and PARTY_OTHER for the parties; do not copy placeholders there.\n\n' +
     'Fields:\n' +
     '- number: the contract/agreement number exactly as written\n' +
     '- signDate, startDate, endDate: ISO YYYY-MM-DD\n' +
