@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.118';
+const BUILD = '2026-08-08.120';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -126,6 +126,7 @@ function route_(action, d) {
     case 'v2_sent_text':       return v2SentText_(d);
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
+    case 'v2_clear':           return v2ClearContract_(d);
     case 'v2_set_key':         return v2SetKey_(d);
     case 'v2_set_replaces':    return v2SetReplaces_(d);
     case 'v2_set_doc':         return v2SetDoc_(d);
@@ -746,6 +747,7 @@ function v2StoreSentText_(docId, fileName, text) {
       rows.push([docId, ++seq, body.substr(at, SENT_TEXT_CHUNK)]);
     }
     var sh = getSheet_(SHEETS.sentText);
+    if (sh.getMaxColumns() < head.length) sh.insertColumnsAfter(sh.getMaxColumns(), head.length - sh.getMaxColumns());
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, head.length).setValues(rows);
     invalidateCache_(SHEETS.sentText);
     return rows.length;
@@ -1484,15 +1486,33 @@ function v2List_(d) {
   return { ok: true, documents: docs, blocks: blocks, keys: SEMANTIC_KEYS, profiles: Object.keys(PARSE_PROFILES) };
 }
 
-function v2DeleteDoc_(d) {
-  requireAdmin_(d);
-  var id = trim_(d.documentId);
+function v2ForgetDoc_(id) {
   var doc = findRow_(SHEETS.documents, 'DocumentID', id);
   if (doc && trim_(doc.SentTextID)) { try { DriveApp.getFileById(trim_(doc.SentTextID)).setTrashed(true); } catch (e) {} }
+  var n = deleteRowsWhere_(SHEETS.blocks, 'DocumentID', id);
   deleteRowsWhere_(SHEETS.sentText, 'DocumentID', id);
-  deleteRowsWhere_(SHEETS.blocks, 'DocumentID', id);
+  deleteRowsWhere_(SHEETS.terms, 'DocumentID', id);
   deleteRowsWhere_(SHEETS.documents, 'DocumentID', id);
-  return { ok: true };
+  return n;
+}
+
+function v2DeleteDoc_(d) {
+  requireAdmin_(d);
+  return { ok: true, blocks: v2ForgetDoc_(trim_(d.documentId)) };
+}
+
+// Start again from nothing: every parsed document of one contract (or of the sandbox) goes,
+// together with its clauses, its terms and the text that was sent to the model.
+function v2ClearContract_(d) {
+  requireAdmin_(d);
+  var contractId = trim_(d.contractId) || '__sandbox';
+  var docs = readAll_(SHEETS.documents).filter(function (r) { return String(r.ContractID) === contractId; });
+  var blocks = 0;
+  docs.forEach(function (r) { blocks += v2ForgetDoc_(String(r.DocumentID)); });
+  // anything left over from an earlier build that lost its document row
+  deleteRowsWhere_(SHEETS.blocks, 'ContractID', contractId);
+  deleteRowsWhere_(SHEETS.terms, 'ContractID', contractId);
+  return { ok: true, documents: docs.length, blocks: blocks };
 }
 
 
@@ -3983,11 +4003,27 @@ function updateRow_(name, idField, idValue, updates) {
   }
   return false;
 }
+// Rows go in runs, not one by one: a parsed agreement leaves several hundred blocks behind,
+// and deleting them individually took long enough that the browser gave up on the request.
 function deleteRowsWhere_(name, field, value) {
   invalidateCache_(name);
-  var sh = getSheet_(name), values = sh.getDataRange().getValues(), col = values[0].indexOf(field);
-  if (col < 0) return;
-  for (var i = values.length - 1; i >= 1; i--) if (String(values[i][col]) === String(value)) sh.deleteRow(i + 1);
+  var sh = getSheet_(name);
+  if (sh.getLastRow() < 2 || sh.getLastColumn() < 1) return 0;
+  var values = sh.getDataRange().getValues(), col = values[0].indexOf(field);
+  if (col < 0) return 0;
+  var hit = [], i;
+  for (i = 1; i < values.length; i++) if (String(values[i][col]) === String(value)) hit.push(i + 1);
+  if (!hit.length) return 0;
+  // walk backwards so earlier row numbers stay valid, removing each consecutive run at once
+  var removed = 0, end = hit.length - 1;
+  while (end >= 0) {
+    var start = end;
+    while (start > 0 && hit[start - 1] === hit[start] - 1) start--;
+    sh.deleteRows(hit[start], end - start + 1);
+    removed += end - start + 1;
+    end = start - 1;
+  }
+  return removed;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

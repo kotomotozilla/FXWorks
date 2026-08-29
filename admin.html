@@ -300,6 +300,7 @@
               <input type="checkbox" id="v2_effective" style="width:auto" onchange="v2Render()"> Effective version only</label>
             <input id="v2_asOf" type="date" style="max-width:170px" onchange="v2Render()" title="Effective as of">
             <button class="btn ghost sm" onclick="v2Export()">Export for review</button>
+            <button class="btn ghost sm" onclick="v2Clear()" title="Remove every parsed document here and start from nothing">Clear parsed documents</button>
             <button class="btn ghost sm" onclick="v2ExtractParams()" title="Read the values out of the clauses in force">Read values</button>
             <button class="btn ghost sm" id="v2_histBtn" onclick="v2BuildHistory(this)" title="Record what each document established, dated by that document">Build full history</button>
             <button class="btn sm" onclick="v2Generate()" title="Assemble the clauses in force into a Google Doc, PDF and Word">Assemble document</button>
@@ -874,7 +875,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.118';
+const BUILD = '2026-08-08.120';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1781,10 +1782,26 @@ async function v2Parse(){
       + `<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`);
   }finally{ b.disabled=false; b.textContent='Parse into clauses'; }
 }
+// Testing needs a clean slate: forget every document parsed against this contract
+// (or against the sandbox), with its clauses, terms and stored text.
+async function v2Clear(){
+  const where = V2.contractId ? 'this contract' : 'the sandbox';
+  if(!confirm(`Remove ALL parsed documents of ${where}? The files themselves stay untouched.`)) return;
+  notice('v2Err','info','Clearing…');
+  try{
+    const r = await api('v2_clear',{contractId:V2.contractId||''});
+    notice('v2Err','ok',`Removed ${r.documents} document(s) and ${r.blocks} clause(s).`);
+    await v2LoadContract();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
+}
 async function v2DeleteDoc(id){
   if(!confirm('Remove the parsed structure of this document? The file itself stays untouched.')) return;
-  try{ await api('v2_delete_doc',{documentId:id}); await v2LoadContract(); }
-  catch(e){ notice('v2Err','err', esc(e.message)); }
+  notice('v2Err','info','Removing…');
+  try{
+    const r = await api('v2_delete_doc',{documentId:id});
+    notice('v2Err','ok',`Removed the document and ${r.blocks||0} clause(s).`);
+    await v2LoadContract();
+  }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
 // The effective version: for each semantic key, the block from the latest signed
 // document that had come into force by the chosen date.
@@ -2318,17 +2335,21 @@ async function v2Export(){
   L.push('- keys used: '+Object.keys(used).length+' of '+(V2.keys||[]).length);
   L.push('- in "misc": '+(used['misc']||0));
   // A clause number that appears in the text but in no block means the parse skipped it.
-  const inMap = new Set(V2.blocks.map(b=>String(b.Path||'').replace(/\.$/,'')).filter(Boolean));
-  const inText = new Set();
-  Object.values(sent).forEach(t=>{
-    String(t||'').split('\n').forEach(line=>{
+  // Counted per document: an agreement and its SOW both have a "3.1", so a gap in one
+  // would be hidden by the other if they were pooled.
+  V2.documents.forEach(d=>{
+    const inMap = new Set(V2.blocks.filter(b=>b.DocumentID===d.DocumentID)
+      .map(b=>String(b.Path||'').replace(/\.$/,'')).filter(Boolean));
+    const inText = new Set();
+    String(sent[d.DocumentID]||'').split('\n').forEach(line=>{
       const m = line.match(/^\s*(\d{1,2}(?:\.\d{1,3}){1,3})[.)]?\s+\S/);
       if(m) inText.add(m[1]);
     });
+    if(!inText.size) return;
+    const skipped = [...inText].filter(p=>!inMap.has(p)).sort();
+    L.push('- '+(d.FileName||d.Number||d.DocumentID)+': '+inMap.size+' clauses · numbers in the text but not in the mapping: '
+      + (skipped.length ? skipped.length+' — '+skipped.slice(0,40).join(', ')+(skipped.length>40?' …':'') : 'none'));
   });
-  const skipped = [...inText].filter(p=>!inMap.has(p)).sort();
-  if(inText.size) L.push('- clause numbers in the text but not in the mapping: '
-    + (skipped.length ? skipped.length+' — '+skipped.slice(0,40).join(', ')+(skipped.length>40?' …':'') : 'none'));
   if(unused.length) L.push('- keys not present: '+unused.join(', '));
   L.push('');
   L.push('## Clauses grouped by key');
