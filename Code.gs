@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.116';
+const BUILD = '2026-08-08.117';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -516,7 +516,7 @@ function salvageBlocks_(raw) {
 }
 
 function v2BlocksPrompt_(chunk, partNo, total, profile) {
-  return
+  var prompt =
     'Split this part of a contract into its clauses. Reply with ONE JSON object: {"blocks":[...]} and nothing else.\n' +
     'Each block: {"path":"3.2","level":2,"title":"Payment","text":"full text of the clause","semanticKey":"payment.term"}\n' +
     '- path: the full address of the item as written, including letter or roman sub-items:\n' +
@@ -554,6 +554,7 @@ function v2BlocksPrompt_(chunk, partNo, total, profile) {
     ((PARSE_PROFILES[profile || ''] || '') ? (PARSE_PROFILES[profile] + '\n') : '') +
     (total > 1 ? ('This is ' + partNo + ' of ' + total + ' — parse only what is here.\n') : '') +
     '\nCONTRACT TEXT:\n' + chunk;
+  return prompt;
 }
 
 function v2BlocksChunk_(key, chunk, partNo, total, profile) {
