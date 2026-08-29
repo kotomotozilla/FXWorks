@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.117';
+const BUILD = '2026-08-08.118';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -472,7 +472,7 @@ var SEMANTIC_KEYS = ['parties', 'definitions', 'documents', 'scope', 'reporting'
   // The "Miscellaneous" section is where amendments most often bite, so it gets its own keys
   // instead of being dumped into misc.
   'notices', 'amendment', 'assignment', 'publicity', 'severability', 'entire_agreement', 'costs',
-  'information_review', 'other_engagements',
+  'information_review', 'other_engagements', 'relationship', 'language',
   'misc', 'effectiveness', 'signatures'];
 
 // Long contracts blow past the model output limit, because it returns the full text of
@@ -542,6 +542,9 @@ function v2BlocksPrompt_(chunk, partNo, total, profile) {
     '    subcontracting — engaging subcontractors; assignment is about transferring the contract itself.\n' +
     '    documents — how the papers relate: order of precedence, what a work order must contain,\n' +
     '      how assignments are ordered and become binding.\n' +
+    '    relationship — the parties are independent contractors; no partnership, agency, joint venture\n' +
+    '      or employment is created; neither may bind the other.\n' +
+    '    language — the governing language, translations, which version prevails, counterparts.\n' +
     '    scope — what is actually done: services, deliverables, performance standards, restrictions on the work.\n' +
     'Keep the original order. Do not merge clauses. Do not invent clauses. Skip tables of contents.\n' +
     'Split to the smallest addressable item, always: the sentence that introduces a list stays in the parent\n' +
@@ -1921,7 +1924,8 @@ function v2SourceText_(textLayer, driveFileId, textSource) {
   }
   var r = ocrText_(driveFileId);
   if (!r.ok) return r;
-  return { ok: true, source: 'OCR', text: dedupePages_(fixOcrText_(String(r.text || ''))), rawChars: String(r.text || '').length };
+  return { ok: true, source: 'OCR', rawChars: String(r.text || '').length,
+           text: normalizeText_(stripRepeatedLines_(dedupePages_(fixOcrText_(String(r.text || ''))))) };
 }
 
 // Running headers and footers repeat on every page and end up glued to the first clause
@@ -1929,7 +1933,7 @@ function v2SourceText_(textLayer, driveFileId, textSource) {
 // (with digits ignored, so "Page 3 of 30" matches "Page 4 of 30") is furniture, not text.
 function stripRunningLines_(text) {
   var pages = String(text || '').split('\f');
-  if (pages.length < 3) return pages.join('\n');
+  if (pages.length < 3) return stripRepeatedLines_(pages.join('\n'));
   // Only the top and bottom of a page can hold furniture. Anything in the body stays,
   // whatever it repeats — losing a clause is far worse than keeping a header.
   var EDGE_TOP = 2, EDGE_BOTTOM = 3;
@@ -1966,6 +1970,24 @@ function stripRunningLines_(text) {
     }
   }
   return out.join('\n');
+}
+
+// No page marks to lean on: Drive's OCR returns one long stream, so a line that comes back
+// five times or more, once its digits are ignored, is a header or a footer. Contract wording
+// does not repeat like that, and a table-of-contents line is recognisable on its own.
+function stripRepeatedLines_(text) {
+  var lines = String(text || '').split('\n');
+  var key = function (l) {
+    var k = l.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().toLowerCase();
+    return (k.length >= 20 && k.length <= 300) ? k : '';
+  };
+  var count = {};
+  lines.forEach(function (l) { var k = key(l); if (k) count[k] = (count[k] || 0) + 1; });
+  return lines.filter(function (l) {
+    if (/\.{6,}\s*\d+/.test(l)) return false;          // table of contents
+    var k = key(l);
+    return !(k && count[k] >= 5);
+  }).join('\n');
 }
 
 function normNum_(str) { return Number(String(str).replace(/[  ,](?=\d{3}\b)/g, '').replace(/\s/g, '').replace(/,(?=\d{2}$)/, '.')) || 0; }
