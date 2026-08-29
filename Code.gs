@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.108';
+const BUILD = '2026-08-08.109';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -662,7 +662,8 @@ function v2ParseUpload_(d) {
     var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), trim_(d.mimeType) || 'application/pdf', fileName);
     file = attachmentsFolder_().createFile(blob);
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
-  return v2ParseFile_('__sandbox', file.getId(), fileName, '', 'agreement', trim_(d.counterpartyName), trim_(d.profile));
+  return v2ParseFile_('__sandbox', file.getId(), fileName, '', 'agreement',
+                      trim_(d.counterpartyName), trim_(d.profile), d.textLayer);
 }
 
 // A quick round trip to the model, to tell "the key or the quota is the problem" from
@@ -690,9 +691,9 @@ function v2ParseMore_(d) {
   if (!fileId) return { ok: false, error: 'The source file is no longer available — parse it again' };
 
   var t0 = Date.now();
-  var r = ocrText_(fileId);
+  var r = v2SourceText_(d.textLayer, fileId);
   if (!r.ok) return { ok: false, error: r.error };
-  var text = dedupePages_(fixOcrText_(String(r.text || '')));
+  var text = r.text;
   var c = findRow_(SHEETS.contracts, 'ContractID', doc.ContractID);
   var cpName = c ? cpName_(c.CounterpartyID) : '';
   var masked = maskForAI_(text, cpName);
@@ -739,19 +740,19 @@ function v2ParseMore_(d) {
     sh.getRange(at, 1, rows.length, head.length).setValues(rows);
   }
   return { ok: true, blocks: rows.length, partsDone: i, partsTotal: chunks.length,
-           partial: i < chunks.length, notes: notes };
+           partial: i < chunks.length, notes: notes, source: r.source };
 }
 
-// Shared by both entry points: OCR -> mask -> split into clauses -> store.
-function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpName, profile) {
+// Shared by both entry points: read the text -> mask -> split into clauses -> store.
+function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpName, profile, textLayer) {
   var t0 = Date.now();
-  var r = ocrText_(driveFileId);
+  var r = v2SourceText_(textLayer, driveFileId);
   if (!r.ok) return { ok: false, error: r.error };
-  var text = dedupePages_(fixOcrText_(String(r.text || '')));
+  var text = r.text;
   var tOcr = Date.now() - t0;
   if (text.replace(/\s/g, '').length < 40) {
     return { ok: false, error: 'No readable text in this file — is it a scan without a text layer? '
-             + '(OCR returned ' + String(r.text || '').length + ' characters in ' + tOcr + ' ms)' };
+             + '(' + r.source + ' returned ' + r.rawChars + ' characters in ' + tOcr + ' ms)' };
   }
 
   var t1 = Date.now();
@@ -835,9 +836,10 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   }
 
   return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null, diff: diff, profile: autoProfile,
+           sample: masked.slice(0, 4000),   // so the mapping can be checked against what the model actually read
            partial: !!res.partial, partsDone: res.done, partsTotal: res.chunks,
-           timing: { ocrMs: tOcr, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length, model: geminiModel_(),
-                     parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
+           timing: { ocrMs: tOcr, source: r.source, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length,
+                     model: geminiModel_(), parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
            notes: res.notes || [] };
 }
 
@@ -850,7 +852,8 @@ function v2Parse_(d) {
   if (!a || !a.DriveFileID) return { ok: false, error: 'Document not found' };
   var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
   var kind = (trim_(a.DocType) === 'amendment') ? 'amendment' : (trim_(a.DocType) === 'annex' ? 'annex' : 'agreement');
-  var res = v2ParseFile_(contractId, a.DriveFileID, trim_(a.FileName), attId, kind, c ? cpName_(c.CounterpartyID) : '', trim_(d.profile));
+  var res = v2ParseFile_(contractId, a.DriveFileID, trim_(a.FileName), attId, kind,
+                         c ? cpName_(c.CounterpartyID) : '', trim_(d.profile), d.textLayer);
   if (res.ok) {
     // keep the dates and status of the source attachment on the document row
     var upd = { Status: (trim_(a.DocType) === 'draft') ? 'draft' : 'signed' };
@@ -1739,6 +1742,70 @@ function ocrText_(driveFileId) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Where the text of a document comes from.
+//
+// A PDF produced by a word processor already carries a clean text layer. Drive's OCR
+// ignores it: it renders the pages and recognises the picture, and on the fonts used in
+// contracts it reads ligatures wrong — "ti" comes back as "h" ("informahon", "Sechon"),
+// "fi" as "a", "ff" as "\". Those texts are what we store as clause text, so the damage
+// is permanent. The browser therefore reads the text layer with pdf.js and sends it here;
+// OCR stays as the fallback for scans and for anything the browser could not read.
+// ─────────────────────────────────────────────────────────────────────────────
+function v2SourceText_(textLayer, driveFileId) {
+  var supplied = String(textLayer || '');
+  if (supplied.replace(/\s/g, '').length >= 200) {
+    return { ok: true, source: 'text layer', text: normalizeText_(stripRunningLines_(supplied)), rawChars: supplied.length };
+  }
+  var r = ocrText_(driveFileId);
+  if (!r.ok) return r;
+  return { ok: true, source: 'OCR', text: dedupePages_(fixOcrText_(String(r.text || ''))), rawChars: String(r.text || '').length };
+}
+
+// Running headers and footers repeat on every page and end up glued to the first clause
+// of each page. Pages arrive separated by a form feed; a line that appears on half of them
+// (with digits ignored, so "Page 3 of 30" matches "Page 4 of 30") is furniture, not text.
+function stripRunningLines_(text) {
+  var pages = String(text || '').split('\f');
+  if (pages.length < 3) return pages.join('\n');
+  // Only the top and bottom of a page can hold furniture. Anything in the body stays,
+  // whatever it repeats — losing a clause is far worse than keeping a header.
+  var EDGE_TOP = 2, EDGE_BOTTOM = 3;
+  // A page too short to have a body would be all edge; leave such pages alone.
+  var isEdge = function (n, len) { return len >= 8 && (n < EDGE_TOP || n >= len - EDGE_BOTTOM); };
+  // Two lines are "the same" when they match word for word. A page number is the one
+  // exception: "Page 3 of 30" and "Page 4 of 30" are the same footer.
+  var key = function (line) {
+    var k = line.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (k.length < 8 || k.length > 200) return '';
+    if (/\bpage\b|\d+\s*(?:of|\/)\s*\d+/.test(k)) k = k.replace(/\d+/g, '#');
+    return k;
+  };
+  var count = {}, i, j, lines, k;
+  for (i = 0; i < pages.length; i++) {
+    lines = pages[i].split('\n');
+    var seenHere = {};
+    for (j = 0; j < lines.length; j++) {
+      if (!isEdge(j, lines.length)) continue;
+      k = key(lines[j]);
+      if (!k || seenHere[k]) continue;
+      seenHere[k] = 1;
+      count[k] = (count[k] || 0) + 1;
+    }
+  }
+  var limit = Math.max(3, Math.ceil(pages.length * 0.5));
+  var out = [];
+  for (i = 0; i < pages.length; i++) {
+    lines = pages[i].split('\n');
+    for (j = 0; j < lines.length; j++) {
+      k = isEdge(j, lines.length) ? key(lines[j]) : '';
+      if (k && count[k] >= limit) continue;
+      out.push(lines[j]);
+    }
+  }
+  return out.join('\n');
+}
+
 function normNum_(str) { return Number(String(str).replace(/[  ,](?=\d{3}\b)/g, '').replace(/\s/g, '').replace(/,(?=\d{2}$)/, '.')) || 0; }
 
 var MONTHS = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
@@ -1952,7 +2019,7 @@ function fixOcrText_(t) {
     'arst':'first','ave':'five','agy':'fifty','ale':'file','ales':'files','aled':'filed','aling':'filing',
     'anal':'final','anally':'finally','ananc':'financ','axed':'fixed','aoen':'often','proat':'profit',
     'proats':'profits','sucient':'sufficient','oer':'offer','oered':'offered','eect':'effect','eective':'effective',
-    'jood':'flood','jow':'flow','conjict':'conflict','func]ons':'functions','are':'fire'
+    'jood':'flood','jow':'flow','conjict':'conflict','func]ons':'functions'
   };
   // Stems are repaired without a trailing boundary: "modiaca" also fixes "modiacation".
   var STEMS = { 'modiaca':'modifica', 'speciaca':'specifica', 'notiaca':'notifica', 'clariaca':'clarifica',
@@ -1968,9 +2035,17 @@ function fixOcrText_(t) {
     t = t.replace(new RegExp('\\b' + bad.charAt(0).toUpperCase() + bad.slice(1), 'g'),
                   STEMS[bad].charAt(0).toUpperCase() + STEMS[bad].slice(1));
   });
-  t = t.replace(/\u00ad/g, '');
-  // Typographic quotes inside clause text end up inside JSON strings and break the answer.
+  return normalizeText_(t);
+}
+
+// Cleaning that any text needs, whether it came from OCR or from a PDF text layer:
+// soft hyphens, typographic quotes (they end up inside JSON strings and break the answer),
+// and words broken across a line by a hyphen.
+function normalizeText_(t) {
+  t = String(t || '').replace(/\u00ad/g, '');
   t = t.replace(/[\u201C\u201D\u201E\u201F\u00AB\u00BB]/g, '"').replace(/[\u2018\u2019\u201A\u201B]/g, "'");
+  t = t.replace(/[\u2010\u2011\u2012]/g, '-');
+  t = t.replace(/([A-Za-z])-\n([a-z])/g, '$1$2');
   return t;
 }
 

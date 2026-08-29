@@ -874,7 +874,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.108';
+const BUILD = '2026-08-08.109';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1296,8 +1296,78 @@ async function deleteInvoiceFromCard(){
 }
 
 
+// ── Reading the text layer of a PDF in the browser ──
+// Drive's OCR renders the page and recognises the picture, so it mangles ligatures:
+// "informa(ti)on" comes back as "informahon". A PDF written by a word processor already
+// carries the text; pdf.js reads it exactly, and OCR is left to real scans.
+const PDFJS_VERSION = '3.11.174';
+let PDFJS_LOADING = null;
+function loadPdfJs(){
+  if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if(PDFJS_LOADING) return PDFJS_LOADING;
+  PDFJS_LOADING = new Promise((res,rej)=>{
+    const base = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/`;
+    const s = document.createElement('script');
+    s.src = base+'pdf.min.js';
+    s.onload = ()=>{
+      if(!window.pdfjsLib){ rej(new Error('pdf.js did not register')); return; }
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = base+'pdf.worker.min.js';
+      res(window.pdfjsLib);
+    };
+    s.onerror = ()=>rej(new Error('pdf.js could not be loaded'));
+    document.head.appendChild(s);
+  });
+  return PDFJS_LOADING;
+}
+// Returns null when there is no usable text layer, so the caller falls back to OCR.
+async function pdfTextLayer(bytes){
+  const lib = await loadPdfJs();
+  const doc = await lib.getDocument({data:bytes}).promise;
+  const total = doc.numPages, pages = [];
+  try{
+    for(let p=1;p<=total;p++){
+      const page = await doc.getPage(p);
+      const tc = await page.getTextContent();
+      const rows = new Map();
+      for(const it of tc.items){
+        if(!it.str) continue;
+        const y = Math.round(it.transform[5]/3);   // tolerate the drift within one line
+        if(!rows.has(y)) rows.set(y,[]);
+        rows.get(y).push({ x: it.transform[4], w: it.width||0, s: it.str });
+      }
+      const lines = [...rows.entries()].sort((a,b)=>b[0]-a[0]).map(([,parts])=>{
+        parts.sort((a,b)=>a.x-b.x);
+        let line='', end=null;
+        for(const o of parts){
+          if(end!==null && o.x-end > 1 && !/\s$/.test(line) && !/^\s/.test(o.s)) line += ' ';
+          line += o.s; end = o.x + o.w;
+        }
+        return line.replace(/\s+/g,' ').trim();
+      }).filter(Boolean);
+      pages.push(lines.join('\n'));
+      page.cleanup();
+    }
+  } finally { try{ await doc.destroy(); }catch(_){} }
+  const text = pages.join('\f');                    // the server strips running headers per page
+  const chars = text.replace(/\s/g,'').length;
+  if(!total || chars/total < 100) return null;      // a scan, or a picture with a stray caption
+  return { text, pages: total, chars };
+}
+// Same for a document already attached to a contract: fetch the bytes, then read them here.
+async function pdfTextLayerFromAttachment(attachmentId){
+  if(!attachmentId) return null;
+  const r = await api('attachment_data',{attachmentId});
+  if(!r.dataBase64) return null;
+  if(r.mimeType && !/pdf/i.test(r.mimeType)) return null;
+  const bin = atob(r.dataBase64);
+  const arr = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+  return await pdfTextLayer(arr);
+}
+
 // ── Attachments (private files in owner's Google Drive) ──
 function fileToBase64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(file); }); }
+function fileToBytes(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(new Uint8Array(r.result)); r.onerror=rej; r.readAsArrayBuffer(file); }); }
 const DOC_TYPE_LABEL = { signed:'Signed original', draft:'Draft', annex:'Annex / SOW', amendment:'Amendment', other:'Other' };
 function docTypeOptions(sel){
   return Object.keys(DOC_TYPE_LABEL).map(k=>`<option value="${k}" ${String(sel)===k?'selected':''}>${DOC_TYPE_LABEL[k]}</option>`).join('');
@@ -1493,7 +1563,13 @@ async function reqSetDefault(id, btn){
 }
 
 // ── Contracts 2.0: clause blocks ──
-let V2 = { contractId:'', documents:[], blocks:[], keys:[], open:{} };
+let V2 = { contractId:'', documents:[], blocks:[], keys:[], open:{}, samples:[] };
+// The beginning of the text the model actually read — the quickest way to tell a clean
+// text layer from OCR damage ("informahon", "Sechon") before judging the mapping.
+function v2ShowSent(i){
+  $('sent_body').textContent = V2.samples[i] || 'Nothing was recorded.';
+  $('sentModal').classList.remove('hidden');
+}
 const V2_KIND = { agreement:'Agreement', annex:'Annex / SOW', amendment:'Amendment' };
 
 function v2Init(){
@@ -1554,7 +1630,8 @@ async function v2ParseMore(btn){
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
   notice('v2Err','info','Carrying on with the rest of the document…');
   try{
-    const r = await api('v2_parse_more',{ documentId:V2.resume.documentId, fromPart:V2.resume.from });
+    const r = await api('v2_parse_more',{ documentId:V2.resume.documentId, fromPart:V2.resume.from,
+                                          textLayer: V2.resume.textLayer||'' });
     V2.resume = r.partial ? { documentId:V2.resume.documentId, from:r.partsDone, total:r.partsTotal } : null;
     await v2LoadContract();
     notice('v2Err','ok',`${r.blocks} more clause(s) · parts ${r.partsDone} of ${r.partsTotal}.`
@@ -1574,33 +1651,47 @@ async function v2Parse(){
   const total = sandbox ? files.length : attIds.length;
   const b=$('v2_parseBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
   const done=[], lines=[], lastResults=[];
-  V2.resume = null;
+  V2.resume = null; V2.samples = [];
   const secs = ms => (ms==null?'—':(ms/1000).toFixed(1)+'s');
   try{
     for(let i=0;i<total;i++){
       notice('v2Err','info',`Reading document ${i+1} of ${total} — this can take a minute…`
         + (lines.length?`<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`:''));
+      let layer = null, layerNote = '';
+      try{
+        layer = sandbox
+          ? (/pdf/i.test(files[i].type||files[i].name) ? await pdfTextLayer(await fileToBytes(files[i])) : null)
+          : await pdfTextLayerFromAttachment(attIds[i]);
+
+      }catch(err){ layerNote = ' · text layer unavailable ('+esc(err.message)+') — falling back to OCR'; }
+
       let r;
       try{
         r = sandbox
           ? await api('v2_parse_upload',{ fileName:files[i].name, mimeType:files[i].type||'application/pdf',
-              profile: $('v2_profile').value, dataBase64: await fileToBase64(files[i]) })
-          : await api('v2_parse',{contractId:V2.contractId, attachmentId:attIds[i], profile: $('v2_profile').value});
+              profile: $('v2_profile').value, dataBase64: await fileToBase64(files[i]),
+              textLayer: layer ? layer.text : '' })
+          : await api('v2_parse',{contractId:V2.contractId, attachmentId:attIds[i], profile: $('v2_profile').value,
+              textLayer: layer ? layer.text : ''});
       }catch(err){
         lines.push(`<b>${esc(sandbox?files[i].name:'document '+(i+1))}</b>: connection dropped — the server may have finished`);
         continue;
       }
+      r.textLayer = layer ? layer.text : '';
       lastResults.push(r);
+      if(r.sample){ V2.samples.push(r.sample); }
       const t=r.timing||{}, name = esc(sandbox?files[i].name:'document '+(i+1));
       const n = (r.blocks==null) ? 0 : r.blocks;
       done.push(n);
       lines.push(`<b>${name}</b>: ${n} clauses`
-        + (t.ocrMs!=null?` · OCR ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)}`:'')
+        + (t.ocrMs!=null?` · ${esc(t.source||'OCR')} ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)}`:'')
+        + layerNote
         + (t.parts>1?` · ${t.parts} parts`:'')
         + (t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:'')
         + ((r.diff&&r.diff.length)?`<div class="muted" style="font-size:12px;margin-left:12px">vs previous parse: ${r.diff.map(esc).join(' · ')}</div>`:'')
         + (r.partial?` · <b style="color:var(--warn)">stopped at part ${r.partsDone} of ${r.partsTotal}</b>`:'')
         + (r.profile?` · shape: <b>${esc(r.profile)}</b>`:'')
+        + (r.sample?` · <a href="#" onclick="v2ShowSent(${V2.samples.length-1});return false;">view text sent to AI</a>`:'')
         + (r.meta?` · recognised as <b>${esc(V2_KIND[r.meta.kind]||r.meta.kind)}</b>${r.meta.number?' '+esc(r.meta.number):''}${r.meta.date?' of '+esc(r.meta.date):''}${r.meta.parentNumber?` (to agreement ${esc(r.meta.parentNumber)})`:''}`:'')
         + ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-left:12px">${r.notes.map(esc).join('<br>')}</div>`:''));
     }
@@ -1608,7 +1699,8 @@ async function v2Parse(){
     const sum = done.reduce((a,c)=>a+c,0);
     // a long document may run out of time — offer to carry on rather than start over
     const unfinished = lastResults.find(x=>x && x.partial);
-    if(unfinished) V2.resume = { documentId: unfinished.documentId, from: unfinished.partsDone, total: unfinished.partsTotal };
+    if(unfinished) V2.resume = { documentId: unfinished.documentId, from: unfinished.partsDone,
+                                 total: unfinished.partsTotal, textLayer: unfinished.textLayer||'' };
     notice('v2Err', sum?'ok':'err',
       (sum ? `Parsed ${total} document(s) into ${sum} clauses.` : 'Nothing was parsed — try again or split the document.')
       + `<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`);
