@@ -859,7 +859,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.104';
+const BUILD = '2026-08-08.105';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1085,7 +1085,7 @@ async function renderCpReports(cpId){
         return `<tr>
           <td class="muted">${esc(dateOf(a)?fmtDate(dateOf(a)):'—')}</td>
           <td class="muted">${a.AcceptedAt?esc(fmtDate(acceptedOf(a))):'—'}</td>
-          <td>${esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}</td>
+          <td>${a.ProjectID?`<a href="#" onclick="openProjectOverlay('${esc(a.ProjectID)}');return false;">${esc(a.ProjectName||'(project)')}</a>`:esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}</td>
           <td class="muted">${a.ContractID?esc(ctNumber(a.ContractID)):'—'}</td>
           <td class="muted">${(()=>{ const jc=jobContract(a); if(!jc) return '—';
             const st=jc.StartDate||jc.SignDate, en=jc.EndDate;
@@ -2186,14 +2186,15 @@ async function payLoadExisting(){
 }
 // Jump straight to the project from a payment line — checking a match usually means
 // looking at the report behind it.
-// The project window is modal, so it can open over the payments screen without switching
-// tabs at all — nothing is lost, not even an unsaved statement being matched.
+// The project window is modal, so it can open over whatever screen you are on without
+// switching tabs — nothing is lost, not even an unsaved statement being matched.
 let PROJ_OVERLAY = false;
-function payOpenProject(pid){
+function openProjectOverlay(pid){
   if(!pid) return;
   PROJ_OVERLAY = true;
   openProject(pid);
 }
+const payOpenProject = openProjectOverlay;
 async function payParse(btn){
   const cp=$('pay_cp').value, f=($('pay_file').files||[])[0];
   if(!cp){ notice('payErr','err','Pick a counterparty.'); return; }
@@ -2353,7 +2354,7 @@ function perfRender(){
         return `<tr>
           <td class="muted">${esc(dateOf(a)?fmtDate(dateOf(a)):'—')}</td>
           <td class="muted">${a.AcceptedAt?esc(fmtDate(acceptedOf(a))):'—'}</td>
-          <td>${esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}</td>
+          <td>${a.ProjectID?`<a href="#" onclick="openProjectOverlay('${esc(a.ProjectID)}');return false;">${esc(a.ProjectName||'(project)')}</a>`:esc(a.ProjectName||'')}${a.Title?` <span class="muted">· ${esc(a.Title)}</span>`:''}</td>
           <td class="muted">${a.ContractID?esc(ctNumber(a.ContractID)):'—'}</td>
           <td class="muted">${(()=>{ const jc=jobContract(a); if(!jc) return '—';
             const st=jc.StartDate||jc.SignDate, en=jc.EndDate;
@@ -3910,7 +3911,12 @@ function closeModal(id){
     $(id).classList.add('hidden');
     // the list under it may now be stale — refresh quietly, without leaving this screen
     loadProjects();
-    api('list_projects').then(r=>{ PROJECTS=r.projects||[]; ASSIGNMENTS=r.assignments||[]; }).catch(()=>{});
+    api('list_projects').then(r=>{
+      PROJECTS=r.projects||[]; ASSIGNMENTS=r.assignments||[];
+      // redraw whichever list is on screen, so a change made inside shows up at once
+      if(!$('view-perf').classList.contains('hidden')) perfRender();
+      if(!$('view-pay').classList.contains('hidden')) payLoadExisting();
+    }).catch(()=>{});
     return;
   }
   if(id==='ctModal'){ EXTRACTED_EXTRAS=null; if($('ext_extra')) $('ext_extra').innerHTML=''; const p=$('ext_preview'); if(p){ p.classList.add('hidden'); $('ext_frame').src=''; } const b=document.querySelector('#ctModal .box'); if(b) b.classList.remove('wide'); } $(id).classList.add('hidden'); }
