@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.120';
+const BUILD = '2026-08-08.122';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -40,7 +40,7 @@ const HEADERS = {
                 'AssignmentID', 'MatchedBy', 'MatchedAt', 'CreatedAt'],
   terms:       ['TermID', 'ContractID', 'Field', 'Value', 'ValidFrom', 'FromClause', 'DocumentID', 'Note', 'CreatedAt'],
   sentText:    ['DocumentID', 'Seq', 'Chunk'],
-  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
+  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
                 'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
@@ -526,6 +526,11 @@ function v2BlocksPrompt_(chunk, partNo, total, profile) {
     '- replacesPath: only for an amendment — the clause or section number of the ORIGINAL document that this\n' +
     '  text replaces: "Clause 3.2 of the Agreement is deleted and replaced" -> "3.2";\n' +
     '  "Section 5 of the Agreement is deleted and replaced" -> "5". Use "" when nothing is being replaced.\n' +
+    '- replacesKey: for an amendment that replaces something WITHOUT naming a clause number —\n' +
+    '  the semanticKey of what it replaces. "The original payment terms (50% after 6 months …)\n' +
+    '  are replaced as follows" -> "payment.term". Use "" when replacesPath is filled or when\n' +
+    '  nothing is being replaced. Put it on the clause that announces the replacement, not on\n' +
+    '  the sub-items that spell out the new wording.\n' +
     '- replacesIn: which document it targets — "agreement" for "of the Agreement",\n' +
     '  "annex" for "of Statement of Work No. 1" / "of the SOW". Use "" when replacesPath is empty.\n' +
     '- replacementText: only for an amendment — the new wording it inserts, i.e. the text quoted after\n' +
@@ -613,10 +618,15 @@ function v2DocMeta_(key, head) {
     '- kind: "amendment" for an amendment / addendum / supplementary agreement;\n' +
     '  "annex" for a statement of work, attachment, appendix, schedule; otherwise "agreement"\n' +
     '- number: the document number as written ("2402-1", "Amendment No. 1")\n' +
-    '- date: the date it was signed or executed ("as of 28 February 2025" -> 2025-02-28); "" if absent\n' +
+    '- date: the date it was signed or executed ("as of 28 February 2025" -> 2025-02-28).\n' +
+    '  Look in the heading and, failing that, next to the signatures at the end; if both parties\n' +
+    '  signed on different days take the later one. "" only when there is no date at all.\n' +
     '- parentNumber: for an amendment or annex — the number of the agreement it belongs to; "" otherwise\n' +
     '- title: the heading of the document\n\n' +
-    'TEXT:\n' + String(head).slice(0, 6000);
+    // The date is often nowhere near the top: this agreement carries it only above the
+    // signatures, so the end of the document is shown as well as the beginning.
+    'BEGINNING OF THE DOCUMENT:\n' + String(head).slice(0, 5000) +
+    (String(head).length > 7000 ? ('\n\nEND OF THE DOCUMENT (signatures):\n' + String(head).slice(-2500)) : '');
   var call = geminiCall_(key, JSON.stringify({
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0, responseMimeType: 'application/json' }
@@ -872,7 +882,10 @@ function v2ParseMore_(d) {
       BlockID: Utilities.getUuid(), DocumentID: doc.DocumentID, ContractID: doc.ContractID,
       SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
       Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath),
-      ReplacesIn: (trim_(b.replacesIn) === 'annex' ? 'annex' : (trim_(b.replacesPath) ? 'agreement' : '')),
+      // An amendment that names no clause number still says what it replaces: keep the topic.
+      ReplacesKey: (SEMANTIC_KEYS.indexOf(trim_(b.replacesKey)) >= 0 ? trim_(b.replacesKey) : ''),
+      ReplacesIn: (trim_(b.replacesIn) === 'annex' ? 'annex'
+                   : ((trim_(b.replacesPath) || trim_(b.replacesKey)) ? 'agreement' : '')),
       ReplacementText: unmaskAI_(String(b.replacementText || ''), cpName),
       Level: num_(b.level) || 2, Title: unmaskAI_(trim_(b.title), cpName),
       Text: unmaskAI_(String(b.text || ''), cpName), Params: '', Origin: 'external',
@@ -950,7 +963,10 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
       BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
       SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
       Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath),
-      ReplacesIn: (trim_(b.replacesIn) === 'annex' ? 'annex' : (trim_(b.replacesPath) ? 'agreement' : '')),
+      // An amendment that names no clause number still says what it replaces: keep the topic.
+      ReplacesKey: (SEMANTIC_KEYS.indexOf(trim_(b.replacesKey)) >= 0 ? trim_(b.replacesKey) : ''),
+      ReplacesIn: (trim_(b.replacesIn) === 'annex' ? 'annex'
+                   : ((trim_(b.replacesPath) || trim_(b.replacesKey)) ? 'agreement' : '')),
       ReplacementText: unmaskAI_(String(b.replacementText || ''), cpName || ''),
       Level: num_(b.level) || 2, Title: unmaskAI_(trim_(b.title), cpName || ''),
       Text: unmaskAI_(String(b.text || ''), cpName || ''), Params: '', Origin: 'external',
