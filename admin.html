@@ -874,7 +874,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.110';
+const BUILD = '2026-08-08.111';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -908,7 +908,7 @@ async function api(action, payload={}){
   API_LOG.push({ action, totalMs: tookMs, serverMs: data.serverMs ?? null,
                  networkMs: data.serverMs != null ? tookMs - data.serverMs : null });
   if(API_LOG.length > 200) API_LOG.shift();
-  if(!data.ok) throw new Error(data.error||'Server error');
+  if(!data.ok){ const err = new Error(data.error||'Server error'); err.data = data; throw err; }
   return data;
 }
 
@@ -1384,13 +1384,13 @@ async function pdfRenderPages(bytes, onProgress){
   try{
     for(let p=1;p<=total;p++){
       const page = await doc.getPage(p);
-      const vp = page.getViewport({scale:180/72});
+      const vp = page.getViewport({scale:150/72});
       const cv = document.createElement('canvas');
       cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
       const ctx = cv.getContext('2d');
       ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);   // OCR wants a white page, not transparency
       await page.render({canvasContext:ctx, viewport:vp}).promise;
-      out.push(cv.toDataURL('image/jpeg',0.82).split(',')[1]);
+      out.push(cv.toDataURL('image/jpeg',0.72).split(',')[1]);
       page.cleanup(); cv.width = cv.height = 0;
       if(onProgress) onProgress(p, total);
     }
@@ -1400,11 +1400,15 @@ async function pdfRenderPages(bytes, onProgress){
 // Recognise the rendered pages server-side, a few at a time: small requests keep every call
 // well inside the Apps Script time limit and let the progress show honestly.
 async function ocrRenderedPages(images, onProgress){
-  const texts = [], step = 4;
-  for(let k=0;k<images.length;k+=step){
-    const r = await api('v2_ocr_pages',{ pages: images.slice(k,k+step) });
-    (r.pages||[]).forEach(t=>texts.push(t||''));
-    if(onProgress) onProgress(Math.min(k+step, images.length), images.length);
+  const texts = [];
+  for(let k=0;k<images.length;k++){
+    let r = null;
+    for(let attempt=0; attempt<2 && !r; attempt++){
+      try{ r = await api('v2_ocr_pages',{ pages:[images[k]] }); }
+      catch(e){ if(attempt) throw e; await new Promise(res=>setTimeout(res,800)); }
+    }
+    texts.push((r.pages||[])[0]||'');
+    if(onProgress) onProgress(k+1, images.length);
   }
   return texts.join('\f');
 }
@@ -1703,36 +1707,48 @@ async function v2Parse(){
       const name0 = esc(sandbox?files[i].name:'document '+(i+1));
       const step = (msg)=>notice('v2Err','info',`<b>${name0}</b>: ${msg}`
         + (lines.length?`<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`:''));
-      let layerText = '', layerSource = '', layerNote = '';
+      let layerText = '', layerSource = '', layerNote = '', bytes = null;
       try{
         const isPdf = sandbox ? /pdf/i.test(files[i].type||files[i].name) : true;
-        const bytes = isPdf ? (sandbox ? await fileToBytes(files[i]) : await pdfBytesFromAttachment(attIds[i])) : null;
+        bytes = isPdf ? (sandbox ? await fileToBytes(files[i]) : await pdfBytesFromAttachment(attIds[i])) : null;
         if(bytes){
           const t = await pdfTextLayer(bytes.slice());     // pdf.js may take the buffer over, so hand it a copy
-          if(t && !textLayerLooksBroken(t.text)){
-            layerText = t.text; layerSource = 'text layer';
-          }else{
-            // no usable text in the file: render the pages and let Drive recognise the picture
-            layerNote = t ? ' · text layer has no ligatures — pages recognised instead' : ' · no text layer — pages recognised instead';
-            const imgs = await pdfRenderPages(bytes.slice(), (p,n)=>step(`rendering page ${p} of ${n}…`));
-            layerText = await ocrRenderedPages(imgs, (p,n)=>step(`recognising page ${p} of ${n}…`));
-            layerSource = 'page OCR';
-          }
+          if(t && !textLayerLooksBroken(t.text)){ layerText = t.text; layerSource = 'text layer'; }
+          // A damaged layer is simply not sent: Drive recognises the file itself, and usually
+          // does it well. Rendering the pages is the last resort, and the server asks for it.
+          else layerNote = t ? ' · text layer damaged — read by Drive instead' : '';
         }
-      }catch(err){ layerText=''; layerSource=''; layerNote = ' · reading in the browser failed ('+esc(err.message)+') — fell back to Drive'; }
+      }catch(err){ layerText=''; layerSource=''; layerNote = ' · reading in the browser failed ('+esc(err.message)+')'; }
+
+      const b64 = sandbox ? await fileToBase64(files[i]) : '';
+      const send = () => sandbox
+        ? api('v2_parse_upload',{ fileName:files[i].name, mimeType:files[i].type||'application/pdf',
+            profile: $('v2_profile').value, dataBase64: b64, textLayer: layerText, textSource: layerSource })
+        : api('v2_parse',{contractId:V2.contractId, attachmentId:attIds[i], profile: $('v2_profile').value,
+            textLayer: layerText, textSource: layerSource});
 
       step('splitting into clauses — this can take a minute…');
       let r;
       try{
-        r = sandbox
-          ? await api('v2_parse_upload',{ fileName:files[i].name, mimeType:files[i].type||'application/pdf',
-              profile: $('v2_profile').value, dataBase64: await fileToBase64(files[i]),
-              textLayer: layerText, textSource: layerSource })
-          : await api('v2_parse',{contractId:V2.contractId, attachmentId:attIds[i], profile: $('v2_profile').value,
-              textLayer: layerText, textSource: layerSource});
+        r = await send();
       }catch(err){
-        lines.push(`<b>${esc(sandbox?files[i].name:'document '+(i+1))}</b>: connection dropped — the server may have finished`);
-        continue;
+        // The server read the file and found the text unusable — render the pages and retry.
+        if(err.data && err.data.needsPageOcr && bytes){
+          try{
+            layerNote = ' · text damaged — pages recognised as images';
+            const imgs = await pdfRenderPages(bytes.slice(), (p,n)=>step(`rendering page ${p} of ${n}…`));
+            layerText = await ocrRenderedPages(imgs, (p,n)=>step(`recognising page ${p} of ${n}…`));
+            layerSource = 'page OCR';
+            step('splitting into clauses — this can take a minute…');
+            r = await send();
+          }catch(err2){
+            lines.push(`<b>${name0}</b>: could not recognise the pages — ${esc(err2.message)}`);
+            continue;
+          }
+        }else{
+          lines.push(`<b>${name0}</b>: ${esc(err.message)}`);
+          continue;
+        }
       }
       r.textLayer = layerText; r.textSource = layerSource;
       lastResults.push(r);
@@ -1743,6 +1759,7 @@ async function v2Parse(){
       lines.push(`<b>${name}</b>: ${n} clauses`
         + (t.ocrMs!=null?` · ${esc(t.source||'OCR')} ${secs(t.ocrMs)} · AI ${secs(t.aiMs)} · saving ${secs(t.saveMs)}`:'')
         + layerNote
+        + (r.sentTextSaved===false?` · <b style="color:var(--warn)">sent text not stored${r.sentTextError?': '+esc(r.sentTextError):''}</b>`:'')
         + (t.parts>1?` · ${t.parts} parts`:'')
         + (t.failedParts?` · <b style="color:var(--warn)">${t.failedParts} part(s) failed</b>`:'')
         + ((r.diff&&r.diff.length)?`<div class="muted" style="font-size:12px;margin-left:12px">vs previous parse: ${r.diff.map(esc).join(' · ')}</div>`:'')

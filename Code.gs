@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.110';
+const BUILD = '2026-08-08.111';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -671,14 +671,16 @@ function v2ParseUpload_(d) {
 // The text a document was parsed from, kept next to the document so a mapping can be
 // checked against what the model actually read. Sheets caps a cell at 50 000 characters
 // and a contract is easily twice that, so it lives as a file on Drive.
+var SENT_TEXT_ERROR = '';
 function v2StoreSentText_(docId, fileName, text) {
+  SENT_TEXT_ERROR = '';
   try {
     var body = String(text || '');
-    if (!body) return '';
-    var name = 'FXWorks sent text — ' + String(fileName || docId) + '.txt';
+    if (!body) { SENT_TEXT_ERROR = 'nothing to store'; return ''; }
+    var name = 'FXWorks sent text - ' + String(fileName || docId).replace(/[\\/:*?"<>|]/g, '_') + '.txt';
     var file = attachmentsFolder_().createFile(Utilities.newBlob(body, 'text/plain', name));
     return file.getId();
-  } catch (e) { return ''; }
+  } catch (e) { SENT_TEXT_ERROR = String(e).slice(0, 120); return ''; }
 }
 
 function v2SentText_(d) {
@@ -690,6 +692,18 @@ function v2SentText_(d) {
   try {
     return { ok: true, text: DriveApp.getFileById(id).getBlob().getDataAsString() };
   } catch (e) { return { ok: true, text: '', missing: true }; }
+}
+
+// The same heuristic the browser uses, applied to whatever the server ended up reading:
+// if even Drive's OCR comes back full of "informahon" and "So#ware", the pages have to be
+// rendered and recognised as pictures.
+function textLooksBroken_(t) {
+  var x = String(t || '');
+  if (x.length < 400) return false;
+  var hits = (x.match(/[a-z](?:hon|hng|hve|hca|hfic|hzed|hcal)[a-z]?/gi) || []).length
+           + (x.match(/[A-Za-z]#[A-Za-z]/g) || []).length
+           + (x.match(/[a-z]'(?!(?:s|t|re|ve|ll|d|m)\b)[a-z]/g) || []).length;
+  return hits > x.length / 1500;
 }
 
 // Some PDFs carry a text layer with no ligature glyphs mapped: "Software" is stored as
@@ -806,6 +820,11 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     return { ok: false, error: 'No readable text in this file — is it a scan without a text layer? '
              + '(' + r.source + ' returned ' + r.rawChars + ' characters in ' + tOcr + ' ms)' };
   }
+  // Nothing worth spending two minutes of model time on: ask for the pages as pictures instead.
+  if (r.source !== 'page OCR' && textLooksBroken_(text)) {
+    return { ok: false, needsPageOcr: true,
+             error: 'The text of this file is damaged (ligatures lost) — recognising the pages as images instead' };
+  }
 
   var t1 = Date.now();
   PARSE_DEADLINE = t0 + 4.5 * 60 * 1000;    // leave time to store what has been parsed
@@ -828,6 +847,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   });
 
   var docId = Utilities.getUuid(), now = new Date().toISOString();
+  var sentTextId = v2StoreSentText_(docId, fileName, masked);
   var kindFinal = (meta && meta.kind) ? meta.kind : (kind || 'agreement');
   var dateFinal = (meta && meta.date) ? meta.date : '';
   appendRow_(SHEETS.documents, {
@@ -835,7 +855,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     Number: (meta && meta.number) ? meta.number : fileName,
     SignDate: dateFinal, EffectiveFrom: dateFinal, Status: 'signed', Source: 'external',
     AttachmentID: attachmentId || '', FileName: fileName,
-    SentTextID: v2StoreSentText_(docId, fileName, masked), CreatedAt: now
+    SentTextID: sentTextId, CreatedAt: now
   });
 
   var list = dedupeBlocks_(res.blocks);
@@ -891,6 +911,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
 
   return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null, diff: diff, profile: autoProfile,
            sample: masked.slice(0, 4000),   // so the mapping can be checked against what the model actually read
+           sentTextSaved: !!sentTextId, sentTextError: SENT_TEXT_ERROR,
            partial: !!res.partial, partsDone: res.done, partsTotal: res.chunks,
            timing: { ocrMs: tOcr, source: r.source, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length,
                      model: geminiModel_(), parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
