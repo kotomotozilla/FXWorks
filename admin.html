@@ -357,6 +357,20 @@
   </div>
   <div class="sep pj-only"></div>
   <h2 style="font-size:15px" class="pj-only">Assigned team members</h2>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0">
+    <span class="muted" style="font-size:12px" id="pm_asgsCount"></span>
+    <div style="display:flex;align-items:center;gap:6px">
+      <label style="margin:0;font-size:12px;color:var(--muted)">Sort by</label>
+      <select id="pm_sort" style="width:auto;font-size:12px;padding:4px 8px" onchange="renderProjectModal()">
+        <option value="submitted">date submitted</option>
+        <option value="accepted">date accepted</option>
+        <option value="performer">performer</option>
+        <option value="amount">amount</option>
+        <option value="status">status</option>
+      </select>
+      <button class="btn ghost sm" id="pm_sortDir" onclick="pmToggleDir()" title="Reverse the order">↓</button>
+    </div>
+  </div>
   <div id="pm_asgs" class="pj-only"></div>
   <div class="sep pj-only"></div>
   <h2 style="font-size:15px" class="pj-only">Add team member</h2>
@@ -859,7 +873,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.105';
+const BUILD = '2026-08-08.106';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3423,6 +3437,12 @@ async function openProject(pid){
     CURRENT = r; renderProjectModal(); $('projModal').classList.remove('hidden');
   }catch(e){ alert(e.message); }
 }
+let PM_SORT_DIR = -1;   // newest first by default
+function pmToggleDir(){
+  PM_SORT_DIR = -PM_SORT_DIR;
+  const b=$('pm_sortDir'); if(b) b.textContent = PM_SORT_DIR===1 ? '↑' : '↓';
+  renderProjectModal();
+}
 function renderProjectModal(){
   const p = CURRENT.project, asgs = CURRENT.assignments||[];
   $('pm_title').textContent = p.Name;
@@ -3432,8 +3452,28 @@ function renderProjectModal(){
   $('pm_save').textContent='Save project';
   document.querySelectorAll('#projModal .pj-only').forEach(el=>el.classList.remove('hidden'));
   notice('pm_err','','');
-  // assignments
-  $('pm_asgs').innerHTML = asgs.length ? asgs.map(a=>{
+  // assignments — the order is chosen by the user: which one helps depends on the task
+  const dir = PM_SORT_DIR;
+  const key = ($('pm_sort')||{}).value || 'submitted';
+  const dOf = (a,f) => String(a[f]||'').slice(0,10);
+  const amountOf = a => {
+    const fee = (a.ReportedAmount!==''&&a.ReportedAmount!=null)
+      ? +a.ReportedAmount : Math.round((+a.ReportedHours||0)*(+a.Rate||0)*100)/100;
+    return fee + (String(a.UpliftGranted).toLowerCase()==='yes' ? (+a.UpliftAmount||0) : 0);
+  };
+  const sorted = asgs.slice().sort((x,y)=>{
+    let r = 0;
+    if(key==='performer') r = String(x.EmployeeName||x.EmployeeEmail||'').localeCompare(String(y.EmployeeName||y.EmployeeEmail||''));
+    else if(key==='amount') r = amountOf(x) - amountOf(y);
+    else if(key==='status') r = String(x.Status||'').localeCompare(String(y.Status||''));
+    else if(key==='accepted') r = dOf(x,'AcceptedAt').localeCompare(dOf(y,'AcceptedAt'));
+    else r = dOf(x,'SubmittedAt').localeCompare(dOf(y,'SubmittedAt'));
+    if(r===0) r = dOf(x,'SubmittedAt').localeCompare(dOf(y,'SubmittedAt'));
+    return r * dir;
+  });
+  const cnt = $('pm_asgsCount');
+  if(cnt) cnt.textContent = asgs.length ? `${asgs.length} report(s)` : '';
+  $('pm_asgs').innerHTML = sorted.length ? sorted.map(a=>{
     const s=cur(a.Currency);
     const reportBtn = `<button class="btn ghost sm" onclick="viewReport('${a.AssignmentID}')">Report / edit</button>`;
     const remindBtn = (a.Status==='released'||a.Status==='draft') ? `<button class="btn ghost sm" onclick="remindAssignment('${a.AssignmentID}',this)">Remind</button>` : '';
