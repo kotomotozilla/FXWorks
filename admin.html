@@ -874,7 +874,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.113';
+const BUILD = '2026-08-08.115';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2279,9 +2279,17 @@ async function v2Export(){
   const sent = {}, sentWhy = {};
   for(const d of V2.documents){
     try{
-      const r = await api('v2_sent_text',{documentId:d.DocumentID});
-      sent[d.DocumentID] = r.text||'';
-      if(!r.text) sentWhy[d.DocumentID] = r.note||'empty';
+      // one slice per request: a whole agreement in a single answer never survives the trip
+      let out = '', seq = 1, total = 1;
+      while(seq <= total && seq <= 40){
+        const r = await api('v2_sent_text',{documentId:d.DocumentID, seq});
+        total = r.total || 1;
+        out += r.text || '';
+        if(!r.text && !r.total) sentWhy[d.DocumentID] = r.note||'empty';
+        seq++;
+      }
+      sent[d.DocumentID] = out;
+      if(!out && !sentWhy[d.DocumentID]) sentWhy[d.DocumentID] = 'empty';
     }catch(e){ sent[d.DocumentID] = ''; sentWhy[d.DocumentID] = e.message; }
   }
   const c = CONTRACTS.find(x=>String(x.ContractID)===String(V2.contractId)) || (V2.contractId==='__sandbox' ? {Number:'test parsing'} : {});
@@ -2305,6 +2313,18 @@ async function v2Export(){
   L.push('- clauses: '+V2.blocks.length);
   L.push('- keys used: '+Object.keys(used).length+' of '+(V2.keys||[]).length);
   L.push('- in "misc": '+(used['misc']||0));
+  // A clause number that appears in the text but in no block means the parse skipped it.
+  const inMap = new Set(V2.blocks.map(b=>String(b.Path||'').replace(/\.$/,'')).filter(Boolean));
+  const inText = new Set();
+  Object.values(sent).forEach(t=>{
+    String(t||'').split('\n').forEach(line=>{
+      const m = line.match(/^\s*(\d{1,2}(?:\.\d{1,3}){1,3})[.)]?\s+\S/);
+      if(m) inText.add(m[1]);
+    });
+  });
+  const skipped = [...inText].filter(p=>!inMap.has(p)).sort();
+  if(inText.size) L.push('- clause numbers in the text but not in the mapping: '
+    + (skipped.length ? skipped.length+' — '+skipped.slice(0,40).join(', ')+(skipped.length>40?' …':'') : 'none'));
   if(unused.length) L.push('- keys not present: '+unused.join(', '));
   L.push('');
   L.push('## Clauses grouped by key');

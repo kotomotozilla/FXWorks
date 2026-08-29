@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.113';
+const BUILD = '2026-08-08.115';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -466,7 +466,8 @@ var PARSE_PROFILES = {
 var SEMANTIC_KEYS = ['parties', 'definitions', 'documents', 'scope', 'reporting', 'schedule',
   'acceptance.procedure', 'acceptance.deemed', 'documentation', 'payment.term', 'payment.currency',
   'force_majeure', 'liability.general', 'liability.penalties', 'liability.cap', 'ip.ownership', 'ip.usage',
-  'infringement', 'termination', 'confidentiality', 'data.security', 'insurance', 'compliance',
+  'infringement', 'termination', 'confidentiality', 'data.protection', 'data.security', 'insurance',
+  'warranties', 'subcontracting', 'compliance',
   'law.governing', 'law.forum',
   // The "Miscellaneous" section is where amendments most often bite, so it gets its own keys
   // instead of being dumped into misc.
@@ -532,7 +533,20 @@ function v2BlocksChunk_(key, chunk, partNo, total, profile) {
     '- title: short heading if the clause has one, otherwise ""\n' +
     '- text: the complete wording of that clause, verbatim, no summarising\n' +
     '- semanticKey: exactly one of: ' + SEMANTIC_KEYS.join(', ') + '\n' +
+    '  Where several could fit, use these readings:\n' +
+    '    data.protection — personal data: controller/processor roles, processing instructions, sub-processors,\n' +
+    '      international transfers, data-subject requests, breach notification, audits of processing.\n' +
+    '    data.security — technical and organisational protection: access control, encryption, vulnerabilities,\n' +
+    '      security incidents, secure development, penetration testing.\n' +
+    '    warranties — representations and warranties a party gives about itself or its deliverables.\n' +
+    '    subcontracting — engaging subcontractors; assignment is about transferring the contract itself.\n' +
+    '    documents — how the papers relate: order of precedence, what a work order must contain,\n' +
+    '      how assignments are ordered and become binding.\n' +
+    '    scope — what is actually done: services, deliverables, performance standards, restrictions on the work.\n' +
     'Keep the original order. Do not merge clauses. Do not invent clauses. Skip tables of contents.\n' +
+    'Split to the smallest addressable item, always: the sentence that introduces a list stays in the parent\n' +
+    'block, and every lettered or numbered item under it is a separate block of its own. Never fold a list\n' +
+    'back into the parent, and never leave an item out because it is short.\n' +
     'Inside the text use plain straight quotes only; escape them properly so the JSON stays valid.\n' +
     'The parties appear as PARTY_US and PARTY_OTHER; names, contacts and bank details are replaced by\n' +
     'numbered placeholders such as [COMPANY_1], [NAME_2], [ACCOUNT_3]. Copy every placeholder through\n' +
@@ -695,13 +709,18 @@ function v2StoreSentText_(docId, fileName, text) {
   } catch (e) { SENT_TEXT_ERROR = String(e).slice(0, 150); return 0; }
 }
 
+// Returned one slice at a time. A hundred kilobytes in a single answer travels through the
+// Apps Script redirect badly enough that the browser reports a dropped connection, so the
+// caller asks for slice 1, 2, 3 … until "total" is reached.
 function v2SentText_(d) {
   requireAdmin_(d);
   var id = trim_(d.documentId);
+  var want = num_(d.seq) || 1;
   var parts = readAll_(SHEETS.sentText).filter(function (r) { return String(r.DocumentID) === id; });
   if (parts.length) {
     parts.sort(function (a, b) { return (+a.Seq || 0) - (+b.Seq || 0); });
-    return { ok: true, text: parts.map(function (r) { return String(r.Chunk || ''); }).join('') };
+    var one = parts[want - 1];
+    return { ok: true, seq: want, total: parts.length, text: one ? String(one.Chunk || '') : '' };
   }
   // Builds .110-.112 kept it as a Drive file; read that if it is still around.
   var doc = findRow_(SHEETS.documents, 'DocumentID', id);
@@ -802,7 +821,7 @@ function v2ParseMore_(d) {
   var head = HEADERS.blocks, now = new Date().toISOString();
   var existing = readAll_(SHEETS.blocks).filter(function (b) { return String(b.DocumentID) === String(doc.DocumentID); });
   var start = existing.length;
-  var rows = dedupeBlocks_(all).map(function (b, n) {
+  var rows = v2InheritKeys_(dedupeBlocks_(all)).map(function (b, n) {
     var k = trim_(b.semanticKey);
     var rec = {
       BlockID: Utilities.getUuid(), DocumentID: doc.DocumentID, ContractID: doc.ContractID,
@@ -878,7 +897,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     SentTextID: '', CreatedAt: now
   });
 
-  var list = dedupeBlocks_(res.blocks);
+  var list = v2InheritKeys_(dedupeBlocks_(res.blocks));
   var head = HEADERS.blocks;
   var rows = list.map(function (b, i) {
     var k = trim_(b.semanticKey);
@@ -2170,6 +2189,58 @@ function dedupePages_(text) {
     out.push(lines[i]);
   }
   return out.join('\n');
+}
+
+// A list is one clause, however deep it is split. The model classifies every item on its own,
+// so "4.1 The Supplier shall:" landed in compliance while its items f and j went to reporting,
+// and "23.2" sat in misc while 23.2.f went to infringement. An item under a parent takes the
+// parent's key: the address decides, not the wording of the fragment.
+function v2InheritKeys_(blocks) {
+  var byPath = {};
+  blocks.forEach(function (b) {
+    var p = String(b.path || '').replace(/\.$/, '');
+    if (p && !byPath[p]) byPath[p] = b;
+  });
+  var parentOf = function (p) {
+    var at = p.lastIndexOf('.');
+    while (at > 0) {
+      var head = p.slice(0, at);
+      if (byPath[head]) return byPath[head];
+      at = head.lastIndexOf('.');
+    }
+    return null;
+  };
+  blocks.forEach(function (b) {
+    var p = String(b.path || '').replace(/\.$/, '');
+    if (!p) return;
+    var segs = p.split('.');
+    // Only sub-items inherit: a clause of its own ("4.1", "18.8") keeps the key it was given.
+    var isSubItem = segs.length > 2 || /^[a-z]$|^[ivxlc]+$|^\([a-z0-9]+\)$/i.test(segs[segs.length - 1]);
+    if (!isSubItem) return;
+    var parent = parentOf(p);
+    if (parent && trim_(parent.semanticKey) && parent.semanticKey !== b.semanticKey) {
+      b.inheritedFrom = parent.path;
+      b.semanticKey = parent.semanticKey;
+    }
+  });
+  // A bare section heading ("23. Representations and warranties") has no wording to classify,
+  // so it follows what its clauses say rather than falling into misc.
+  blocks.forEach(function (b) {
+    var p = String(b.path || '').replace(/\.$/, '');
+    if (!p || p.indexOf('.') >= 0) return;
+    if (String(b.text || '').replace(/\s+/g, ' ').trim().length > 160) return;
+    var tally = {}, best = '', bestN = 0;
+    blocks.forEach(function (x) {
+      var xp = String(x.path || '');
+      if (xp.indexOf(p + '.') !== 0) return;
+      var k = trim_(x.semanticKey);
+      if (!k || k === 'misc') return;
+      tally[k] = (tally[k] || 0) + 1;
+      if (tally[k] > bestN) { bestN = tally[k]; best = k; }
+    });
+    if (best) b.semanticKey = best;
+  });
+  return blocks;
 }
 
 function dedupeBlocks_(blocks) {
