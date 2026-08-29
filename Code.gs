@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.125';
+const BUILD = '2026-08-08.126';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -128,6 +128,8 @@ function route_(action, d) {
     case 'v2_check_model':     requireAdmin_(d); return v2CheckModel_();
     case 'v2_ocr_pages':       return v2OcrPages_(d);
     case 'v2_queue_add':       return v2QueueAdd_(d);
+    case 'v2_queue_text':      return v2QueueTextAdd_(d);
+    case 'v2_queue_ready':     return v2QueueReady_(d);
     case 'v2_queue_list':      return v2QueueList_(d);
     case 'v2_queue_run':       requireAdmin_(d); return v2QueueTick();
     case 'v2_queue_background':return v2QueueBackground_(d);
@@ -847,21 +849,34 @@ function v2QueueAdd_(d) {
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
 
   var id = Utilities.getUuid();
-  var text = String(d.textLayer || '');
-  if (text) {
-    var rows = [], seq = 0;
-    for (var at = 0; at < text.length; at += SENT_TEXT_CHUNK) rows.push([id, ++seq, text.substr(at, SENT_TEXT_CHUNK)]);
-    var sh = getSheet_(SHEETS.queueText);
-    sh.getRange(sh.getLastRow() + 1, 1, rows.length, HEADERS.queueText.length).setValues(rows);
-    invalidateCache_(SHEETS.queueText);
-  }
   appendRow_(SHEETS.queue, {
     QueueID: id, BatchID: trim_(d.batchId) || Utilities.getUuid(),
     ContractID: trim_(d.contractId) || '__sandbox', FileName: fileName,
     DriveFileID: file.getId(), TextSource: trim_(d.textSource), Profile: trim_(d.profile),
-    Status: 'queued', CreatedAt: new Date().toISOString()
+    // "preparing" until the text has been uploaded — the trigger must not take it half-ready
+    Status: trim_(d.textSource) ? 'preparing' : 'queued', CreatedAt: new Date().toISOString()
   });
   return { ok: true, queueId: id };
+}
+
+// The text arrives in slices of its own: a file and its text in one request is a megabyte
+// or more, and a body that size does not survive the trip to Apps Script.
+function v2QueueTextAdd_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.queueId);
+  if (!id) return { ok: false, error: 'No queue id' };
+  var sh = getSheet_(SHEETS.queueText);
+  sh.appendRow([id, num_(d.seq) || 1, String(d.chunk || '')]);
+  invalidateCache_(SHEETS.queueText);
+  return { ok: true };
+}
+
+function v2QueueReady_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.queueId);
+  if (!findRow_(SHEETS.queue, 'QueueID', id)) return { ok: false, error: 'Queue item not found' };
+  updateRow_(SHEETS.queue, 'QueueID', id, { Status: 'queued' });
+  return { ok: true };
 }
 
 function v2QueueText_(queueId) {
@@ -909,7 +924,10 @@ function v2QueueTick() {
 function v2QueueNotify_(batchId) {
   var rows = readAll_(SHEETS.queue).filter(function (r) { return String(r.BatchID) === batchId; });
   if (!rows.length) return;
-  if (rows.some(function (r) { return String(r.Status) === 'queued' || String(r.Status) === 'running'; })) return;
+  if (rows.some(function (r) {
+    var st = String(r.Status);
+    return st === 'queued' || st === 'running' || st === 'preparing';
+  })) return;
   if (rows.some(function (r) { return String(r.Message) === 'notified'; })) return;
 
   var okRows = rows.filter(function (r) { return String(r.Status) === 'done'; });

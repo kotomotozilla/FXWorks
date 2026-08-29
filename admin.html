@@ -877,7 +877,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.125';
+const BUILD = '2026-08-08.126';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -898,7 +898,16 @@ async function api(action, payload={}){
   try{
     res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
       headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
-  }catch(_){ throw new Error('No connection to the server. Check the web app URL and your connection.'); }
+  }catch(_){
+    // one retry: a dropped connection here is usually a body that was too big or a blip
+    try{
+      await new Promise(r=>setTimeout(r,700));
+      res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
+        headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
+    }catch(__){
+      throw new Error('No connection to the server on "'+action+'" ('+Math.round(JSON.stringify(payload||{}).length/1024)+' KB sent). Check the web app URL and your connection.');
+    }
+  }
   const text = await res.text();
   const tookMs = Math.round(performance.now() - t0);
   let data;
@@ -1815,9 +1824,17 @@ async function v2QueueParse(){
           }
         }
       }catch(e){ layerText=''; layerSource=''; }
-      await api('v2_queue_add',{ batchId, contractId:'__sandbox', fileName:files[i].name,
+      const add = await api('v2_queue_add',{ batchId, contractId:'__sandbox', fileName:files[i].name,
         mimeType:files[i].type||'application/pdf', profile:$('v2_profile').value,
-        dataBase64: await fileToBase64(files[i]), textLayer:layerText, textSource:layerSource });
+        dataBase64: await fileToBase64(files[i]), textSource:layerSource });
+      if(layerSource && layerText){
+        const SIZE = 10000;
+        for(let at=0, seq=1; at<layerText.length; at+=SIZE, seq++){
+          notice('v2Err','info',`Uploading text of <b>${nm}</b> — ${Math.min(100,Math.round((at+SIZE)*100/layerText.length))}%`);
+          await api('v2_queue_text',{ queueId: add.queueId, seq, chunk: layerText.substr(at, SIZE) });
+        }
+        await api('v2_queue_ready',{ queueId: add.queueId });
+      }
     }
     const st = await api('v2_queue_background',{enable:true}).catch(()=>({background:false}));
     notice('v2Err','ok', `${files.length} file(s) queued.`
@@ -1840,11 +1857,12 @@ async function v2QueueRefresh(){
   let r;
   try{ r = await api('v2_queue_list',{}); }catch(e){ return; }
   const rows = r.queue||[];
-  const waiting = rows.filter(x=>x.status==='queued').length;
+  const waiting = rows.filter(x=>x.status==='queued'||x.status==='preparing').length;
   const running = rows.filter(x=>x.status==='running').length;
   const el = $('v2_queue');
   if(!rows.length){ el.innerHTML=''; if(V2_QUEUE_TIMER) clearInterval(V2_QUEUE_TIMER); return; }
   const tag = st => st==='done' ? '<span class="tag accepted">done</span>'
+             : st==='preparing' ? '<span class="tag draft">uploading…</span>'
              : st==='failed' ? '<span class="tag rejected">failed</span>'
              : st==='running' ? '<span class="tag submitted">parsing…</span>' : '<span class="tag draft">queued</span>';
   el.innerHTML = `<div style="border:1px dashed var(--line);border-radius:10px;padding:10px">
