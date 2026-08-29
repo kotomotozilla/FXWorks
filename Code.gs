@@ -27,10 +27,10 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.112';
+const BUILD = '2026-08-08.113';
 
 // ─────────────────────────────────────────────────────────────────────────────
-const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
@@ -39,6 +39,7 @@ const HEADERS = {
   payments:    ['PaymentID', 'CounterpartyID', 'PaidAt', 'Amount', 'Currency', 'Reference', 'Note',
                 'AssignmentID', 'MatchedBy', 'MatchedAt', 'CreatedAt'],
   terms:       ['TermID', 'ContractID', 'Field', 'Value', 'ValidFrom', 'FromClause', 'DocumentID', 'Note', 'CreatedAt'],
+  sentText:    ['DocumentID', 'Seq', 'Chunk'],
   blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
@@ -674,26 +675,42 @@ function v2ParseUpload_(d) {
 // checked against what the model actually read. Sheets caps a cell at 50 000 characters
 // and a contract is easily twice that, so it lives as a file on Drive.
 var SENT_TEXT_ERROR = '';
+// A cell holds 50 000 characters and a framework agreement runs to twice that, so the text
+// is stored in slices. It lives in the spreadsheet rather than as a Drive file: one place
+// for the data, and nothing to go wrong with folders or permissions.
+var SENT_TEXT_CHUNK = 40000;
 function v2StoreSentText_(docId, fileName, text) {
   SENT_TEXT_ERROR = '';
   try {
     var body = String(text || '');
-    if (!body) { SENT_TEXT_ERROR = 'nothing to store'; return ''; }
-    var name = 'FXWorks sent text - ' + String(fileName || docId).replace(/[\\/:*?"<>|]/g, '_') + '.txt';
-    var file = attachmentsFolder_().createFile(Utilities.newBlob(body, 'text/plain', name));
-    return file.getId();
-  } catch (e) { SENT_TEXT_ERROR = String(e).slice(0, 120); return ''; }
+    if (!body) { SENT_TEXT_ERROR = 'nothing to store'; return 0; }
+    var head = HEADERS.sentText, rows = [], seq = 0;
+    for (var at = 0; at < body.length; at += SENT_TEXT_CHUNK) {
+      rows.push([docId, ++seq, body.substr(at, SENT_TEXT_CHUNK)]);
+    }
+    var sh = getSheet_(SHEETS.sentText);
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, head.length).setValues(rows);
+    invalidateCache_(SHEETS.sentText);
+    return rows.length;
+  } catch (e) { SENT_TEXT_ERROR = String(e).slice(0, 150); return 0; }
 }
 
 function v2SentText_(d) {
   requireAdmin_(d);
-  var doc = findRow_(SHEETS.documents, 'DocumentID', trim_(d.documentId));
-  if (!doc) return { ok: false, error: 'Document not found' };
-  var id = trim_(doc.SentTextID);
-  if (!id) return { ok: true, text: '', missing: true };
-  try {
-    return { ok: true, text: DriveApp.getFileById(id).getBlob().getDataAsString() };
-  } catch (e) { return { ok: true, text: '', missing: true }; }
+  var id = trim_(d.documentId);
+  var parts = readAll_(SHEETS.sentText).filter(function (r) { return String(r.DocumentID) === id; });
+  if (parts.length) {
+    parts.sort(function (a, b) { return (+a.Seq || 0) - (+b.Seq || 0); });
+    return { ok: true, text: parts.map(function (r) { return String(r.Chunk || ''); }).join('') };
+  }
+  // Builds .110-.112 kept it as a Drive file; read that if it is still around.
+  var doc = findRow_(SHEETS.documents, 'DocumentID', id);
+  var fid = doc ? trim_(doc.SentTextID) : '';
+  if (fid) {
+    try { return { ok: true, text: DriveApp.getFileById(fid).getBlob().getDataAsString() }; }
+    catch (e) { return { ok: true, text: '', note: 'stored file could not be read: ' + String(e).slice(0, 100) }; }
+  }
+  return { ok: true, text: '', note: doc ? 'nothing stored for this document' : 'document not found' };
 }
 
 // The same heuristic the browser uses, applied to whatever the server ended up reading:
@@ -793,7 +810,7 @@ function v2ParseMore_(d) {
       Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath),
       ReplacesIn: (trim_(b.replacesIn) === 'annex' ? 'annex' : (trim_(b.replacesPath) ? 'agreement' : '')),
       ReplacementText: unmaskAI_(String(b.replacementText || ''), cpName),
-      Level: num_(b.level) || 2, Title: trim_(b.title),
+      Level: num_(b.level) || 2, Title: unmaskAI_(trim_(b.title), cpName),
       Text: unmaskAI_(String(b.text || ''), cpName), Params: '', Origin: 'external',
       SortOrder: start + n + 1, CreatedAt: now
     };
@@ -843,13 +860,14 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     var same = attachmentId ? (String(doc.AttachmentID) === attachmentId) : (String(doc.FileName) === fileName);
     if (String(doc.ContractID) === contractId && same) {
       if (trim_(doc.SentTextID)) { try { DriveApp.getFileById(trim_(doc.SentTextID)).setTrashed(true); } catch (e) {} }
+      deleteRowsWhere_(SHEETS.sentText, 'DocumentID', doc.DocumentID);
       deleteRowsWhere_(SHEETS.blocks, 'DocumentID', doc.DocumentID);
       deleteRowsWhere_(SHEETS.documents, 'DocumentID', doc.DocumentID);
     }
   });
 
   var docId = Utilities.getUuid(), now = new Date().toISOString();
-  var sentTextId = v2StoreSentText_(docId, fileName, masked);
+  var sentParts = v2StoreSentText_(docId, fileName, masked);
   var kindFinal = (meta && meta.kind) ? meta.kind : (kind || 'agreement');
   var dateFinal = (meta && meta.date) ? meta.date : '';
   appendRow_(SHEETS.documents, {
@@ -857,7 +875,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     Number: (meta && meta.number) ? meta.number : fileName,
     SignDate: dateFinal, EffectiveFrom: dateFinal, Status: 'signed', Source: 'external',
     AttachmentID: attachmentId || '', FileName: fileName,
-    SentTextID: sentTextId, CreatedAt: now
+    SentTextID: '', CreatedAt: now
   });
 
   var list = dedupeBlocks_(res.blocks);
@@ -870,7 +888,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
       Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath),
       ReplacesIn: (trim_(b.replacesIn) === 'annex' ? 'annex' : (trim_(b.replacesPath) ? 'agreement' : '')),
       ReplacementText: unmaskAI_(String(b.replacementText || ''), cpName || ''),
-      Level: num_(b.level) || 2, Title: trim_(b.title),
+      Level: num_(b.level) || 2, Title: unmaskAI_(trim_(b.title), cpName || ''),
       Text: unmaskAI_(String(b.text || ''), cpName || ''), Params: '', Origin: 'external',
       SortOrder: i + 1, CreatedAt: now
     };
@@ -913,7 +931,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
 
   return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null, diff: diff, profile: autoProfile,
            sample: masked.slice(0, 4000),   // so the mapping can be checked against what the model actually read
-           sentTextSaved: !!sentTextId, sentTextError: SENT_TEXT_ERROR,
+           sentTextSaved: !!sentParts, sentTextError: SENT_TEXT_ERROR,
            partial: !!res.partial, partsDone: res.done, partsTotal: res.chunks,
            timing: { ocrMs: tOcr, source: r.source, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length,
                      model: geminiModel_(), parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
@@ -1409,6 +1427,7 @@ function v2DeleteDoc_(d) {
   var id = trim_(d.documentId);
   var doc = findRow_(SHEETS.documents, 'DocumentID', id);
   if (doc && trim_(doc.SentTextID)) { try { DriveApp.getFileById(trim_(doc.SentTextID)).setTrashed(true); } catch (e) {} }
+  deleteRowsWhere_(SHEETS.sentText, 'DocumentID', id);
   deleteRowsWhere_(SHEETS.blocks, 'DocumentID', id);
   deleteRowsWhere_(SHEETS.documents, 'DocumentID', id);
   return { ok: true };

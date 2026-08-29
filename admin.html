@@ -874,7 +874,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.112';
+const BUILD = '2026-08-08.113';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2276,10 +2276,13 @@ async function v2Export(){
   // The text the model read is what a mapping has to be judged against, so it travels
   // with the export instead of having to be fished out of Drive later.
   notice('v2Err','info','Collecting the text that was sent to the AI…');
-  const sent = {};
+  const sent = {}, sentWhy = {};
   for(const d of V2.documents){
-    try{ const r = await api('v2_sent_text',{documentId:d.DocumentID}); sent[d.DocumentID] = r.text||''; }
-    catch(_){ sent[d.DocumentID] = ''; }
+    try{
+      const r = await api('v2_sent_text',{documentId:d.DocumentID});
+      sent[d.DocumentID] = r.text||'';
+      if(!r.text) sentWhy[d.DocumentID] = r.note||'empty';
+    }catch(e){ sent[d.DocumentID] = ''; sentWhy[d.DocumentID] = e.message; }
   }
   const c = CONTRACTS.find(x=>String(x.ContractID)===String(V2.contractId)) || (V2.contractId==='__sandbox' ? {Number:'test parsing'} : {});
   const docs={}; V2.documents.forEach(d=>docs[d.DocumentID]=d);
@@ -2322,7 +2325,7 @@ async function v2Export(){
   L.push('');
   L.push('## Text sent to the AI');
   L.push('');
-  L.push('Masked exactly as the model received it. Documents parsed before build 2026-08-08.110');
+  L.push('Masked exactly as the model received it. Documents parsed before build 2026-08-08.113');
   L.push('have no stored text — parse them again to record it.');
   V2.documents.forEach(d=>{
     L.push('');
@@ -2333,7 +2336,7 @@ async function v2Export(){
       L.push(sent[d.DocumentID]);
       L.push('```');
     }else{
-      L.push('_not recorded_');
+      L.push('_not recorded — '+(sentWhy[d.DocumentID]||'unknown')+'_');
     }
   });
   L.push('');
