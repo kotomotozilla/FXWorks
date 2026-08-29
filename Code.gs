@@ -27,11 +27,11 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.129';
+const BUILD = '2026-08-08.131';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
-                 queue: 'ParseQueue', queueText: 'ParseQueueText', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+                 queue: 'ParseQueue', queueText: 'ParseQueueText', queueFile: 'ParseQueueFile', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
@@ -44,6 +44,7 @@ const HEADERS = {
   queue:       ['QueueID', 'BatchID', 'ContractID', 'FileName', 'DriveFileID', 'TextSource', 'Profile',
                 'Status', 'Message', 'DocumentID', 'Blocks', 'CreatedAt', 'StartedAt', 'FinishedAt'],
   queueText:   ['QueueID', 'Seq', 'Chunk'],
+  queueFile:   ['QueueID', 'Seq', 'Chunk'],
   blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
@@ -130,6 +131,7 @@ function route_(action, d) {
     case 'v2_ocr_pages':       return v2OcrPages_(d);
     case 'v2_queue_add':       return v2QueueAdd_(d);
     case 'v2_queue_text':      return v2QueueTextAdd_(d);
+    case 'v2_queue_file':      return v2QueueFileAdd_(d);
     case 'v2_queue_ready':     return v2QueueReady_(d);
     case 'v2_queue_list':      return v2QueueList_(d);
     case 'v2_queue_run':       requireAdmin_(d); return v2QueueTick();
@@ -879,20 +881,22 @@ function v2GroupKey_(contractId, kind, meta, fileName) {
 function v2QueueAdd_(d) {
   requireAdmin_(d);
   var fileName = trim_(d.fileName) || 'document';
-  if (!d.dataBase64) return { ok: false, error: 'No file data' };
-  var file;
-  try {
-    var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), trim_(d.mimeType) || 'application/pdf', fileName);
-    file = attachmentsFolder_().createFile(blob);
-  } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
+  var file = null;
+  if (d.dataBase64) {
+    try {
+      var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), trim_(d.mimeType) || 'application/pdf', fileName);
+      file = attachmentsFolder_().createFile(blob);
+    } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
+  }
 
   var id = Utilities.getUuid();
   appendRow_(SHEETS.queue, {
     QueueID: id, BatchID: trim_(d.batchId) || Utilities.getUuid(),
     ContractID: trim_(d.contractId) || '__sandbox', FileName: fileName,
-    DriveFileID: file.getId(), TextSource: trim_(d.textSource), Profile: trim_(d.profile),
+    DriveFileID: file ? file.getId() : '', TextSource: trim_(d.textSource), Profile: trim_(d.profile),
     // "preparing" until the text has been uploaded — the trigger must not take it half-ready
-    Status: trim_(d.textSource) ? 'preparing' : 'queued', CreatedAt: new Date().toISOString()
+    // Nothing may start until both the bytes and the text have arrived.
+    Status: (trim_(d.textSource) || !file) ? 'preparing' : 'queued', CreatedAt: new Date().toISOString()
   });
   return { ok: true, queueId: id };
 }
@@ -912,9 +916,39 @@ function v2QueueTextAdd_(d) {
 function v2QueueReady_(d) {
   requireAdmin_(d);
   var id = trim_(d.queueId);
-  if (!findRow_(SHEETS.queue, 'QueueID', id)) return { ok: false, error: 'Queue item not found' };
+  var row = findRow_(SHEETS.queue, 'QueueID', id);
+  if (!row) return { ok: false, error: 'Queue item not found' };
+  if (!trim_(row.DriveFileID)) return { ok: false, error: 'The file has not finished uploading' };
   updateRow_(SHEETS.queue, 'QueueID', id, { Status: 'queued' });
   return { ok: true };
+}
+
+// A file of a megabyte and a half does not survive a single request either, so its base64
+// comes in slices and is assembled here, on the last one.
+function v2QueueFileAdd_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.queueId);
+  if (!id) return { ok: false, error: 'No queue id' };
+  var sh = getSheet_(SHEETS.queueFile);
+  sh.appendRow([id, num_(d.seq) || 1, String(d.chunk || '')]);
+  invalidateCache_(SHEETS.queueFile);
+  if (!d.last) return { ok: true, stored: true };
+
+  var row = findRow_(SHEETS.queue, 'QueueID', id);
+  if (!row) return { ok: false, error: 'Queue item not found' };
+  var parts = readAll_(SHEETS.queueFile).filter(function (r) { return String(r.QueueID) === id; });
+  parts.sort(function (a, b) { return (+a.Seq || 0) - (+b.Seq || 0); });
+  var b64 = parts.map(function (r) { return String(r.Chunk || ''); }).join('');
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(b64), trim_(d.mimeType) || 'application/pdf', String(row.FileName));
+    var file = attachmentsFolder_().createFile(blob);
+    updateRow_(SHEETS.queue, 'QueueID', id, { DriveFileID: file.getId() });
+  } catch (e) {
+    return { ok: false, error: 'Could not assemble the file: ' + e };
+  } finally {
+    deleteRowsWhere_(SHEETS.queueFile, 'QueueID', id);
+  }
+  return { ok: true, assembled: true };
 }
 
 function v2QueueText_(queueId) {
@@ -1801,7 +1835,18 @@ function v2ClearContract_(d) {
   // anything left over from an earlier build that lost its document row
   deleteRowsWhere_(SHEETS.blocks, 'ContractID', contractId);
   deleteRowsWhere_(SHEETS.terms, 'ContractID', contractId);
-  return { ok: true, documents: docs.length, blocks: blocks };
+
+  // The queue belongs to the same clean slate — except whatever is being parsed right now,
+  // which would leave a half-written document behind.
+  var queued = 0;
+  readAll_(SHEETS.queue).forEach(function (r) {
+    if (String(r.ContractID) !== contractId || String(r.Status) === 'running') return;
+    deleteRowsWhere_(SHEETS.queueText, 'QueueID', String(r.QueueID));
+    deleteRowsWhere_(SHEETS.queueFile, 'QueueID', String(r.QueueID));
+    deleteRowsWhere_(SHEETS.queue, 'QueueID', String(r.QueueID));
+    queued++;
+  });
+  return { ok: true, documents: docs.length, blocks: blocks, queue: queued };
 }
 
 

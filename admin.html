@@ -877,7 +877,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.129';
+const BUILD = '2026-08-08.131';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -913,9 +913,15 @@ async function api(action, payload={}){
   let data;
   try{ data = JSON.parse(text); }
   catch(_){
-    if(/accounts\.google\.com|Sign in|<html/i.test(text))
-      throw new Error('The server returned a Google sign-in page, not data. Deployment access must be "Anyone" and the URL must end with /exec.');
-    throw new Error('The server returned non-JSON (HTTP '+res.status+'). Check the URL (/exec) and publish a new deployment version.');
+    if(/accounts\.google\.com|ServiceLogin|Sign in to continue/i.test(text))
+      throw new Error('The server returned a Google sign-in page on "'+action+'". Deployment access must be "Anyone" and the URL must end with /exec.');
+    if(/exceeded maximum execution time|too large|request entity/i.test(text))
+      throw new Error('The server gave up on "'+action+'" — the request took too long or was too big ('
+        +Math.round(JSON.stringify(payload||{}).length/1024)+' KB sent).');
+    if(/<html/i.test(text))
+      throw new Error('The server returned an HTML page on "'+action+'" (HTTP '+res.status+', '
+        +Math.round(JSON.stringify(payload||{}).length/1024)+' KB sent) instead of data — usually a request that ran too long.');
+    throw new Error('The server returned non-JSON on "'+action+'" (HTTP '+res.status+'). Check the URL (/exec) and publish a new deployment version.');
   }
   API_LOG.push({ action, totalMs: tookMs, serverMs: data.serverMs ?? null,
                  networkMs: data.serverMs != null ? tookMs - data.serverMs : null });
@@ -1822,22 +1828,33 @@ async function v2QueueParse(){
         }
       }catch(e){ layerText=''; layerSource=''; }
 
+      const b64 = await fileToBase64(files[i]);
+      const BIG = 700000;                       // ~0.5 MB of file — bigger bodies get dropped
       const add = await api('v2_queue_add',{ batchId, contractId:'__sandbox', fileName:files[i].name,
         mimeType:files[i].type||'application/pdf', profile:$('v2_profile').value,
-        dataBase64: await fileToBase64(files[i]), textSource:layerSource });
+        dataBase64: b64.length > BIG ? '' : b64, textSource:layerSource });
+      if(b64.length > BIG){
+        const SIZE = 300000;
+        for(let at=0, seq=1; at<b64.length; at+=SIZE, seq++){
+          notice('v2Err','info',`Uploading <b>${nm}</b> — ${Math.min(100,Math.round((at+SIZE)*100/b64.length))}%`);
+          await api('v2_queue_file',{ queueId:add.queueId, seq, chunk:b64.substr(at,SIZE),
+                                      mimeType:files[i].type||'application/pdf', last: at+SIZE>=b64.length });
+        }
+      }
+      const needsReady = (b64.length > BIG) || (layerSource && layerText);
       if(layerSource && layerText){
         const SIZE = 10000;
         for(let at=0, seq=1; at<layerText.length; at+=SIZE, seq++){
           notice('v2Err','info',`Uploading text of <b>${nm}</b> — ${Math.min(100,Math.round((at+SIZE)*100/layerText.length))}%`);
           await api('v2_queue_text',{ queueId: add.queueId, seq, chunk: layerText.substr(at, SIZE) });
         }
-        await api('v2_queue_ready',{ queueId: add.queueId });
       }
+      if(needsReady) await api('v2_queue_ready',{ queueId: add.queueId });
     }
     const st = await api('v2_queue_background',{enable:true}).catch(()=>({background:false}));
-    notice('v2Err','ok', `${files.length} file(s) queued.`
-      + (st.background ? ' The server will work through them and email you when the batch is done — you can close this tab.'
-                       : ' Background runs are off, so keep this tab open while they are processed.'));
+    notice('v2Err','ok', `All ${files.length} file(s) are uploaded and queued.`
+      + (st.background ? ' <b>You can close this tab now</b> — the server works through them and emails you when the batch is done.'
+                       : ' <b style="color:var(--warn)">Background runs are off — keep this tab open</b>, otherwise nothing will be parsed.'));
     v2QueueWatch();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
   finally{ b.disabled=false; b.textContent='Queue in the background'; }
@@ -1877,8 +1894,9 @@ async function v2QueueRefresh(){
       + (x.blocks?` <span class="muted">· ${x.blocks} clauses</span>`:'')
       + (x.message?` <span style="color:var(--warn)">· ${esc(x.message)}</span>`:'')+`</div>`).join('')}
   </div>`;
-  // nudge the queue along while the tab is open, whether or not the trigger is set
-  if(waiting && !running){ try{ await api('v2_queue_run',{}); }catch(e){} }
+  // Only push the queue along by hand when the trigger is off. A document the size of the
+  // Eller agreement takes minutes, and a page request that long is killed by Apps Script.
+  if(waiting && !running && !r.background){ try{ await api('v2_queue_run',{}); }catch(e){} }
   if(!waiting && !running){ if(V2_QUEUE_TIMER) clearInterval(V2_QUEUE_TIMER); await v2LoadContract(); }
 }
 async function v2QueueBackground(on){
@@ -1896,7 +1914,9 @@ async function v2Clear(){
   notice('v2Err','info','Clearing…');
   try{
     const r = await api('v2_clear',{contractId:V2.contractId||''});
-    notice('v2Err','ok',`Removed ${r.documents} document(s) and ${r.blocks} clause(s).`);
+    notice('v2Err','ok',`Removed ${r.documents} document(s), ${r.blocks} clause(s)`
+      + (r.queue?` and ${r.queue} queue entr${r.queue>1?'ies':'y'}`:'')+'.');
+    await v2QueueRefresh();
     await v2LoadContract();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
