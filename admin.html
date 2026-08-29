@@ -877,7 +877,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.126';
+const BUILD = '2026-08-08.129';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1777,6 +1777,7 @@ async function v2Parse(){
         + ((r.diff&&r.diff.length)?`<div class="muted" style="font-size:12px;margin-left:12px">vs previous parse: ${r.diff.map(esc).join(' · ')}</div>`:'')
         + (r.partial?` · <b style="color:var(--warn)">stopped at part ${r.partsDone} of ${r.partsTotal}</b>`:'')
         + (r.profile?` · shape: <b>${esc(r.profile)}</b>`:'')
+        + (r.parts?` · split into ${r.parts.length}: ${r.parts.map(p=>esc(p.title)+' ('+p.blocks+')').join(', ')}`:'')
         + (r.sample?` · <a href="#" onclick="v2ShowSent(${V2.samples.length-1});return false;">view text sent to AI</a>`:'')
         + (r.meta?` · recognised as <b>${esc(V2_KIND[r.meta.kind]||r.meta.kind)}</b>${r.meta.number?' '+esc(r.meta.number):''}${r.meta.date?' of '+esc(r.meta.date):''}${r.meta.parentNumber?` (to agreement ${esc(r.meta.parentNumber)})`:''}`:'')
         + ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-left:12px">${r.notes.map(esc).join('<br>')}</div>`:''));
@@ -1814,16 +1815,13 @@ async function v2QueueParse(){
         if(/pdf/i.test(files[i].type||files[i].name)){
           const bytes = await fileToBytes(files[i]);
           const t = await pdfTextLayer(bytes.slice());
+          // Only a clean text layer is worth uploading. A damaged one is not rendered here:
+          // Drive reads such files well on its own, and rasterising thirty pages one request
+          // at a time is what left the Eller agreement stuck at page 27.
           if(t && !textLayerLooksBroken(t.text)){ layerText=t.text; layerSource='text layer'; }
-          else if(t){
-            // the layer is unusable and only the browser can rasterise: do it now, not later
-            notice('v2Err','info',`<b>${nm}</b>: text damaged — recognising the pages…`);
-            const imgs = await pdfRenderPages(bytes.slice(), (p,n)=>notice('v2Err','info',`<b>${nm}</b>: rendering page ${p} of ${n}…`));
-            layerText = await ocrRenderedPages(imgs, (p,n)=>notice('v2Err','info',`<b>${nm}</b>: recognising page ${p} of ${n}…`));
-            layerSource = 'page OCR';
-          }
         }
       }catch(e){ layerText=''; layerSource=''; }
+
       const add = await api('v2_queue_add',{ batchId, contractId:'__sandbox', fileName:files[i].name,
         mimeType:files[i].type||'application/pdf', profile:$('v2_profile').value,
         dataBase64: await fileToBase64(files[i]), textSource:layerSource });
@@ -1929,8 +1927,15 @@ function v2SlotOf(b){
   return t ? ('kt:'+b.SemanticKey+'|'+t) : ('key:'+b.SemanticKey);
 }
 // What an amendment block targets: the stated clause of the original agreement, if any.
+// The sandbox holds several contracts at once, so an address alone is not unique: the ICA
+// amendment replacing clause 2.1 must not touch clause 2.1 of Zander or of Smart Bridge.
+// Every slot is therefore prefixed with the group the document belongs to.
+function v2GroupOf(b){
+  const d = v2DocOf(b);
+  return String(d.GroupKey || d.Number || d.FileName || '') + '|';
+}
 function v2TargetOf(b){
-  const where = (String(b.ReplacesIn||'').toLowerCase()==='annex') ? 'annex' : 'agreement';
+  const where = v2GroupOf(b) + ((String(b.ReplacesIn||'').toLowerCase()==='annex') ? 'annex' : 'agreement');
   const r = v2NormPath(b.ReplacesPath);
   if(r) return where+':path:'+r;
   // An amendment often describes what it replaces instead of numbering it — the Zander
@@ -1942,7 +1947,7 @@ function v2TargetOf(b){
 }
 // A base clause can be addressed as belonging to the agreement or to the annex.
 function v2BaseSlots(b){
-  const kind = v2DocOf(b).Kind==='annex' ? 'annex' : 'agreement';
+  const kind = v2GroupOf(b) + (v2DocOf(b).Kind==='annex' ? 'annex' : 'agreement');
   const p = v2NormPath(b.Path);
   const slots = [];
   if(p){

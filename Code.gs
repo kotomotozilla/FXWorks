@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.126';
+const BUILD = '2026-08-08.129';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -91,6 +91,7 @@ function doPost(e) {
   try {
     var body = {};
     if (e && e.postData && e.postData.contents) body = JSON.parse(e.postData.contents);
+    ensureTextFormat_();
     var res = route_(body.action, body);
     // how long the server itself took — anything beyond this is network or the browser
     if (res && typeof res === 'object') res.serverMs = Date.now() - t0;
@@ -810,6 +811,43 @@ function textLooksBroken_(t) {
   return hits > x.length / 1500;
 }
 
+// An attachment bound into the same PDF is still a separate document. The ICA carries its
+// Statement of Work as "ATTACHMENT A" from page five onwards, and its clauses are numbered
+// from 1 again — so an amendment aimed at clause 2.1 of the agreement was finding two.
+// A heading counts as a boundary only when it names the attachment ("ATTACHMENT A",
+// "Annex 2", "Statement of Work No. 1"): the word alone, as in "…defined in the
+// Attachments.", is a sentence, not a heading.
+function splitAttachments_(text) {
+  var lines = String(text || '').split('\n');
+  var total = String(text || '').length;
+  if (total < 4000) return [{ kind: 'agreement', title: '', text: text }];
+
+  // The identifier must be separated from the word, or "Attachments." reads as attachment "s".
+  var named = /^\s*(attachment|annex|appendix|exhibit|schedule)\s+(?:no\.?\s*|#\s*|№\s*)?([A-Za-z]|\d{1,2})\b/i;
+  var sow = /^\s*(statement of work|scope of work)\b/i;
+  var prose = /\b(shall|means|defined|accordance|pursuant|refer|listed|including)\b/i;
+
+  var cuts = [], at = 0;
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i], here = at;
+    at += l.length + 1;
+    if (l.length > 80 || !l.trim()) continue;
+    if (!(named.test(l) || sow.test(l))) continue;
+    if (prose.test(l)) continue;
+    if (here < total * 0.25 || total - here < 400) continue;   // not the cover page, not the last line
+    if (cuts.length && here - cuts[cuts.length - 1].at < 500) continue;  // "ATTACHMENT A" + "STATEMENT OF WORK No. 1"
+    cuts.push({ at: here, title: l.trim() });
+  }
+  if (!cuts.length) return [{ kind: 'agreement', title: '', text: text }];
+
+  var parts = [{ kind: 'agreement', title: '', text: text.slice(0, cuts[0].at) }];
+  for (var c = 0; c < cuts.length; c++) {
+    var end = (c + 1 < cuts.length) ? cuts[c + 1].at : text.length;
+    parts.push({ kind: 'annex', title: cuts[c].title, text: text.slice(cuts[c].at, end) });
+  }
+  return parts;
+}
+
 // An agreement, its annexes and its amendments belong together. The model already reads the
 // document's own number and, for an annex or amendment, the number of the agreement it
 // belongs to — that number is the group. Without it a batch of ten files is a flat list.
@@ -915,24 +953,29 @@ function v2QueueTick() {
       FinishedAt: new Date().toISOString()
     });
     deleteRowsWhere_(SHEETS.queueText, 'QueueID', id);
-    v2QueueNotify_(String(next.BatchID));
+    v2QueueNotify_();
     return { ok: true, done: String(next.FileName), blocks: res.ok ? res.blocks : 0, error: res.ok ? '' : res.error };
   } finally { lock.releaseLock(); }
 }
 
-// Once nothing of the batch is left waiting, report what came out of it.
-function v2QueueNotify_(batchId) {
-  var rows = readAll_(SHEETS.queue).filter(function (r) { return String(r.BatchID) === batchId; });
+// One letter per run of work, not per batch. Files often arrive in several goes, and a
+// batch that happens to empty while the next files are still uploading is not "done" —
+// so the test is the whole queue: nothing waiting, nothing uploading, nothing running.
+function v2QueueNotify_() {
+  var rows = readAll_(SHEETS.queue);
   if (!rows.length) return;
-  if (rows.some(function (r) {
+  var busy = rows.some(function (r) {
     var st = String(r.Status);
     return st === 'queued' || st === 'running' || st === 'preparing';
-  })) return;
-  if (rows.some(function (r) { return String(r.Message) === 'notified'; })) return;
+  });
+  if (busy) return;
 
-  var okRows = rows.filter(function (r) { return String(r.Status) === 'done'; });
-  var bad = rows.filter(function (r) { return String(r.Status) === 'failed'; });
-  var lines = rows.map(function (r) {
+  var fresh = rows.filter(function (r) { return String(r.Message) !== 'notified'; });
+  if (!fresh.length) return;                       // already reported
+
+  var okRows = fresh.filter(function (r) { return String(r.Status) === 'done'; });
+  var bad = fresh.filter(function (r) { return String(r.Status) === 'failed'; });
+  var lines = fresh.map(function (r) {
     return String(r.Status) === 'done'
       ? '• ' + r.FileName + ' — ' + (r.Blocks || 0) + ' clauses'
       : '• ' + r.FileName + ' — FAILED: ' + (r.Message || '');
@@ -943,8 +986,9 @@ function v2QueueNotify_(batchId) {
     MailApp.sendEmail(CONFIG.ADMIN_EMAIL, subject,
       lines.join('\n') + '\n\nOpen the mapping: ' + CONFIG.ADMIN_BASE_URL + '\n');
   } catch (e) {}
-  rows.forEach(function (r) {
-    if (String(r.Status) === 'done') updateRow_(SHEETS.queue, 'QueueID', String(r.QueueID), { Message: 'notified' });
+  fresh.forEach(function (r) {
+    updateRow_(SHEETS.queue, 'QueueID', String(r.QueueID),
+               { Message: String(r.Status) === 'failed' ? (r.Message || 'failed') + ' · notified' : 'notified' });
   });
 }
 
@@ -952,7 +996,8 @@ function v2QueueList_(d) {
   requireAdmin_(d);
   var rows = readAll_(SHEETS.queue).map(function (r) {
     return { queueId: String(r.QueueID), batchId: String(r.BatchID), fileName: String(r.FileName),
-             status: String(r.Status), message: String(r.Message === 'notified' ? '' : r.Message || ''),
+             status: String(r.Status),
+             message: String(r.Message || '').replace(/(^|\s·\s)notified$/, '').replace(/^notified$/, ''),
              blocks: +r.Blocks || 0, createdAt: String(r.CreatedAt || '') };
   });
   return { ok: true, queue: rows.slice(-60), background: v2QueueTriggerOn_() };
@@ -1121,6 +1166,31 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
              error: 'The text of this file is damaged (ligatures lost) — recognising the pages as images instead' };
   }
 
+  // One PDF can hold an agreement and its statement of work. They are parsed as separate
+  // documents so that their numbering does not collide and an amendment can address either.
+  var parts = (kind === 'agreement') ? splitAttachments_(text) : [{ kind: kind, title: '', text: text }];
+  if (parts.length > 1) {
+    var out = null, groupKey = '';
+    for (var pi = 0; pi < parts.length; pi++) {
+      var pr = v2ParseOne_(contractId, driveFileId, fileName + (pi ? ' — ' + parts[pi].title : ''),
+                           pi ? '' : attachmentId, parts[pi].kind, cpName, profile,
+                           parts[pi].text, r.source, tOcr, groupKey);
+      if (!pr.ok) return pr;
+      if (!pi) { out = pr; groupKey = pr.groupKey || ''; out.parts = []; }
+      else { out.blocks += pr.blocks; }
+      out.parts.push({ documentId: pr.documentId, kind: parts[pi].kind,
+                       title: parts[pi].title || fileName, blocks: pr.blocks });
+    }
+    return out;
+  }
+  return v2ParseOne_(contractId, driveFileId, fileName, attachmentId, kind, cpName, profile,
+                     text, r.source, tOcr, '');
+}
+
+function v2ParseOne_(contractId, driveFileId, fileName, attachmentId, kind, cpName, profile,
+                     text, source, tOcr, groupKey) {
+  var t0 = Date.now();
+  var r = { source: source, rawChars: text.length };
   var t1 = Date.now();
   PARSE_DEADLINE = t0 + 4.5 * 60 * 1000;    // leave time to store what has been parsed
   var masked = maskForAI_(text, cpName || '');
@@ -1133,7 +1203,8 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   var t2 = Date.now();
 
   readAll_(SHEETS.documents).forEach(function (doc) {
-    var same = attachmentId ? (String(doc.AttachmentID) === attachmentId) : (String(doc.FileName) === fileName);
+    var same = (String(doc.FileName) === fileName)
+            || (attachmentId && String(doc.AttachmentID) === attachmentId && String(doc.FileName) === fileName);
     if (String(doc.ContractID) === contractId && same) {
       if (trim_(doc.SentTextID)) { try { DriveApp.getFileById(trim_(doc.SentTextID)).setTrashed(true); } catch (e) {} }
       deleteRowsWhere_(SHEETS.sentText, 'DocumentID', doc.DocumentID);
@@ -1151,7 +1222,9 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
     Number: (meta && meta.number) ? meta.number : fileName,
     SignDate: dateFinal, EffectiveFrom: dateFinal, Status: 'signed', Source: 'external',
     AttachmentID: attachmentId || '', FileName: fileName,
-    SentTextID: '', GroupKey: v2GroupKey_(contractId, kindFinal, meta, fileName), CreatedAt: now
+    SentTextID: '',
+    // A part cut out of a bigger file belongs to the same contract as the part before it.
+    GroupKey: groupKey || v2GroupKey_(contractId, kindFinal, meta, fileName), CreatedAt: now
   });
 
   var list = v2InheritKeys_(dedupeBlocks_(res.blocks));
@@ -1211,6 +1284,7 @@ function v2ParseFile_(contractId, driveFileId, fileName, attachmentId, kind, cpN
   return { ok: true, documentId: docId, blocks: rows.length, meta: meta || null, diff: diff, profile: autoProfile,
            sample: masked.slice(0, 4000),   // so the mapping can be checked against what the model actually read
            sentTextSaved: !!sentParts, sentTextError: SENT_TEXT_ERROR,
+           groupKey: groupKey || v2GroupKey_(contractId, kindFinal, meta, fileName),
            partial: !!res.partial, partsDone: res.done, partsTotal: res.chunks,
            timing: { ocrMs: tOcr, source: r.source, aiMs: tAi, saveMs: Date.now() - t2, chars: text.length,
                      model: geminiModel_(), parts: res.chunks || 1, failedParts: res.failedChunks || 0 },
@@ -4104,11 +4178,28 @@ function requireAdmin_(d) {
 // call — and with dozens of lookups per request that alone cost seconds. Check each sheet
 // once per request instead; a write invalidates the cached rows, not this handle.
 var SHEET_HANDLES = {};
+// A contract number like "2402-1" is a date to Google Sheets, and a signing date written as
+// "2026-02-02" comes back shifted by a timezone. Both are cured by keeping the cells textual.
+function ensureTextFormat_() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('text_format_v1') === '1') return;
+  [SHEETS.documents, SHEETS.blocks, SHEETS.terms, SHEETS.queue, SHEETS.sentText, SHEETS.queueText]
+    .forEach(function (name) {
+      try {
+        var sh = getSheet_(name);
+        sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setNumberFormat('@');
+      } catch (e) {}
+    });
+  props.setProperty('text_format_v1', '1');
+}
+
 function getSheet_(name) {
   if (SHEET_HANDLES[name]) return SHEET_HANDLES[name];
   var ss = ss_(), sh = ss.getSheetByName(name), want = HEADERS[keyByName_(name)];
   if (!sh) {
-    sh = ss.insertSheet(name); sh.appendRow(want); sh.setFrozenRows(1);
+    sh = ss.insertSheet(name);
+    sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setNumberFormat('@');
+    sh.appendRow(want); sh.setFrozenRows(1);
     SHEET_HANDLES[name] = sh;
     return sh;
   }
