@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.115';
+const BUILD = '2026-08-08.116';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
@@ -515,8 +515,8 @@ function salvageBlocks_(raw) {
   return out;
 }
 
-function v2BlocksChunk_(key, chunk, partNo, total, profile) {
-  var prompt =
+function v2BlocksPrompt_(chunk, partNo, total, profile) {
+  return
     'Split this part of a contract into its clauses. Reply with ONE JSON object: {"blocks":[...]} and nothing else.\n' +
     'Each block: {"path":"3.2","level":2,"title":"Payment","text":"full text of the clause","semanticKey":"payment.term"}\n' +
     '- path: the full address of the item as written, including letter or roman sub-items:\n' +
@@ -552,23 +552,34 @@ function v2BlocksChunk_(key, chunk, partNo, total, profile) {
     'numbered placeholders such as [COMPANY_1], [NAME_2], [ACCOUNT_3]. Copy every placeholder through\n' +
     'unchanged — they are restored to the real wording afterwards.\n' +
     ((PARSE_PROFILES[profile || ''] || '') ? (PARSE_PROFILES[profile] + '\n') : '') +
-    (total > 1 ? ('This is part ' + partNo + ' of ' + total + ' — parse only what is here.\n') : '') +
+    (total > 1 ? ('This is ' + partNo + ' of ' + total + ' — parse only what is here.\n') : '') +
     '\nCONTRACT TEXT:\n' + chunk;
+}
 
-  var call = geminiCall_(key, JSON.stringify({
+function v2BlocksChunk_(key, chunk, partNo, total, profile) {
+  var prompt = v2BlocksPrompt_(chunk, partNo, total, profile);
+
+  var call = geminiCall_(key, v2BlocksPayload_(prompt));
+  if (!call.ok) return { ok: false, error: call.error };
+  return v2BlocksAnswer_(call.body);
+}
+
+function v2BlocksPayload_(prompt) {
+  return JSON.stringify({
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0, responseMimeType: 'application/json', maxOutputTokens: 65536 }
-  }));
-  if (!call.ok) return { ok: false, error: call.error };
+  });
+}
+
+function v2BlocksAnswer_(body) {
   try {
-    var data = JSON.parse(call.body);
+    var data = JSON.parse(body);
     var cand = data.candidates && data.candidates[0];
     if (!cand) return { ok: false, error: 'Empty answer from the model' };
     if (cand.finishReason && cand.finishReason !== 'STOP') {
       return { ok: false, error: 'The answer was cut off (' + cand.finishReason + ') — the part is still too long' };
     }
-    var out = cand.content.parts[0].text;
-    var blocks = salvageBlocks_(out);
+    var blocks = salvageBlocks_(cand.content.parts[0].text);
     if (!blocks.length) return { ok: false, error: 'Could not read the structure of this part' };
     return { ok: true, blocks: blocks };
   } catch (e) { return { ok: false, error: 'Could not read the structure: ' + e }; }
@@ -650,17 +661,45 @@ function v2Blocks_(text, profile) {
   if (!key) return { ok: false, error: 'AI key is not configured — Contracts 2.0 needs it to split the text into clauses' };
   var chunks = v2Chunks_(text, 9000);
   var all = [], notes = [], failed = 0, stoppedAt = 0;
-  for (var i = 0; i < chunks.length; i++) {
+
+  // The parts do not depend on each other, so they go to the model together. Eleven parts
+  // one after another took two and a half minutes; in batches of four it is a fraction of that.
+  var BATCH = 4;
+  var model = geminiModel_();
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model
+          + ':generateContent?key=' + encodeURIComponent(key);
+
+  for (var start = 0; start < chunks.length; start += BATCH) {
     if (PARSE_DEADLINE && Date.now() > PARSE_DEADLINE) {
-      stoppedAt = i;
-      notes.push('stopped after part ' + i + ' of ' + chunks.length + ' — out of time');
+      stoppedAt = start;
+      notes.push('stopped after part ' + start + ' of ' + chunks.length + ' — out of time');
       break;
     }
-    var r = v2BlocksPart_(key, chunks[i], 'part ' + (i + 1), 0, profile);
-    all = all.concat(r.blocks);
-    notes = notes.concat(r.notes);
-    if (!r.ok) failed++;
+    var batch = chunks.slice(start, start + BATCH), requests = [], answers;
+    for (var b = 0; b < batch.length; b++) {
+      requests.push({ url: url, method: 'post', contentType: 'application/json',
+                      muteHttpExceptions: true,
+                      payload: v2BlocksPayload_(v2BlocksPrompt_(batch[b], 'part ' + (start + b + 1), chunks.length, profile)) });
+    }
+    try { answers = UrlFetchApp.fetchAll(requests); }
+    catch (e) { answers = null; notes.push('parallel request failed (' + String(e).slice(0, 80) + ') — retrying one by one'); }
+
+    for (var j = 0; j < batch.length; j++) {
+      var label = 'part ' + (start + j + 1);
+      var res = null;
+      if (answers && answers[j] && answers[j].getResponseCode() === 200) {
+        res = v2BlocksAnswer_(answers[j].getContentText());
+      }
+      // Anything that did not come back cleanly falls through to the old path, which also
+      // splits an oversized part in half and retries it.
+      if (!res || !res.ok) res = v2BlocksPart_(key, batch[j], label, 0, profile);
+      else res = { ok: true, blocks: res.blocks, notes: [label + ': ' + res.blocks.length + ' clauses'] };
+      all = all.concat(res.blocks);
+      notes = notes.concat(res.notes || []);
+      if (!res.ok) failed++;
+    }
   }
+
   if (!all.length) {
     return { ok: false, chars: String(text).length, chunks: chunks.length,
              error: (notes.length ? notes.join(' · ') : 'The model returned no clauses')
@@ -692,7 +731,7 @@ var SENT_TEXT_ERROR = '';
 // A cell holds 50 000 characters and a framework agreement runs to twice that, so the text
 // is stored in slices. It lives in the spreadsheet rather than as a Drive file: one place
 // for the data, and nothing to go wrong with folders or permissions.
-var SENT_TEXT_CHUNK = 40000;
+var SENT_TEXT_CHUNK = 10000;
 function v2StoreSentText_(docId, fileName, text) {
   SENT_TEXT_ERROR = '';
   try {

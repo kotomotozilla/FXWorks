@@ -874,7 +874,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.115';
+const BUILD = '2026-08-08.116';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2281,8 +2281,12 @@ async function v2Export(){
     try{
       // one slice per request: a whole agreement in a single answer never survives the trip
       let out = '', seq = 1, total = 1;
-      while(seq <= total && seq <= 40){
-        const r = await api('v2_sent_text',{documentId:d.DocumentID, seq});
+      while(seq <= total && seq <= 200){
+        let r = null;
+        for(let attempt=0; attempt<2 && !r; attempt++){
+          try{ r = await api('v2_sent_text',{documentId:d.DocumentID, seq}); }
+          catch(e){ if(attempt) throw e; await new Promise(res=>setTimeout(res,600)); }
+        }
         total = r.total || 1;
         out += r.text || '';
         if(!r.text && !r.total) sentWhy[d.DocumentID] = r.note||'empty';
