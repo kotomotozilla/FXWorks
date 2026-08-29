@@ -875,7 +875,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.122';
+const BUILD = '2026-08-08.123';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1868,6 +1868,20 @@ function v2Effective(asOf){
   // Replacing a whole section removes all of its clauses; replacing one clause removes only it.
   const targets = Object.keys(byMatch);
   const kept = base.filter(b=>!v2BaseSlots(b).some(sl=>targets.indexOf(sl)>=0));
+
+  // Keep a record of what displaced what. Replacing by clause number is the amendment's own
+  // word; replacing by topic is our reading of it, and it takes the whole group — the Zander
+  // addendum rewrote the payment schedule and so also swept away the total contract price,
+  // which sits under the same key. That has to be visible, not silent.
+  V2.replacedBy = {}; V2.replaces = {};
+  base.forEach(b=>{
+    const hit = v2BaseSlots(b).find(sl=>targets.indexOf(sl)>=0);
+    if(!hit) return;
+    const by = byMatch[hit];
+    V2.replacedBy[b.BlockID] = { byId: by.BlockID, basis: hit.indexOf(':key:')>=0 ? 'topic' : 'clause',
+                                 target: hit.split(':').slice(2).join(':') };
+    (V2.replaces[by.BlockID] = V2.replaces[by.BlockID] || []).push(b);
+  });
   return kept.concat(Object.keys(byMatch).map(k=>byMatch[k]));
 }
 // Which blocks are superseded — used to dim them in the full list.
@@ -1922,12 +1936,22 @@ function v2BlockRow(b, docs, eff, superseded, showKey){
           <option value="annex" ${String(b.ReplacesIn||'')==='annex'?'selected':''}>in annex</option>
         </select></span>`
     : (inserts ? ' <span class="tag submitted">inserts a new clause</span>' : '');
+  // what this clause displaced, and on what basis
+  const took = (V2.replaces||{})[b.BlockID] || [];
+  const tookByTopic = took.length && (V2.replacedBy[took[0].BlockID]||{}).basis === 'topic';
+  const tookNote = took.length
+    ? ` <span class="muted" style="font-size:12px${tookByTopic?';color:var(--warn)':''}" title="${esc(took.map(x=>(x.Path||'—')+': '+String(x.Text||'').replace(/\s+/g,' ').slice(0,90)).join('\n'))}">· replaces ${took.length} clause${took.length>1?'s':''}: ${esc(took.map(x=>x.Path||'—').slice(0,6).join(', '))}${took.length>6?'…':''}${tookByTopic?' — matched by topic, check the list':''}</span>`
+    : '';
+  const gone = (V2.replacedBy||{})[b.BlockID];
+  const goneNote = gone
+    ? ` <span class="muted" style="font-size:12px">· superseded by ${esc((docs[(V2.blocks.find(x=>x.BlockID===gone.byId)||{}).DocumentID]||{}).FileName||'an amendment')} ${esc((V2.blocks.find(x=>x.BlockID===gone.byId)||{}).Path||'')}${gone.basis==='topic'?' (by topic '+esc(gone.target)+')':''}</span>`
+    : '';
   const keyCell = showKey
     ? `<td onclick="event.stopPropagation()"><select style="font-size:12px;padding:4px 6px" onchange="v2SetKey('${esc(b.BlockID)}',this.value,event)">${v2KeyOptions(b.SemanticKey)}</select></td>`
     : '';
   return `<tr style="cursor:pointer;${dim}" onclick="v2Toggle('${esc(b.BlockID)}')">
       <td><b>${esc(b.Path||'—')}</b></td>
-      <td>${esc(b.Title||'(no heading)')}${badge}${repl}${(!eff&&!active)?' <span class="muted">· superseded</span>':''}</td>
+      <td>${esc(b.Title||'(no heading)')}${badge}${repl}${tookNote}${(!eff&&!active)?goneNote||' <span class="muted">· superseded</span>':''}</td>
       ${keyCell}
       <td class="muted">${esc(d.FileName||'')}</td>
     </tr>
@@ -2357,6 +2381,26 @@ async function v2Export(){
       + (skipped.length ? skipped.length+' — '+skipped.slice(0,40).join(', ')+(skipped.length>40?' …':'') : 'none'));
   });
   if(unused.length) L.push('- keys not present: '+unused.join(', '));
+
+  // What an amendment displaced, and whether it was matched by clause number or by topic.
+  v2Effective($('v2_asOf').value);            // fills V2.replaces / V2.replacedBy
+  const repl = Object.keys(V2.replaces||{});
+  if(repl.length){
+    L.push('');
+    L.push('## What the amendments replace');
+    repl.forEach(id=>{
+      const by = V2.blocks.find(b=>b.BlockID===id) || {};
+      const list = V2.replaces[id];
+      const basis = (V2.replacedBy[list[0].BlockID]||{}).basis;
+      L.push('');
+      L.push('**'+((docs[by.DocumentID]||{}).FileName||'')+' · '+(by.Path||'—')+'** replaces '+list.length
+             +' clause(s) '+(basis==='topic' ? 'matched **by topic** ('+(V2.replacedBy[list[0].BlockID]||{}).target+') — check this'
+                                             : 'matched by clause number')+':');
+      list.forEach(x=>L.push('- '+(x.Path||'—')+' ['+x.SemanticKey+']: '
+             +String(x.Text||'').replace(/\s+/g,' ').slice(0,140)));
+    });
+  }
+
   L.push('');
   L.push('## Clauses grouped by key');
   (V2.keys||[]).filter(k=>used[k]).forEach(k=>{
