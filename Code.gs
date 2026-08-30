@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.136';
+const BUILD = '2026-08-08.137';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -139,6 +139,7 @@ function route_(action, d) {
     case 'v2_queue_clear':     return v2QueueClear_(d);
     case 'pdf_service_check':  return pdfServiceCheck_(d);
     case 'report_pdf':         return reportPdf_(d);
+    case 'pdf_inspect':        return pdfInspect_(d);
     case 'v2_sent_text':       return v2SentText_(d);
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
@@ -1991,6 +1992,29 @@ function reportPdf_(d) {
   return { ok: true, url: file.getUrl(), fileId: file.getId(), name: name,
            created: submitted, modified: accepted || submitted,
            normalised: !!norm.ok, note: norm.ok ? '' : (norm.error || '') };
+}
+
+// What is really inside a file we produced. The dates a file manager shows belong to the
+// filesystem and prove nothing; these are read out of the document itself.
+function pdfInspect_(d) {
+  requireAdmin_(d);
+  var url = pdfServiceUrl_();
+  if (!url) return { ok: false, error: 'PDF service is not configured' };
+  var fileId = trim_(d.fileId);
+  if (!fileId) return { ok: false, error: 'No file' };
+  var key = trim_(PropertiesService.getScriptProperties().getProperty('PDF_SERVICE_KEY'));
+  try {
+    var res = UrlFetchApp.fetch(url.replace(/\/+$/, '') + '/inspect', {
+      method: 'post', payload: { file: DriveApp.getFileById(fileId).getBlob() },
+      muteHttpExceptions: true, headers: key ? { 'X-FXWorks-Key': key } : {}
+    });
+    if (res.getResponseCode() !== 200) {
+      return { ok: false, error: 'PDF service: HTTP ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200) };
+    }
+    return JSON.parse(res.getContentText());
+  } catch (e) {
+    return { ok: false, error: 'PDF service unreachable: ' + String(e).slice(0, 150) };
+  }
 }
 
 function pdfServiceCheck_(d) {

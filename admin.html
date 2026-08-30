@@ -877,7 +877,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.136';
+const BUILD = '2026-08-08.137';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1462,6 +1462,7 @@ async function renderAttachments(elId, parentType, parentId){
           <span class="acts">
             ${cur2?'':`<button class="btn ghost sm" onclick="setCurrentAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Make current</button>`}
             <button class="btn ghost sm" onclick="toggleAttEdit('${esc(a.AttachmentID)}')">Edit</button>
+            ${/\.pdf$/i.test(a.FileName||'')?`<button class="btn ghost sm" onclick="pdfInspectFile('${esc(a.DriveFileID)}',this)" title="Read the dates out of the document itself">Check dates</button>`:''}
             <button class="btn warn sm" onclick="deleteAttachment('${esc(a.AttachmentID)}','${parentType}','${parentId}','${elId}')">Delete</button>
           </span>
         </div>
@@ -4468,13 +4469,40 @@ async function reportPdfFile(aid, btn){
   const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
   try{
     const r = await api('report_pdf',{assignmentId:aid});
-    if(!r.normalised)
+    if(!r.normalised){
       alert('The file was created, but the PDF service did not rewrite it'
         + (r.note ? ':\n' + r.note : ' (not configured).')
         + '\nIts dates are the moment of export, not ' + r.created + ' / ' + r.modified + '.');
+      window.open(r.url, '_blank');
+      return;
+    }
+    // Read the dates back out of the file itself — a file manager would show the ones
+    // belonging to the filesystem, which prove nothing.
+    let seen = '';
+    try{
+      const i = await api('pdf_inspect',{fileId:r.fileId});
+      if(i.ok!==false) seen = `\n\nInside the file:\n  created  ${i.creation_date||'—'}`
+        + `\n  modified ${i.mod_date||'—'}\n  XMP: ${i.has_xmp?'present':'none'}`
+        + ` · revisions: ${i.revisions} · ${i.pages} page(s)`;
+    }catch(e){}
+    alert(`Report PDF ready.\n  submitted ${r.created}\n  accepted  ${r.modified}` + seen);
     window.open(r.url, '_blank');
   }catch(e){ alert(e.message); }
   finally{ btn.disabled = false; btn.textContent = t; }
+}
+
+// Check any PDF we hold: what its own metadata says, not what the file manager shows.
+async function pdfInspectFile(fileId, btn){
+  const t = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
+  try{
+    const i = await api('pdf_inspect',{fileId});
+    alert(`Inside the file:\n  created  ${i.creation_date||'—'}\n  modified ${i.mod_date||'—'}`
+      + `\n  XMP: ${i.has_xmp?'present':'none'}\n  revisions: ${i.revisions} · object streams: ${i.object_streams}`
+      + `\n  PDF ${i.version} · ${i.pages} page(s) · ${Math.round(i.size/1024)} KB`
+      + `\n\nInfo dictionary:\n` + Object.entries(i.info||{}).map(([k,v])=>`  ${k} = ${v}`).join('\n'));
+  }catch(e){ alert(e.message); }
+  finally{ if(btn){ btn.disabled = false; btn.textContent = t; } }
 }
 
 async function pdfFromList(aid){
