@@ -877,7 +877,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.132';
+const BUILD = '2026-08-08.136';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2018,8 +2018,9 @@ function v2Effective(asOf){
     const hit = v2BaseSlots(b).find(sl=>targets.indexOf(sl)>=0);
     if(!hit) return;
     const by = byMatch[hit];
-    V2.replacedBy[b.BlockID] = { byId: by.BlockID, basis: hit.indexOf(':key:')>=0 ? 'topic' : 'clause',
-                                 target: hit.split(':').slice(2).join(':') };
+    const byTopic = hit.indexOf(':key:')>=0;
+    V2.replacedBy[b.BlockID] = { byId: by.BlockID, basis: byTopic ? 'topic' : 'clause',
+                                 target: hit.split(byTopic ? ':key:' : ':path:').pop() };
     (V2.replaces[by.BlockID] = V2.replaces[by.BlockID] || []).push(b);
   });
   return kept.concat(Object.keys(byMatch).map(k=>byMatch[k]));
@@ -2058,13 +2059,14 @@ async function v2SetKey(blockId, key, ev){
     v2Render();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
 }
-function v2BlockRow(b, docs, eff, superseded, showKey){
+function v2BlockRow(b, docs, eff, superseded, showKey, asSecondary){
   const d = docs[b.DocumentID]||{};
   const isOpen = !!V2.open[b.BlockID];
   const active = eff ? true : !superseded[b.BlockID];
   const dim = active ? '' : 'opacity:.55';
   const isAmd = (d.Kind==='amendment');
-  const badge = isAmd ? ' <span class="tag draft">amendment</span>' : '';
+  const badge = (isAmd ? ' <span class="tag draft">amendment</span>' : '')
+    + (asSecondary ? ` <span class="tag submitted" title="Its main topic is ${esc(b.SemanticKey)} — shown here because the clause also settles ${esc(asSecondary)}">also ${esc(asSecondary)}</span>` : '');
   // Headings, recitals and inserted clauses replace nothing — the field only clutters them.
   const canReplace = isAmd && (+b.Level||2) >= 2 && String(b.Text||'').trim().length > 60;
   const inserts = isAmd && /\b(new clause|is inserted|inserted into)\b/i.test(String(b.Text||''));
@@ -2445,20 +2447,26 @@ function v2Render(){
   let rows = eff ? v2Effective($('v2_asOf').value) : V2.blocks.slice();
 
   // coverage summary — the quickest way to spot a bad mapping
+  // A clause counts once under its primary key; under a secondary key it only shows.
+  const secOf = b => String(b.SecondaryKeys||'').split(',').map(x=>x.trim()).filter(Boolean);
   const used = {}; rows.forEach(b=>used[b.SemanticKey]=(used[b.SemanticKey]||0)+1);
+  const alsoIn = {}; rows.forEach(b=>secOf(b).forEach(k=>alsoIn[k]=(alsoIn[k]||0)+1));
   const misc = used['misc']||0;
-  const unused = (V2.keys||[]).filter(k=>!used[k]);
+  const unused = (V2.keys||[]).filter(k=>!used[k] && !alsoIn[k]);
   $('v2_cover').innerHTML = `<span class="muted">${rows.length} clauses · ${Object.keys(used).length} keys used`
     + (misc?` · <b style="color:var(--warn)">${misc} in "misc"</b> — check these first`:'')
     + (unused.length?` · not present: ${unused.slice(0,8).map(esc).join(', ')}${unused.length>8?'…':''}`:'')
     + `</span>`;
 
   if(grouped){
-    const order = (V2.keys||[]).filter(k=>used[k]);
+    const order = (V2.keys||[]).filter(k=>used[k]||alsoIn[k]);
     tb.innerHTML = '<tr><th style="width:70px">Clause</th><th>Title</th><th>From</th></tr>' + order.map(k=>{
       const inKey = rows.filter(b=>b.SemanticKey===k).sort((a,b)=>(+a.SortOrder||0)-(+b.SortOrder||0));
-      return `<tr><td colspan="3" style="background:#EEF3F8;font-weight:600">${esc(k)} <span class="muted">· ${inKey.length}</span></td></tr>`
-        + inKey.map(b=>v2BlockRow(b, docs, eff, superseded, false)).join('');
+      const alsoHere = rows.filter(b=>secOf(b).indexOf(k)>=0).sort((a,b)=>(+a.SortOrder||0)-(+b.SortOrder||0));
+      return `<tr><td colspan="3" style="background:#EEF3F8;font-weight:600">${esc(k)} <span class="muted">· ${inKey.length}`
+        + (alsoHere.length?` + ${alsoHere.length} also here`:'')+`</span></td></tr>`
+        + inKey.map(b=>v2BlockRow(b, docs, eff, superseded, false)).join('')
+        + alsoHere.map(b=>v2BlockRow(b, docs, eff, superseded, false, k)).join('');
     }).join('');
   }else{
     rows.sort((a,b)=>{
@@ -2597,15 +2605,19 @@ async function v2Export(){
 
   L.push('');
   L.push('## Clauses grouped by key');
-  (V2.keys||[]).filter(k=>used[k]).forEach(k=>{
+  const secOfX = b => String(b.SecondaryKeys||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const alsoInX = {}; V2.blocks.forEach(b=>secOfX(b).forEach(k=>alsoInX[k]=(alsoInX[k]||0)+1));
+  (V2.keys||[]).filter(k=>used[k]||alsoInX[k]).forEach(k=>{
     L.push('');
-    L.push('### '+k+'  ('+used[k]+')');
-    V2.blocks.filter(b=>b.SemanticKey===k)
+    L.push('### '+k+'  ('+(used[k]||0)+(alsoInX[k]?' + '+alsoInX[k]+' secondary':'')+')');
+    V2.blocks.filter(b=>b.SemanticKey===k || secOfX(b).indexOf(k)>=0)
       .sort((a,b)=>(+a.SortOrder||0)-(+b.SortOrder||0))
       .forEach(b=>{
         const d=docs[b.DocumentID]||{};
         L.push('');
-        L.push('**'+(b.Path||'—')+'. '+(b.Title||'(no heading)')+'**  _['+(d.FileName||'')+' · level '+(b.Level||'')+']_');
+        L.push('**'+(b.Path||'—')+'. '+(b.Title||'(no heading)')+'**  _['+(d.FileName||'')+' · level '+(b.Level||'')
+          + (b.SemanticKey!==k ? ' · secondary here, mainly '+b.SemanticKey : '')
+          + (b.SemanticKey===k && secOfX(b).length ? ' · also '+secOfX(b).join(', ') : '')+']_');
         L.push('');
         L.push(String(b.Text||'').trim());
       });
@@ -2633,7 +2645,7 @@ async function v2Export(){
   L.push('```json');
   L.push(JSON.stringify({ contract:{number:c.Number, templateType:c.TemplateType, pricingType:c.PricingType},
     documents:V2.documents.map(d=>({id:d.DocumentID, kind:d.Kind, file:d.FileName, signDate:d.SignDate, status:d.Status})),
-    blocks:V2.blocks.map(b=>({doc:b.DocumentID, key:b.SemanticKey, path:b.Path, replacesPath:b.ReplacesPath||'', replacesKey:b.ReplacesKey||'', replacesIn:b.ReplacesIn||'', level:b.Level, title:b.Title, text:b.Text, replacementText:b.ReplacementText||''}))
+    blocks:V2.blocks.map(b=>({doc:b.DocumentID, key:b.SemanticKey, secondaryKeys:b.SecondaryKeys||'', path:b.Path, replacesPath:b.ReplacesPath||'', replacesKey:b.ReplacesKey||'', replacesIn:b.ReplacesIn||'', level:b.Level, title:b.Title, text:b.Text, replacementText:b.ReplacementText||''}))
   }, null, 1));
   L.push('```');
 
@@ -4020,6 +4032,7 @@ function renderProjectModal(){
         <button class="btn ghost sm" onclick="saveComment('${a.AssignmentID}',this)">Save comment</button>
         ${toggle}${acceptBtn}${remindBtn}${reportBtn}
         <button class="btn ghost sm" onclick="pdfFromList('${a.AssignmentID}')">PDF</button>
+        <button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this)" title="A PDF file dated by the business dates: created on the day of submission, modified on the day of acceptance">PDF file</button>
         <button class="btn warn sm" onclick="deleteAssignment('${a.AssignmentID}',this)">Delete</button>
       </div>
     </div>`;
@@ -4449,6 +4462,21 @@ async function printReportPdf(){
 }
 
 // from the project's report list (uses saved data)
+// The file for the customer's system: assembled on the server so its metadata can be
+// rewritten — created on the day the report was submitted, modified on the day it was accepted.
+async function reportPdfFile(aid, btn){
+  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try{
+    const r = await api('report_pdf',{assignmentId:aid});
+    if(!r.normalised)
+      alert('The file was created, but the PDF service did not rewrite it'
+        + (r.note ? ':\n' + r.note : ' (not configured).')
+        + '\nIts dates are the moment of export, not ' + r.created + ' / ' + r.modified + '.');
+    window.open(r.url, '_blank');
+  }catch(e){ alert(e.message); }
+  finally{ btn.disabled = false; btn.textContent = t; }
+}
+
 async function pdfFromList(aid){
   const withSign = confirm('Add a signature field at the bottom of the PDF?');
   const w = window.open('', '_blank');

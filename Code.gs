@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.132';
+const BUILD = '2026-08-08.136';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -45,7 +45,7 @@ const HEADERS = {
                 'Status', 'Message', 'DocumentID', 'Blocks', 'CreatedAt', 'StartedAt', 'FinishedAt'],
   queueText:   ['QueueID', 'Seq', 'Chunk'],
   queueFile:   ['QueueID', 'Seq', 'Chunk'],
-  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
+  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'SecondaryKeys', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
                 'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
@@ -137,6 +137,8 @@ function route_(action, d) {
     case 'v2_queue_run':       requireAdmin_(d); return v2QueueTick();
     case 'v2_queue_background':return v2QueueBackground_(d);
     case 'v2_queue_clear':     return v2QueueClear_(d);
+    case 'pdf_service_check':  return pdfServiceCheck_(d);
+    case 'report_pdf':         return reportPdf_(d);
     case 'v2_sent_text':       return v2SentText_(d);
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
@@ -553,6 +555,12 @@ function v2BlocksPrompt_(chunk, partNo, total, profile) {
     '- title: short heading if the clause has one, otherwise ""\n' +
     '- text: the complete wording of that clause, verbatim, no summarising\n' +
     '- semanticKey: exactly one of: ' + SEMANTIC_KEYS.join(', ') + '\n' +
+    '- secondaryKeys: other topics the SAME clause also settles, as an array of the same keys,\n' +
+    '  at most two, never repeating semanticKey. Use it only when the clause really decides that\n' +
+    '  topic, not when it merely mentions it: "governed by the law of Switzerland … Geneva shall be\n' +
+    '  the place of jurisdiction" -> semanticKey law.governing, secondaryKeys ["law.forum"];\n' +
+    '  "All payments shall be made in AED … within 30 days" -> payment.term + ["payment.currency"].\n' +
+    '  Leave it empty [] for a clause about one thing.\n' +
     '  Where several could fit, use these readings:\n' +
     '    data.protection — personal data: controller/processor roles, processing instructions, sub-processors,\n' +
     '      international transfers, data-subject requests, breach notification, audits of processing.\n' +
@@ -856,7 +864,7 @@ function splitAttachments_(text) {
 function v2GroupKey_(contractId, kind, meta, fileName) {
   var own = meta ? trim_(meta.number) : '';
   var parent = meta ? trim_(meta.parentNumber) : '';
-  if (kind === 'agreement') return own || fileName;
+  if (kind === 'agreement') return own || String(fileName).replace(/\.(pdf|docx?|txt)$/i, '');
   if (parent) return parent;
   // No parent stated: fall back to the newest agreement parsed under the same contract.
   var agreements = readAll_(SHEETS.documents).filter(function (r) {
@@ -1159,6 +1167,9 @@ function v2ParseMore_(d) {
     var rec = {
       BlockID: Utilities.getUuid(), DocumentID: doc.DocumentID, ContractID: doc.ContractID,
       SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
+      // A clause settles one thing primarily — that key rules merging and replacement — but it
+      // may settle others in passing, and those must not be lost.
+      SecondaryKeys: secondaryKeys_(b.secondaryKeys, k),
       Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath),
       // An amendment that names no clause number still says what it replaces: keep the topic.
       ReplacesKey: (SEMANTIC_KEYS.indexOf(trim_(b.replacesKey)) >= 0 ? trim_(b.replacesKey) : ''),
@@ -1268,6 +1279,9 @@ function v2ParseOne_(contractId, driveFileId, fileName, attachmentId, kind, cpNa
     var rec = {
       BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
       SemanticKey: (SEMANTIC_KEYS.indexOf(k) >= 0 ? k : 'misc'),
+      // A clause settles one thing primarily — that key rules merging and replacement — but it
+      // may settle others in passing, and those must not be lost.
+      SecondaryKeys: secondaryKeys_(b.secondaryKeys, k),
       Path: trim_(b.path), ReplacesPath: trim_(b.replacesPath),
       // An amendment that names no clause number still says what it replaces: keep the topic.
       ReplacesKey: (SEMANTIC_KEYS.indexOf(trim_(b.replacesKey)) >= 0 ? trim_(b.replacesKey) : ''),
@@ -1482,7 +1496,8 @@ function v2ExtractParams_(d) {
     if (!b) return;
     var txt = trim_(b.ReplacementText) || trim_(b.Text);
     if (!txt) return;
-    parts.push('[' + (trim_(b.Path) || '-') + ' | ' + trim_(b.SemanticKey) + '] ' + txt);
+    parts.push('[' + (trim_(b.Path) || '-') + ' | ' + trim_(b.SemanticKey)
+               + (trim_(b.SecondaryKeys) ? ' + ' + trim_(b.SecondaryKeys) : '') + '] ' + txt);
   });
   if (!parts.length) return { ok: false, error: 'The clauses have no text' };
   var text = maskForAI_(parts.join('\n\n'), cpName);
@@ -1763,7 +1778,13 @@ function v2Generate_(d) {
   folder.addFile(file);
   try { DriveApp.getRootFolder().removeFile(file); } catch (e) {}
 
-  var pdf = folder.createFile(file.getAs('application/pdf').setName(title + '.pdf'));
+  var pdfBlob = file.getAs('application/pdf').setName(title + '.pdf');
+  // Dates the receiving side expects: when the document was made, and when it was last
+  // touched. For a generated draft both are now; a report overrides them on submission
+  // and on acceptance.
+  var norm = pdfNormalise_(pdfBlob, pdfStamp_(new Date()), pdfStamp_(new Date()),
+                           { Title: PDF_META.title, Producer: PDF_META.producer, Creator: PDF_META.producer });
+  var pdf = folder.createFile(norm.ok ? norm.blob : pdfBlob);
   var docx = null;
   try {
     var url = 'https://www.googleapis.com/drive/v3/files/' + doc.getId() + '/export?mimeType=' +
@@ -1849,6 +1870,141 @@ function v2ClearContract_(d) {
   return { ok: true, documents: docs.length, blocks: blocks, queue: queued };
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Normalising a PDF before it leaves us.
+//
+// A file exported from Google Docs carries the moment of export as its dates, an XMP packet
+// and modern constructs the customer's verification system does not expect. That system is
+// externally certified, serves many subsidiaries and cannot be changed, so the file has to
+// arrive the way it wants it: /CreationDate and /ModDate set to the business dates (for a
+// report — submitted and accepted), no XMP, one revision.
+//
+// The rewriting is done by a small service of ours on Cloud Run; its address and key live in
+// Script Properties (PDF_SERVICE_URL, PDF_SERVICE_KEY) so they survive a redeploy. When it is
+// not configured, everything carries on as before and the file simply keeps Google's dates.
+// ─────────────────────────────────────────────────────────────────────────────
+// What goes into the Info dictionary, and in whose clock the dates are written. The
+// receiving side checks only the two dates; the rest is ours to set. The timezone belongs to
+// the subsidiary that produces the document — one constant for now, a company field later.
+var PDF_META = { producer: 'FXWorks', title: 'FXW Document', timeZone: 'Asia/Dubai' };
+
+function pdfServiceUrl_() { return trim_(PropertiesService.getScriptProperties().getProperty('PDF_SERVICE_URL')); }
+
+// dates as ISO 8601 with an offset: "2026-02-02T12:00:00+04:00"
+function pdfNormalise_(blob, created, modified, info) {
+  var url = pdfServiceUrl_();
+  if (!url) return { ok: false, skipped: true, error: 'PDF service is not configured' };
+  var key = trim_(PropertiesService.getScriptProperties().getProperty('PDF_SERVICE_KEY'));
+  var form = { file: blob, created: String(created || ''), modified: String(modified || created || '') };
+  if (info) form.info = JSON.stringify(info);
+  try {
+    var res = UrlFetchApp.fetch(url.replace(/\/+$/, '') + '/normalise', {
+      method: 'post', payload: form, muteHttpExceptions: true,
+      headers: key ? { 'X-FXWorks-Key': key } : {}
+    });
+    if (res.getResponseCode() !== 200) {
+      return { ok: false, error: 'PDF service: HTTP ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200) };
+    }
+    return { ok: true, blob: res.getBlob().setName(blob.getName()) };
+  } catch (e) {
+    return { ok: false, error: 'PDF service unreachable: ' + String(e).slice(0, 150) };
+  }
+}
+
+// Convenience: normalise a file already sitting on Drive, in place.
+function pdfNormaliseFile_(fileId, created, modified, info) {
+  var file = DriveApp.getFileById(fileId);
+  var r = pdfNormalise_(file.getBlob(), created, modified, info);
+  if (!r.ok) return r;
+  file.setContent('');                       // replaced wholesale, not appended to
+  var folder = file.getParents().hasNext() ? file.getParents().next() : DriveApp.getRootFolder();
+  var fresh = folder.createFile(r.blob.setName(file.getName()));
+  file.setTrashed(true);
+  return { ok: true, fileId: fresh.getId(), url: fresh.getUrl() };
+}
+
+// A local date and time in the script's timezone, as the service expects it.
+function pdfStamp_(dateOrIso, hhmm) {
+  var raw = String(dateOrIso || '');
+  var d = dateOrIso instanceof Date ? dateOrIso
+        : new Date((raw.length > 10 ? raw : raw.slice(0, 10) + 'T' + (hhmm || '12:00') + ':00'));
+  if (isNaN(d.getTime())) d = new Date();
+  return Utilities.formatDate(d, PDF_META.timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+// A report as a PDF, assembled when it is asked for. The dates are the business ones: the
+// file is dated by the day the report was submitted and last modified on the day it was
+// accepted — that is what the receiving system verifies, and it is the whole reason the
+// metadata is rewritten at all.
+function reportPdf_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  if (!a) return { ok: false, error: 'Report not found' };
+
+  var submitted = trim_(a.SubmittedAt) || trim_(a.ReleasedAt) || new Date().toISOString().slice(0, 10);
+  var accepted = trim_(a.AcceptedAt);
+  var hours = num_(a.ReportedHours);
+  var amount = num_(a.ReportedAmount) || round2_(hours * num_(a.Rate));
+  var uplift = truthy_(a.UpliftGranted) ? num_(a.UpliftAmount) : 0;
+  var esc = function (x) {
+    return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  };
+  var row = function (label, value) {
+    return value === '' || value == null ? ''
+      : '<tr><td class="l">' + esc(label) + '</td><td class="v">' + esc(value) + '</td></tr>';
+  };
+
+  var html =
+    '<html><head><meta charset="utf-8"><style>' +
+    'body{font-family:Helvetica,Arial,sans-serif;font-size:11pt;color:#111;margin:48px}' +
+    'h1{font-size:15pt;margin:0 0 2px}.sub{color:#555;font-size:10pt;margin-bottom:22px}' +
+    'table{border-collapse:collapse;width:100%}td{padding:6px 0;vertical-align:top;border-bottom:1px solid #E5E9EE}' +
+    'td.l{color:#555;width:38%}td.v{font-weight:600}.total td{border-bottom:none;padding-top:14px;font-size:12pt}' +
+    '.sign{margin-top:46px;color:#555;font-size:10pt}' +
+    '</style></head><body>' +
+    '<h1>' + esc(trim_(a.Title) || 'Statement of work performed') + '</h1>' +
+    '<div class="sub">' + esc(CONFIG.COMPANY_NAME) + ' · report ' + esc(a.AssignmentID).slice(0, 8) + '</div>' +
+    '<table>' +
+    row('Project', trim_(a.ProjectName)) +
+    row('Customer', trim_(a.Customer)) +
+    row('Performed by', trim_(a.EmployeeName) || trim_(a.EmployeeEmail)) +
+    row('Submitted', submitted) +
+    row('Accepted', accepted || '—') +
+    row('Accepted by', trim_(a.AcceptedBy) + (trim_(a.AcceptedTitle) ? ', ' + trim_(a.AcceptedTitle) : '')) +
+    (hours ? row('Hours', hours) : '') +
+    (num_(a.Rate) ? row('Rate', money_(num_(a.Rate)) + ' ' + trim_(a.Currency)) : '') +
+    (uplift ? row('Performance uplift', money_(uplift) + ' ' + trim_(a.Currency)) : '') +
+    '<tr class="total"><td class="l">Total</td><td class="v">' +
+      esc(money_(round2_(amount + uplift)) + ' ' + trim_(a.Currency)) + '</td></tr>' +
+    '</table>' +
+    (trim_(a.Comment) ? '<div class="sign">' + esc(trim_(a.Comment)) + '</div>' : '') +
+    '<div class="sign">Issued electronically by ' + esc(CONFIG.COMPANY_NAME) + '.</div>' +
+    '</body></html>';
+
+  var name = 'Report ' + String(a.AssignmentID).slice(0, 8) + ' ' + submitted + '.pdf';
+  var blob = Utilities.newBlob(html, 'text/html', name).getAs('application/pdf').setName(name);
+
+  var norm = pdfNormalise_(blob, pdfStamp_(submitted, '12:00'), pdfStamp_(accepted || submitted, '12:00'),
+                           { Title: PDF_META.title, Producer: PDF_META.producer, Creator: PDF_META.producer });
+  var file = attachmentsFolder_().createFile(norm.ok ? norm.blob : blob);
+  return { ok: true, url: file.getUrl(), fileId: file.getId(), name: name,
+           created: submitted, modified: accepted || submitted,
+           normalised: !!norm.ok, note: norm.ok ? '' : (norm.error || '') };
+}
+
+function pdfServiceCheck_(d) {
+  requireAdmin_(d);
+  var url = pdfServiceUrl_();
+  if (!url) return { ok: true, configured: false };
+  try {
+    var res = UrlFetchApp.fetch(url.replace(/\/+$/, '') + '/health', { muteHttpExceptions: true });
+    return { ok: true, configured: true, healthy: res.getResponseCode() === 200,
+             detail: res.getContentText().slice(0, 200) };
+  } catch (e) {
+    return { ok: true, configured: true, healthy: false, detail: String(e).slice(0, 150) };
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Generating a contract from the Google Docs templates.
@@ -2159,7 +2315,10 @@ function adminGenerateContract_(d) {
   });
   doc.saveAndClose();
 
-  var pdf = folder.createFile(copy.getAs('application/pdf').setName(name + '.pdf'));
+  var tplBlob = copy.getAs('application/pdf').setName(name + '.pdf');
+  var tplNorm = pdfNormalise_(tplBlob, pdfStamp_(new Date()), pdfStamp_(new Date()),
+                              { Title: PDF_META.title, Producer: PDF_META.producer, Creator: PDF_META.producer });
+  var pdf = folder.createFile(tplNorm.ok ? tplNorm.blob : tplBlob);
   appendRow_(SHEETS.attachments, {
     AttachmentID: Utilities.getUuid(), ParentType: 'contract', ParentID: c.ContractID,
     FileName: name + '.pdf', Description: 'generated from the template',
@@ -2611,6 +2770,18 @@ function dedupePages_(text) {
 // so "4.1 The Supplier shall:" landed in compliance while its items f and j went to reporting,
 // and "23.2" sat in misc while 23.2.f went to infringement. An item under a parent takes the
 // parent's key: the address decides, not the wording of the fragment.
+function secondaryKeys_(raw, primary) {
+  var list = raw;
+  if (typeof list === 'string') list = list.split(',');
+  if (!list || !list.length) return '';
+  var out = [];
+  for (var i = 0; i < list.length && out.length < 2; i++) {
+    var k = trim_(list[i]);
+    if (SEMANTIC_KEYS.indexOf(k) >= 0 && k !== primary && out.indexOf(k) < 0) out.push(k);
+  }
+  return out.join(',');
+}
+
 function v2InheritKeys_(blocks) {
   var byPath = {};
   blocks.forEach(function (b) {
@@ -4305,7 +4476,8 @@ function readAll_(name) {
   SHEET_CACHE[name] = out;
   return out;
 }
-var TEXT_COLS = ['Number', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title', 'FileName', 'Path', 'ReplacesPath', 'ReplacesIn', 'SemanticKey', 'FromClause', 'Field'];
+var TEXT_COLS = ['Number', 'GroupKey', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title',
+                 'FileName', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'SemanticKey', 'FromClause', 'Field'];
 function appendRow_(name, obj) {
   invalidateCache_(name);
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
