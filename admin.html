@@ -877,7 +877,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.137';
+const BUILD = '2026-08-08.139';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4327,88 +4327,6 @@ async function saveAdminReport(markSubmitted){
   finally{ b.disabled=false; other.disabled=false; $('rm_save').textContent='Save'; $('rm_submit').innerHTML='Save &amp; submit'; }
 }
 
-function buildReportHtml(a, activities, hours, withSign, dateStr){
-  const submitted = dateStr ? fmtDate(dateStr) : (a.SubmittedAt ? fmtDate(a.SubmittedAt) : '');
-  const list = (activities && activities.length)
-    ? '<ol>'+activities.map(x=>`<li>${esc(x)}</li>`).join('')+'</ol>'
-    : '<span style="color:#777">—</span>';
-  const amtRaw = (a.ReportedAmount!==''&&a.ReportedAmount!=null) ? +a.ReportedAmount : (hours*(+a.Rate||0));
-  const amountDue = cur(a.Currency) + money(amtRaw);
-  const accepted = a.AcceptedBy ? `
-    <div class="acc">
-      <div class="acch">Accepted on behalf of ${esc(COMPANY)}</div>
-      <div><span class="k">Name / title:</span> ${esc(a.AcceptedBy)}${a.AcceptedTitle?', '+esc(a.AcceptedTitle):''}</div>
-      <div><span class="k">Date:</span> ${esc(fmtDate(a.AcceptedAt||''))}</div>
-      <div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>
-    </div>` : `
-    <div class="acc">
-      <div class="acch">Accepted on behalf of ${esc(COMPANY)}</div>
-      <div><span class="k">Name / title:</span> ______________________________</div>
-      <div><span class="k">Date:</span> ______________________________</div>
-      <div class="sig"><div class="sigline">&nbsp;</div><div class="siglbl">Signature</div></div>
-    </div>`;
-  // Signatures side by side. A table, not flex: print engines lay tables out reliably,
-  // and a stacked block was pushing the signatures onto a page of their own.
-  const signCol = (heading, name, dateStr, extra) => `
-        <div class="sch">${heading}</div>
-        <div class="scv">${name || '&nbsp;'}</div><div class="scl">Name</div>
-        ${extra ? `<div class="scv">${extra}</div><div class="scl">Title</div>` : ''}
-        <div class="scv">${dateStr || '&nbsp;'}</div><div class="scl">Date</div>
-        ${withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : ''}`;
-  const signRow = `
-    <table class="srow"><tr>
-      <td valign="top">${signCol('Performed by the Service Provider', esc(a.EmployeeName||a.EmployeeEmail), submitted||'\u2014', '')}</td>
-      <td valign="top">${signCol('Accepted on behalf of ' + esc(COMPANY),
-                a.AcceptedBy ? esc(a.AcceptedBy) : '',
-                a.AcceptedAt ? esc(fmtDate(a.AcceptedAt)) : '',
-                a.AcceptedTitle ? esc(a.AcceptedTitle) : '')}</td>
-    </tr></table>`;
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Project Work Completion Report</title>
-<style>
-  @page{ margin:20mm 18mm; }
-  *{box-sizing:border-box}
-  body{font-family:'Times New Roman',Georgia,serif;color:#111;font-size:12pt;margin:0;padding:24px}
-  .no-print{margin:0 0 18px}
-  .no-print button{font:600 14px system-ui;padding:9px 18px;border:0;background:#2563a8;color:#fff;border-radius:8px;cursor:pointer}
-  .lh{display:flex;justify-content:space-between;font-size:9pt;color:#444;border-bottom:1px solid #999;padding-bottom:6px;margin-bottom:22px;letter-spacing:.4px;text-transform:uppercase;font-family:Arial,Helvetica,sans-serif}
-  h1{text-align:center;font-size:15pt;margin:0 0 18px}
-  table{width:100%;border-collapse:collapse}
-  td{border:1px solid #333;padding:8px 10px;vertical-align:top}
-  td.label{width:44%;font-weight:bold;background:#f2f2f2}
-  ol{margin:2px 0 2px 18px;padding:0} li{margin:3px 0}
-  .foot{margin-top:26px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;font-family:Arial,Helvetica,sans-serif}
-  .srow{width:100%;margin-top:24px;font-size:10.5pt;border-collapse:separate;border-spacing:0;page-break-inside:avoid;break-inside:avoid}
-  .srow td{width:50%;border:0;padding:0 26px 0 0;vertical-align:top}
-  .srow td:last-child{padding-right:0;padding-left:26px}
-  .sch{font-weight:bold;margin:0 0 10px;line-height:1.25;height:2.5em;overflow:hidden}
-  .scv{border-bottom:1px solid #333;padding:2px 0 3px;min-height:19px}
-  .scl{font-size:8.5pt;color:#555;margin:2px 0 10px;font-family:Arial,Helvetica,sans-serif}
-  @media print{ .no-print{display:none} body{padding:0} }
-</style></head><body>
-  <div class="no-print"><button onclick="window.print()">Print / Save as PDF</button></div>
-  <div class="lh"><span>${esc(COMPANY)}</span><span>Project Work Completion Report</span></div>
-  <h1>Project Work Completion Report</h1>
-  <table>
-    <tr><td class="label">Project:</td><td>${esc(a.ProjectName||'')}</td></tr>
-    <tr><td class="label">Customer:</td><td>${esc(a.Customer||'')}</td></tr>
-    ${a.ProjectDescription ? `<tr><td class="label">Project description:</td><td>${esc(a.ProjectDescription)}</td></tr>` : ''}
-    <tr><td class="label" colspan="2">A brief description and a list of completed tasks for the project:</td></tr>
-    <tr><td colspan="2">${list}</td></tr>
-    ${a.PricingType==='lump' ? '' : `<tr><td class="label">The total number of hours spent:</td><td>${hrs(hours)}</td></tr>`}
-    <tr><td class="label">Amount due:</td><td>${amountDue}</td></tr>
-    ${String(a.UpliftGranted).toLowerCase()==='yes' ? `
-      <tr><td class="label">Performance uplift:</td><td>${esc(a.UpliftPercent)}% \u2014 ${cur(a.Currency)}${money(a.UpliftAmount)}</td></tr>
-      <tr><td class="label">Total payable:</td><td><b>${cur(a.Currency)}${money(Math.round((amtRaw + (+a.UpliftAmount||0))*100)/100)}</b></td></tr>` : ''}
-    <tr><td class="label">Currency elected for payment:</td><td>${a.PayoutCurrency ? esc(a.PayoutCurrency) : 'Base currency of the contract'}</td></tr>
-    ${a.PayoutEstimate ? `
-      <tr><td class="label">Indicative equivalent:</td><td>${cur(a.PayoutCurrency)}${money(a.PayoutEstimate)} &mdash; at ${esc(a.PayoutFxRate)} on ${esc(fmtDate(a.PayoutFxAsOf))}. For information only: payment is converted at the rate applying on the date the payment is made.</td></tr>` : ''}
-  </table>
-  ${signRow}
-  <div class="foot">CONFIDENTIAL</div>
-  <script>setTimeout(function(){try{window.print();}catch(e){}},500);<\/script>
-</body></html>`;
-}
-
 // from the report editor (uses on-screen data)
 // Before printing, the uplift can be revised — the change is saved to the report, so the
 // document and the record never disagree.
@@ -4453,22 +4371,28 @@ async function saveUpliftThenPrint(btn){
 }
 async function printReportPdf(){
   if(!REP) return;
-  // REP is kept in step with every change made in this session, so no extra fetch here
+  // The template lives on the server — the printout and the downloadable file are the same
+  // document. What is on screen but not yet saved travels with the request.
   const activities=[...document.querySelectorAll('#rm_items textarea')].map(t=>t.value.trim()).filter(Boolean);
   const hours=parseFloat(($('rm_hours').value||'').replace(',','.'))||0;
-  const html = buildReportHtml(REP, activities, hours, $('rm_sign').checked, $('rm_date').value);
   const w = window.open('', '_blank');
   if(!w){ alert('Allow pop-ups to generate the PDF.'); return; }
-  w.document.open(); w.document.write(html); w.document.close();
+  w.document.write('<p style="font:16px system-ui;padding:24px">Preparing report…</p>');
+  try{
+    const r = await api('report_html',{ assignmentId:REP.AssignmentID, withSignature:$('rm_sign').checked,
+      activities, hours, submittedAt:$('rm_date').value });
+    w.document.open(); w.document.write(r.html); w.document.close();
+  }catch(e){ try{w.close();}catch(_){} alert(e.message); }
 }
 
 // from the project's report list (uses saved data)
 // The file for the customer's system: assembled on the server so its metadata can be
 // rewritten — created on the day the report was submitted, modified on the day it was accepted.
 async function reportPdfFile(aid, btn){
+  const withSign = confirm('Add a signature field at the bottom of the PDF?');
   const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
   try{
-    const r = await api('report_pdf',{assignmentId:aid});
+    const r = await api('report_pdf',{assignmentId:aid, withSignature:withSign});
     if(!r.normalised){
       alert('The file was created, but the PDF service did not rewrite it'
         + (r.note ? ':\n' + r.note : ' (not configured).')
@@ -4511,10 +4435,8 @@ async function pdfFromList(aid){
   if(!w){ alert('Allow pop-ups to generate the PDF.'); return; }
   w.document.write('<p style="font:16px system-ui;padding:24px">Preparing report…</p>');
   try{
-    const r = await api('admin_get_report',{assignmentId:aid});
-    const a=r.assignment, items=(r.items||[]).map(it=>it.ActivityDescription);
-    const html = buildReportHtml(a, items, a.ReportedHours, withSign, a.SubmittedAt);
-    w.document.open(); w.document.write(html); w.document.close();
+    const r = await api('report_html',{assignmentId:aid, withSignature:withSign});
+    w.document.open(); w.document.write(r.html); w.document.close();
   }catch(e){ try{w.close();}catch(_){} alert(e.message); }
 }
 function closeModal(id){

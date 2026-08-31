@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.137';
+const BUILD = '2026-08-08.139';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -139,6 +139,7 @@ function route_(action, d) {
     case 'v2_queue_clear':     return v2QueueClear_(d);
     case 'pdf_service_check':  return pdfServiceCheck_(d);
     case 'report_pdf':         return reportPdf_(d);
+    case 'report_html':        return reportHtmlRoute_(d);
     case 'pdf_inspect':        return pdfInspect_(d);
     case 'v2_sent_text':       return v2SentText_(d);
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
@@ -1893,16 +1894,64 @@ var PDF_META = { producer: 'FXWorks', title: 'FXW Document', timeZone: 'Asia/Dub
 function pdfServiceUrl_() { return trim_(PropertiesService.getScriptProperties().getProperty('PDF_SERVICE_URL')); }
 
 // dates as ISO 8601 with an offset: "2026-02-02T12:00:00+04:00"
+// Cloud Run closed to the public checks a Google identity token, so the script signs one
+// with a service account that holds run.invoker. The key sits in Script Properties
+// (PDF_SA_KEY, the whole JSON); without it the shared header key is the only gate, which is
+// fine for a trial but not for production.
+function pdfAuthHeaders_(audience) {
+  var props = PropertiesService.getScriptProperties();
+  var headers = {};
+  var shared = trim_(props.getProperty('PDF_SERVICE_KEY'));
+  if (shared) headers['X-FXWorks-Key'] = shared;
+  var saRaw = trim_(props.getProperty('PDF_SA_KEY'));
+  if (saRaw) {
+    var token = googleIdToken_(saRaw, audience);
+    if (token) headers.Authorization = 'Bearer ' + token;
+  }
+  return headers;
+}
+
+// A signed JWT exchanged for an identity token addressed to this service. Tokens last an
+// hour; the cache keeps one for fifty minutes so a batch of reports costs one exchange.
+function googleIdToken_(saRaw, audience) {
+  var cache = CacheService.getScriptCache();
+  var cacheKey = 'idtok_' + Utilities.base64EncodeWebSafe(audience).replace(/[^A-Za-z0-9]/g, '').slice(0, 60);
+  var hit = cache.get(cacheKey);
+  if (hit) return hit;
+  try {
+    var sa = JSON.parse(saRaw);
+    var now = Math.floor(Date.now() / 1000);
+    var enc = function (o) {
+      return Utilities.base64EncodeWebSafe(JSON.stringify(o)).replace(/=+$/, '');
+    };
+    var unsigned = enc({ alg: 'RS256', typ: 'JWT' }) + '.' + enc({
+      iss: sa.client_email, aud: 'https://oauth2.googleapis.com/token',
+      iat: now, exp: now + 3600, target_audience: audience
+    });
+    var sig = Utilities.computeRsaSha256Signature(unsigned, sa.private_key);
+    var jwt = unsigned + '.' + Utilities.base64EncodeWebSafe(sig).replace(/=+$/, '');
+    var res = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', {
+      method: 'post', muteHttpExceptions: true,
+      payload: { grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }
+    });
+    var data = JSON.parse(res.getContentText());
+    if (!data.id_token) return '';
+    cache.put(cacheKey, data.id_token, 3000);
+    return data.id_token;
+  } catch (e) {
+    return '';
+  }
+}
+
 function pdfNormalise_(blob, created, modified, info) {
   var url = pdfServiceUrl_();
   if (!url) return { ok: false, skipped: true, error: 'PDF service is not configured' };
-  var key = trim_(PropertiesService.getScriptProperties().getProperty('PDF_SERVICE_KEY'));
   var form = { file: blob, created: String(created || ''), modified: String(modified || created || '') };
   if (info) form.info = JSON.stringify(info);
   try {
     var res = UrlFetchApp.fetch(url.replace(/\/+$/, '') + '/normalise', {
       method: 'post', payload: form, muteHttpExceptions: true,
-      headers: key ? { 'X-FXWorks-Key': key } : {}
+      headers: pdfAuthHeaders_(url.replace(/\/+$/, ''))
     });
     if (res.getResponseCode() !== 200) {
       return { ok: false, error: 'PDF service: HTTP ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200) };
@@ -1938,51 +1987,32 @@ function pdfStamp_(dateOrIso, hhmm) {
 // file is dated by the day the report was submitted and last modified on the day it was
 // accepted — that is what the receiving system verifies, and it is the whole reason the
 // metadata is rewritten at all.
+function reportHtmlRoute_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  if (!a) return { ok: false, error: 'Report not found' };
+  var items = readAll_(SHEETS.entries).filter(function (r) { return String(r.AssignmentID) === String(a.AssignmentID); });
+
+  // The report editor prints what is on screen, including edits not yet saved.
+  if (d.activities && d.activities.length) {
+    items = d.activities.map(function (x) { return { ActivityDescription: String(x) }; });
+  }
+  if (trim_(d.hours) !== '') a.ReportedHours = num_(d.hours);
+  if (trim_(d.submittedAt)) a.SubmittedAt = trim_(d.submittedAt);
+
+  return { ok: true, html: reportHtml_(a, items, truthy_(d.withSignature), true) };
+}
+
 function reportPdf_(d) {
   requireAdmin_(d);
   var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
   if (!a) return { ok: false, error: 'Report not found' };
 
+  var items = readAll_(SHEETS.entries).filter(function (r) { return String(r.AssignmentID) === String(a.AssignmentID); });
   var submitted = trim_(a.SubmittedAt) || trim_(a.ReleasedAt) || new Date().toISOString().slice(0, 10);
   var accepted = trim_(a.AcceptedAt);
-  var hours = num_(a.ReportedHours);
-  var amount = num_(a.ReportedAmount) || round2_(hours * num_(a.Rate));
-  var uplift = truthy_(a.UpliftGranted) ? num_(a.UpliftAmount) : 0;
-  var esc = function (x) {
-    return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  };
-  var row = function (label, value) {
-    return value === '' || value == null ? ''
-      : '<tr><td class="l">' + esc(label) + '</td><td class="v">' + esc(value) + '</td></tr>';
-  };
 
-  var html =
-    '<html><head><meta charset="utf-8"><style>' +
-    'body{font-family:Helvetica,Arial,sans-serif;font-size:11pt;color:#111;margin:48px}' +
-    'h1{font-size:15pt;margin:0 0 2px}.sub{color:#555;font-size:10pt;margin-bottom:22px}' +
-    'table{border-collapse:collapse;width:100%}td{padding:6px 0;vertical-align:top;border-bottom:1px solid #E5E9EE}' +
-    'td.l{color:#555;width:38%}td.v{font-weight:600}.total td{border-bottom:none;padding-top:14px;font-size:12pt}' +
-    '.sign{margin-top:46px;color:#555;font-size:10pt}' +
-    '</style></head><body>' +
-    '<h1>' + esc(trim_(a.Title) || 'Statement of work performed') + '</h1>' +
-    '<div class="sub">' + esc(CONFIG.COMPANY_NAME) + ' · report ' + esc(a.AssignmentID).slice(0, 8) + '</div>' +
-    '<table>' +
-    row('Project', trim_(a.ProjectName)) +
-    row('Customer', trim_(a.Customer)) +
-    row('Performed by', trim_(a.EmployeeName) || trim_(a.EmployeeEmail)) +
-    row('Submitted', submitted) +
-    row('Accepted', accepted || '—') +
-    row('Accepted by', trim_(a.AcceptedBy) + (trim_(a.AcceptedTitle) ? ', ' + trim_(a.AcceptedTitle) : '')) +
-    (hours ? row('Hours', hours) : '') +
-    (num_(a.Rate) ? row('Rate', money_(num_(a.Rate)) + ' ' + trim_(a.Currency)) : '') +
-    (uplift ? row('Performance uplift', money_(uplift) + ' ' + trim_(a.Currency)) : '') +
-    '<tr class="total"><td class="l">Total</td><td class="v">' +
-      esc(money_(round2_(amount + uplift)) + ' ' + trim_(a.Currency)) + '</td></tr>' +
-    '</table>' +
-    (trim_(a.Comment) ? '<div class="sign">' + esc(trim_(a.Comment)) + '</div>' : '') +
-    '<div class="sign">Issued electronically by ' + esc(CONFIG.COMPANY_NAME) + '.</div>' +
-    '</body></html>';
-
+  var html = reportHtml_(a, items, truthy_(d.withSignature));
   var name = 'Report ' + String(a.AssignmentID).slice(0, 8) + ' ' + submitted + '.pdf';
   var blob = Utilities.newBlob(html, 'text/html', name).getAs('application/pdf').setName(name);
 
@@ -1994,6 +2024,92 @@ function reportPdf_(d) {
            normalised: !!norm.ok, note: norm.ok ? '' : (norm.error || '') };
 }
 
+// The report, in one place. Both the downloadable file and the print view are built from
+// here — a report that differed between the two would be worse than either.
+function reportHtml_(a, items, withSign, forPrint) {
+  var esc = function (x) {
+    return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  };
+  var company = CONFIG.COMPANY_NAME;
+  var cur = function (c) { return trim_(c) ? trim_(c) + ' ' : ''; };
+  var date = function (x) { return trim_(x) ? String(x).slice(0, 10) : ''; };
+  var hours = num_(a.ReportedHours);
+  var amount = (trim_(a.ReportedAmount) !== '') ? num_(a.ReportedAmount) : round2_(hours * num_(a.Rate));
+  var uplift = truthy_(a.UpliftGranted) ? num_(a.UpliftAmount) : 0;
+  var submitted = date(a.SubmittedAt) || date(a.ReleasedAt);
+
+  var list = items.length
+    ? '<ol>' + items.map(function (it) { return '<li>' + esc(it.ActivityDescription) + '</li>'; }).join('') + '</ol>'
+    : '<span style="color:#777">&mdash;</span>';
+
+  // Signatures side by side in a table, not a flex box: print engines lay tables out
+  // reliably, and a stacked block pushed the signatures onto a page of their own.
+  var col = function (heading, who, when, title) {
+    return '<div class="sch">' + heading + '</div>'
+      + '<div class="scv">' + (who || '&nbsp;') + '</div><div class="scl">Name</div>'
+      + (title ? '<div class="scv">' + title + '</div><div class="scl">Title</div>' : '')
+      + '<div class="scv">' + (when || '&nbsp;') + '</div><div class="scl">Date</div>'
+      + (withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : '');
+  };
+
+  var rows = ''
+    + '<tr><td class="label">Project:</td><td>' + esc(a.ProjectName) + '</td></tr>'
+    + '<tr><td class="label">Customer:</td><td>' + esc(a.Customer) + '</td></tr>'
+    + (trim_(a.ProjectDescription) ? '<tr><td class="label">Project description:</td><td>' + esc(a.ProjectDescription) + '</td></tr>' : '')
+    + '<tr><td class="label" colspan="2">A brief description and a list of completed tasks for the project:</td></tr>'
+    + '<tr><td colspan="2">' + list + '</td></tr>'
+    + (String(a.PricingType) === 'lump' ? '' : '<tr><td class="label">The total number of hours spent:</td><td>' + hours + '</td></tr>')
+    + '<tr><td class="label">Amount due:</td><td>' + cur(a.Currency) + money_(amount) + '</td></tr>'
+    + (uplift
+        ? '<tr><td class="label">Performance uplift:</td><td>' + esc(a.UpliftPercent) + '% &mdash; ' + cur(a.Currency) + money_(uplift) + '</td></tr>'
+          + '<tr><td class="label">Total payable:</td><td><b>' + cur(a.Currency) + money_(round2_(amount + uplift)) + '</b></td></tr>'
+        : '')
+    + '<tr><td class="label">Currency elected for payment:</td><td>'
+      + (trim_(a.PayoutCurrency) ? esc(a.PayoutCurrency) : 'Base currency of the contract') + '</td></tr>'
+    + (num_(a.PayoutEstimate)
+        ? '<tr><td class="label">Indicative equivalent:</td><td>' + cur(a.PayoutCurrency) + money_(num_(a.PayoutEstimate))
+          + ' &mdash; at ' + esc(a.PayoutFxRate) + ' on ' + esc(date(a.PayoutFxAsOf))
+          + '. For information only: payment is converted at the rate applying on the date the payment is made.</td></tr>'
+        : '');
+
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Project Work Completion Report</title>'
+    + '<style>'
+    + '@page{ margin:20mm 18mm; }*{box-sizing:border-box}'
+    + "body{font-family:'Times New Roman',Georgia,serif;color:#111;font-size:12pt;margin:0;padding:0}"
+    + '.lh{display:flex;justify-content:space-between;font-size:9pt;color:#444;border-bottom:1px solid #999;'
+    + 'padding-bottom:6px;margin-bottom:22px;letter-spacing:.4px;text-transform:uppercase;font-family:Arial,Helvetica,sans-serif}'
+    + 'h1{text-align:center;font-size:15pt;margin:0 0 18px}'
+    + 'table{width:100%;border-collapse:collapse}td{border:1px solid #333;padding:8px 10px;vertical-align:top}'
+    + 'td.label{width:44%;font-weight:bold;background:#f2f2f2}'
+    + 'ol{margin:2px 0 2px 18px;padding:0}li{margin:3px 0}'
+    + '.foot{margin-top:26px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;font-family:Arial,Helvetica,sans-serif}'
+    + '.srow{width:100%;margin-top:24px;font-size:10.5pt;border-collapse:separate;border-spacing:0;page-break-inside:avoid}'
+    + '.srow td{width:50%;border:0;padding:0 26px 0 0;vertical-align:top}'
+    + '.srow td:last-child{padding-right:0;padding-left:26px}'
+    + '.sch{font-weight:bold;margin:0 0 10px;line-height:1.25;height:2.5em;overflow:hidden}'
+    + '.scv{border-bottom:1px solid #333;padding:2px 0 3px;min-height:19px}'
+    + '.scl{font-size:8.5pt;color:#555;margin:2px 0 10px;font-family:Arial,Helvetica,sans-serif}'
+    + '</style></head><body>'
+    + '<div class="lh"><span>' + esc(company) + '</span><span>Project Work Completion Report</span></div>'
+    + '<h1>Project Work Completion Report</h1>'
+    + '<table>' + rows + '</table>'
+    + '<table class="srow"><tr>'
+    + '<td valign="top">' + col('Performed by the Service Provider',
+        esc(trim_(a.EmployeeName) || trim_(a.EmployeeEmail)), submitted || '&mdash;', '') + '</td>'
+    + '<td valign="top">' + col('Accepted on behalf of ' + esc(company),
+        esc(trim_(a.AcceptedBy)), esc(date(a.AcceptedAt)), esc(trim_(a.AcceptedTitle))) + '</td>'
+    + '</tr></table>'
+    + '<div class="foot">CONFIDENTIAL</div>'
+    + (forPrint
+        ? '<div class="no-print" style="margin-top:18px;text-align:center">'
+          + '<button onclick="window.print()" style="font:600 14px system-ui;padding:9px 18px;border:0;'
+          + 'background:#2563a8;color:#fff;border-radius:8px;cursor:pointer">Print / Save as PDF</button></div>'
+          + '<style>@media print{.no-print{display:none}}</style>'
+          + '<script>setTimeout(function(){try{window.print();}catch(e){}},500);<' + '/script>'
+        : '')
+    + '</body></html>';
+}
+
 // What is really inside a file we produced. The dates a file manager shows belong to the
 // filesystem and prove nothing; these are read out of the document itself.
 function pdfInspect_(d) {
@@ -2002,11 +2118,11 @@ function pdfInspect_(d) {
   if (!url) return { ok: false, error: 'PDF service is not configured' };
   var fileId = trim_(d.fileId);
   if (!fileId) return { ok: false, error: 'No file' };
-  var key = trim_(PropertiesService.getScriptProperties().getProperty('PDF_SERVICE_KEY'));
+  var base = url.replace(/\/+$/, '');
   try {
-    var res = UrlFetchApp.fetch(url.replace(/\/+$/, '') + '/inspect', {
+    var res = UrlFetchApp.fetch(base + '/inspect', {
       method: 'post', payload: { file: DriveApp.getFileById(fileId).getBlob() },
-      muteHttpExceptions: true, headers: key ? { 'X-FXWorks-Key': key } : {}
+      muteHttpExceptions: true, headers: pdfAuthHeaders_(base)
     });
     if (res.getResponseCode() !== 200) {
       return { ok: false, error: 'PDF service: HTTP ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200) };
@@ -2022,8 +2138,11 @@ function pdfServiceCheck_(d) {
   var url = pdfServiceUrl_();
   if (!url) return { ok: true, configured: false };
   try {
-    var res = UrlFetchApp.fetch(url.replace(/\/+$/, '') + '/health', { muteHttpExceptions: true });
+    var base = url.replace(/\/+$/, '');
+    var res = UrlFetchApp.fetch(base + '/health', { muteHttpExceptions: true, headers: pdfAuthHeaders_(base) });
+    var props = PropertiesService.getScriptProperties();
     return { ok: true, configured: true, healthy: res.getResponseCode() === 200,
+             auth: trim_(props.getProperty('PDF_SA_KEY')) ? 'service account' : 'shared key only',
              detail: res.getContentText().slice(0, 200) };
   } catch (e) {
     return { ok: true, configured: true, healthy: false, detail: String(e).slice(0, 150) };
