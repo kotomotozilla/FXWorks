@@ -935,7 +935,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.147';
+const BUILD = '2026-08-08.148';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4370,9 +4370,16 @@ async function sigAdminInit(){
   if(!SIG_PAD_READY){ sigPadSetup('sigAdminPad'); SIG_PAD_READY = true; }
   const sel = $('sigOwner');
   if(sel && !sel.options.length){
-    // the people who sign on our behalf, plus everyone who reports to us
-    let people = (ACC_SIGNERS && ACC_SIGNERS.length ? ACC_SIGNERS : [{name:'Konstantin Maiorov', title:'Director'}])
-      .map(x=>({ email:'', name:x.name, title:x.title }));
+    // Ask the server who signs on our behalf. ACC_SIGNERS is only filled once an acceptance
+    // dialog has been opened, and until then it holds a single default name — which is why
+    // Elena was missing from this list.
+    let signers = [];
+    try{
+      const s = await api('accept_defaults',{ assignmentId:'' });
+      signers = s.signatories || [];
+    }catch(_){}
+    if(!signers.length) signers = (ACC_SIGNERS && ACC_SIGNERS.length) ? ACC_SIGNERS : [{name:'Konstantin Maiorov', title:'Director'}];
+    let people = signers.map(x=>({ email:'', name:x.name, title:x.title }));
     try{
       const r = await api('list_projects');
       const seen = {};
