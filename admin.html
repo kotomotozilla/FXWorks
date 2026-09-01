@@ -591,8 +591,18 @@
   <div style="max-width:220px"><label>Date of acceptance</label><input id="acc_date" type="date"></div>
 
   <div style="height:12px"></div>
-  <label>Signature <span class="muted" style="font-weight:400">— goes onto the report as the one accepting it</span></label>
-  <div id="acc_sigs" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px"></div>
+  <div class="row">
+    <div style="flex:1;min-width:200px">
+      <label>Signature of the one accepting</label>
+      <select id="acc_sigAcceptor" onchange="accSigPreview()"></select>
+      <div id="acc_sigAcceptorPrev" style="margin-top:6px;min-height:44px"></div>
+    </div>
+    <div style="flex:1;min-width:200px">
+      <label>Signature of the performer</label>
+      <select id="acc_sigPerformer" onchange="accSigPreview()"></select>
+      <div id="acc_sigPerformerPrev" style="margin-top:6px;min-height:44px"></div>
+    </div>
+  </div>
 
   <div id="acc_fxHint" class="muted hidden" style="margin-top:10px;font-size:13px"></div>
   <div id="acc_upHint" class="muted hidden" style="margin-top:10px;font-size:13px"></div>
@@ -903,7 +913,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.142';
+const BUILD = '2026-08-08.143';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4293,38 +4303,47 @@ async function sigAdminDelete(id){
   catch(e){ notice('sigAdminErr','err', esc(e.message)); }
 }
 
-let ACC_SIG = '', ACC_SIGS = [];
-// Whoever accepts can put a stored signature on the report. They belong to people, not to
-// roles — the same drawing signs as performer on one report and as acceptor on another.
-async function accLoadSignatures(){
-  const box = $('acc_sigs'); if(!box) return;
-  box.innerHTML = '<span class="muted" style="font-size:13px">Loading…</span>';
-  try{
-    const r = await api('signature_list',{});
-    ACC_SIGS = r.signatures || [];
-  }catch(e){ ACC_SIGS = []; }
-  if(!ACC_SIGS.length){
-    box.innerHTML = '<span class="muted" style="font-size:13px">No signatures stored yet — the report will carry an empty signature line.</span>';
-    return;
-  }
-  box.innerHTML = ACC_SIGS.map(g=>`
-    <div onclick="accPickSig('${esc(g.id)}')" style="cursor:pointer;border:2px solid ${g.id===ACC_SIG?'#2563a8':'#DDE3EA'};
-      border-radius:10px;padding:6px 8px;background:#fff;text-align:center">
-      <img src="${g.image}" style="height:40px;max-width:160px;display:block">
-      <div style="font-size:12px;color:#667;margin-top:4px">${esc(g.ownerName||g.ownerEmail)}${g.label?' · '+esc(g.label):''}</div>
-    </div>`).join('')
-    + `<div onclick="accPickSig('')" style="cursor:pointer;border:2px solid ${ACC_SIG?'#DDE3EA':'#2563a8'};
-        border-radius:10px;padding:14px 12px;background:#fff;font-size:13px;color:#667">No signature</div>`;
+let ACC_SIGS = [];
+// Both signatures are set here: the performer's is normally chosen when they submit, but a
+// report submitted before they drew one would otherwise carry an empty line for good.
+function accSigOptions(sel, chosen, onlyEmail){
+  const list = onlyEmail
+    ? ACC_SIGS.filter(g=>String(g.ownerEmail||'').toLowerCase() === String(onlyEmail).toLowerCase())
+    : ACC_SIGS;
+  const pool = list.length ? list : ACC_SIGS;
+  sel.innerHTML = '<option value="">— no signature —</option>'
+    + pool.map(g=>`<option value="${esc(g.id)}" ${g.id===chosen?'selected':''}>`
+        + `${esc(g.ownerName||g.ownerEmail||'signature')}${g.label?' · '+esc(g.label):''}</option>`).join('');
 }
-function accPickSig(id){ ACC_SIG = id; accLoadSignatures(); }
+function accSigPreview(){
+  [['acc_sigAcceptor','acc_sigAcceptorPrev'],['acc_sigPerformer','acc_sigPerformerPrev']].forEach(([selId,boxId])=>{
+    const g = ACC_SIGS.find(x=>x.id === $(selId).value);
+    $(boxId).innerHTML = g
+      ? `<img src="${g.image}" style="height:40px;max-width:180px;border-bottom:1px solid #333">`
+      : '<span class="muted" style="font-size:12px">empty signature line</span>';
+  });
+}
+async function accLoadSignatures(defaults){
+  try{ const r = await api('signature_list',{}); ACC_SIGS = r.signatures||[]; }
+  catch(e){ ACC_SIGS = []; }
+  accSigOptions($('acc_sigAcceptor'), (defaults&&defaults.acceptorSignatureId)||'', '');
+  // the performer's own signatures first; everything else only if they have none
+  accSigOptions($('acc_sigPerformer'), (defaults&&defaults.performerSignatureId)||'',
+                (defaults&&defaults.performerEmail)||'');
+  if(defaults && !defaults.performerSignatureId && defaults.performerEmail){
+    const own = ACC_SIGS.find(g=>String(g.ownerEmail||'').toLowerCase()===String(defaults.performerEmail).toLowerCase());
+    if(own) $('acc_sigPerformer').value = own.id;      // what the report will use anyway
+  }
+  accSigPreview();
+}
 
 async function askAccept(aid){
-  ACC_ID = aid; ACC_SIG = '';
+  ACC_ID = aid;
   notice('acc_err','','');
-  accLoadSignatures();
   try{
     const r = await api('accept_defaults',{ assignmentId:aid });
     accFillSignatories(r.signatories, r.acceptedBy, r.acceptedTitle);
+    accLoadSignatures(r);
     $('acc_date').value = r.acceptedAt || todayISO();
     $('acceptModal').classList.remove('hidden');   // show it at once; the uplift block fills in after
     await upLoad(aid);
@@ -4355,7 +4374,8 @@ async function acceptNow(btn){
   try{
     const payload = { assignmentId:ACC_ID, acceptedBy:$('acc_name').value.trim(),
       acceptedTitle:$('acc_role').value.trim(), acceptedAt:$('acc_date').value,
-      signatureId: ACC_SIG || '' };
+      signatureId: $('acc_sigAcceptor').value || '',
+      performerSignatureId: $('acc_sigPerformer').value || '' };
     if(UP_ST){
       payload.upliftGranted = $('acc_upGrant').checked;
       payload.upliftBase = $('acc_upBase').value;

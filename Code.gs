@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.142';
+const BUILD = '2026-08-08.143';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -1991,13 +1991,33 @@ function pdfStamp_(dateOrIso, hhmm) {
 // file is dated by the day the report was submitted and last modified on the day it was
 // accepted — that is what the receiving system verifies, and it is the whole reason the
 // metadata is rewritten at all.
-// The images chosen when the report was submitted and when it was accepted.
+// The images chosen when the report was submitted and when it was accepted. If none was
+// chosen — the performer drew it after opening the report, or simply never picked one —
+// their own signature is used: it is theirs either way, and an empty line on a report that
+// has a signature stored helps nobody.
 function reportSignatures_(a) {
+  var rows = readAll_(SHEETS.signatures);
   var byId = function (id) {
     id = trim_(id);
-    return id ? signatureDataUri_(findRow_(SHEETS.signatures, 'SignatureID', id)) : '';
+    if (!id) return null;
+    var hit = rows.filter(function (r) { return String(r.SignatureID) === id; })[0];
+    return hit || null;
   };
-  return { performer: byId(a.PerformerSignatureID), acceptor: byId(a.AcceptorSignatureID) };
+  var ownedBy = function (email) {
+    email = normEmail_(email);
+    if (!email) return null;
+    var mine = rows.filter(function (r) { return normEmail_(r.OwnerEmail) === email; });
+    return mine.length ? mine[mine.length - 1] : null;
+  };
+  var namedAfter = function (name) {
+    name = trim_(name).toLowerCase();
+    if (!name) return null;
+    var hit = rows.filter(function (r) { return trim_(r.OwnerName).toLowerCase() === name; });
+    return hit.length ? hit[hit.length - 1] : null;
+  };
+  var performer = byId(a.PerformerSignatureID) || ownedBy(a.EmployeeEmail);
+  var acceptor = byId(a.AcceptorSignatureID) || namedAfter(a.AcceptedBy);
+  return { performer: signatureDataUri_(performer), acceptor: signatureDataUri_(acceptor) };
 }
 
 function reportHtmlRoute_(d) {
@@ -4504,6 +4524,9 @@ function adminAcceptDefaults_(d) {
   if (!name) { name = CONFIG.DEFAULT_SIGNATORY; title = CONFIG.DEFAULT_SIGNATORY_TITLE; }
   if (!title) title = CONFIG.DEFAULT_SIGNATORY_TITLE;
   return { ok: true, acceptedBy: name, acceptedTitle: title, signatories: CONFIG.SIGNATORIES,
+           performerEmail: a ? normEmail_(a.EmployeeEmail) : '',
+           performerSignatureId: a ? trim_(a.PerformerSignatureID) : '',
+           acceptorSignatureId: a ? trim_(a.AcceptorSignatureID) : '',
            // default to the day the report was submitted — acceptance normally follows it,
            // and typing today's date by habit would misdate the payment term
            acceptedAt: (a && trim_(a.AcceptedAt)) || (a && trim_(a.SubmittedAt).slice(0, 10))
@@ -4552,6 +4575,10 @@ function adminAcceptAssignment_(d) {
   // acceptance happens from the admin page on behalf of a named person.
   if (d.signatureId !== undefined) {
     upd.AcceptorSignatureID = findRow_(SHEETS.signatures, 'SignatureID', trim_(d.signatureId)) ? trim_(d.signatureId) : '';
+  }
+  if (d.performerSignatureId !== undefined) {
+    upd.PerformerSignatureID = findRow_(SHEETS.signatures, 'SignatureID', trim_(d.performerSignatureId))
+                             ? trim_(d.performerSignatureId) : '';
   }
   var res = { ok: true, acceptedBy: by, acceptedTitle: title, acceptedAt: date };
   var up = applyUpliftFields_(a, d, by);
