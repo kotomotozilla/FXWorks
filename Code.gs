@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.150';
+const BUILD = '2026-08-08.151';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -2088,7 +2088,7 @@ function signatureJitter_(seed, salt) {
   var h = 0, str = String(seed || '') + '|' + salt;
   for (var i = 0; i < str.length; i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
   var pick = function (n, span) { return ((Math.abs(h >> n) % (span * 2 + 1)) - span); };
-  return { dx: pick(3, 22), dy: pick(9, 11) };
+  return { dx: pick(3, 22), dy: pick(9, 8) };
 }
 
 // A file name someone can read: date, project, who did the work. The eight hex characters
@@ -2141,7 +2141,7 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
     var sigCell = image
       ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>'
         + '<div class="ink"><img src="' + image + '" alt="" style="margin:'
-        + (-58 + jitter.dy) + 'px 0 0 ' + jitter.dx + 'px"></div>'
+        + (-76 + jitter.dy) + 'px 0 0 ' + jitter.dx + 'px"></div>'
       : (withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : '');
     return '<div class="sch">' + heading + '</div>'
       + '<div class="scv">' + (who || '&nbsp;') + '</div><div class="scl">Name</div>'
