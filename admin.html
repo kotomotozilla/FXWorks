@@ -331,6 +331,28 @@
     <!-- DATA -->
     <section id="view-data" class="hidden">
       <div class="panel">
+        <h2>Signatures</h2>
+        <p class="muted">Drawn once and reused. They belong to a person, not to a role: the same drawing
+          signs as the performer on one report and as the one accepting it on another. Three per person.</p>
+        <div id="sigAdminErr"></div>
+        <div id="sigAdminList" style="display:flex;gap:12px;flex-wrap:wrap;margin:10px 0"></div>
+        <div class="row" style="align-items:flex-end">
+          <div style="flex:1;min-width:180px"><label>Whose signature</label>
+            <select id="sigOwner" onchange="sigAdminOwnerChange()"></select></div>
+          <div style="flex:1;min-width:150px"><label>Label (optional)</label>
+            <input id="sigAdminLabel" placeholder="full name, initials…"></div>
+        </div>
+        <div style="height:10px"></div>
+        <canvas id="sigAdminPad" style="width:100%;max-width:430px;height:150px;border:1px dashed #9AA7B5;
+          border-radius:10px;background:#fff;touch-action:none;display:block"></canvas>
+        <div style="height:10px"></div>
+        <div class="acts">
+          <button class="btn sm" onclick="sigAdminSave(this)">Save signature</button>
+          <button class="btn ghost sm" onclick="sigAdminClear()">Clear</button>
+        </div>
+      </div>
+
+      <div class="panel">
         <h2>Collected data</h2>
         <p class="muted">Summary per report. Activity detail is in the Google Sheet (<b>Entries</b> tab). File → Download → Microsoft Excel (.xlsx).</p>
         <div id="dataErr"></div>
@@ -567,6 +589,10 @@
   </div>
   <div style="height:10px"></div>
   <div style="max-width:220px"><label>Date of acceptance</label><input id="acc_date" type="date"></div>
+
+  <div style="height:12px"></div>
+  <label>Signature <span class="muted" style="font-weight:400">— goes onto the report as the one accepting it</span></label>
+  <div id="acc_sigs" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px"></div>
 
   <div id="acc_fxHint" class="muted hidden" style="margin-top:10px;font-size:13px"></div>
   <div id="acc_upHint" class="muted hidden" style="margin-top:10px;font-size:13px"></div>
@@ -877,7 +903,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.139';
+const BUILD = '2026-08-08.141';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -958,7 +984,7 @@ function enterApp(){
 function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){
   ['projects','contracts','invoices','counterparties','perf','pay','costs','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data') loadData(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
+  if(t==='data'){ loadData(); sigAdminInit(); } if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
   document.querySelector('.wrap').classList.toggle('wide', t==='costs' || t==='perf' || t==='pay');
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
@@ -3653,6 +3679,8 @@ async function generateNow(btn){
     notice('gen_msg','ok',`${esc(r.name)} is ready: `
       + `<a href="${esc(r.docUrl)}" target="_blank" rel="noopener">Google Doc</a> · `
       + `<a href="${esc(r.pdfUrl)}" target="_blank" rel="noopener">PDF</a>`
+      + (r.created?` · dated <b>${esc(r.created)}</b>, last change <b>${esc(r.modified)}</b>`
+          + (r.normalised===false?' <span style="color:var(--warn)">(PDF service did not answer — the file keeps Google\'s dates)</span>':''):'')
       + ' · attached to the contract as a draft. Check it before sending.');
     renderAttachments('ctm_attach','contract',EDIT_CT);
   }catch(e){ notice('sign_err','err', esc(e.message)); }
@@ -3667,6 +3695,8 @@ async function generateDoc(part, btn){
     notice('gen_msg','ok',`${esc(r.name)} is ready: `
       + `<a href="${esc(r.docUrl)}" target="_blank" rel="noopener">Google Doc</a> · `
       + `<a href="${esc(r.pdfUrl)}" target="_blank" rel="noopener">PDF</a>`
+      + (r.created?` · dated <b>${esc(r.created)}</b>, last change <b>${esc(r.modified)}</b>`
+          + (r.normalised===false?' <span style="color:var(--warn)">(PDF service did not answer — the file keeps Google\'s dates)</span>':''):'')
       + ' · attached to the contract as a draft. Check it before sending.');
     renderAttachments('ctm_attach','contract',EDIT_CT);
   }catch(e){ notice('gen_msg','err', esc(e.message)); }
@@ -4181,9 +4211,117 @@ function accSignatoryChange(){
   if(s) $('acc_role').value = s.title || '';
 }
 let ACC_ID = '', PDF_AFTER_UPLIFT = false;
+// ── Signatures, from the admin side ──
+let SIG_PAD_READY = false;
+function sigPadSetup(id){
+  const cv = $(id); if(!cv || cv.dataset.ready) return cv;
+  const ratio = window.devicePixelRatio || 1;
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round(box.width * ratio); cv.height = Math.round(box.height * ratio);
+  const ctx = cv.getContext('2d'); ctx.scale(ratio, ratio);
+  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
+  let drawing = false, empty = true;
+  const at = e => { const r = cv.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e;
+                    return { x: p.clientX - r.left, y: p.clientY - r.top }; };
+  const start = e => { e.preventDefault(); drawing = true; const p = at(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+  const move  = e => { if(!drawing) return; e.preventDefault(); const p = at(e); ctx.lineTo(p.x, p.y); ctx.stroke(); empty = false; };
+  const end   = () => { drawing = false; };
+  ['pointerdown','touchstart','mousedown'].forEach(t=>cv.addEventListener(t, start, {passive:false}));
+  ['pointermove','touchmove','mousemove'].forEach(t=>cv.addEventListener(t, move, {passive:false}));
+  ['pointerup','pointerleave','touchend','mouseup','mouseleave'].forEach(t=>cv.addEventListener(t, end));
+  cv.dataset.ready = '1';
+  cv.__isEmpty = () => empty;
+  cv.__reset = () => { ctx.clearRect(0,0,cv.width,cv.height); empty = true; };
+  return cv;
+}
+function sigAdminClear(){ const cv = $('sigAdminPad'); if(cv && cv.__reset) cv.__reset(); }
+function sigAdminOwnerChange(){}
+
+async function sigAdminInit(){
+  if(!SIG_PAD_READY){ sigPadSetup('sigAdminPad'); SIG_PAD_READY = true; }
+  const sel = $('sigOwner');
+  if(sel && !sel.options.length){
+    // the people who sign on our behalf, plus everyone who reports to us
+    let people = (ACC_SIGNERS && ACC_SIGNERS.length ? ACC_SIGNERS : [{name:'Konstantin Maiorov', title:'Director'}])
+      .map(x=>({ email:'', name:x.name, title:x.title }));
+    try{
+      const r = await api('list_projects');
+      const seen = {};
+      (r.assignments||[]).forEach(x=>{
+        const em = String(x.EmployeeEmail||'').toLowerCase();
+        if(em && !seen[em]){ seen[em] = 1; people.push({ email:em, name:x.EmployeeName||em }); }
+      });
+    }catch(_){}
+    sel.innerHTML = people.map((p,i)=>`<option value="${i}">${esc(p.name)}${p.email?' · '+esc(p.email):''}</option>`).join('');
+    sel.__people = people;
+  }
+  sigAdminList();
+}
+
+async function sigAdminList(){
+  const box = $('sigAdminList'); if(!box) return;
+  let rows = [];
+  try{ const r = await api('signature_list',{}); rows = r.signatures||[]; }
+  catch(e){ notice('sigAdminErr','err', esc(e.message)); return; }
+  box.innerHTML = rows.length
+    ? rows.map(g=>`<div style="border:1px solid #DDE3EA;border-radius:10px;padding:8px;background:#fff;text-align:center">
+        <img src="${g.image}" style="height:46px;max-width:180px;display:block">
+        <div style="font-size:12px;color:#667;margin-top:5px">${esc(g.ownerName||g.ownerEmail)}${g.label?' · '+esc(g.label):''}
+          <a href="#" onclick="sigAdminDelete('${esc(g.id)}');return false;" style="color:#B4232A;margin-left:6px">delete</a></div>
+      </div>`).join('')
+    : '<span class="muted" style="font-size:13px">Nothing stored yet.</span>';
+}
+
+async function sigAdminSave(btn){
+  const cv = $('sigAdminPad');
+  if(!cv || cv.__isEmpty()){ notice('sigAdminErr','err','Draw the signature first.'); return; }
+  const sel = $('sigOwner'), who = (sel.__people||[])[+sel.value] || {};
+  const old = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try{
+    await api('signature_save',{ image: cv.toDataURL('image/png'), label: $('sigAdminLabel').value.trim(),
+      ownerEmail: who.email || '', ownerName: who.name || '' });
+    cv.__reset(); $('sigAdminLabel').value = '';
+    notice('sigAdminErr','ok','Signature saved.');
+    sigAdminList();
+  }catch(e){ notice('sigAdminErr','err', esc(e.message)); }
+  finally{ btn.disabled = false; btn.textContent = old; }
+}
+
+async function sigAdminDelete(id){
+  if(!confirm('Delete this signature?')) return;
+  try{ await api('signature_delete',{ signatureId:id }); sigAdminList(); }
+  catch(e){ notice('sigAdminErr','err', esc(e.message)); }
+}
+
+let ACC_SIG = '', ACC_SIGS = [];
+// Whoever accepts can put a stored signature on the report. They belong to people, not to
+// roles — the same drawing signs as performer on one report and as acceptor on another.
+async function accLoadSignatures(){
+  const box = $('acc_sigs'); if(!box) return;
+  box.innerHTML = '<span class="muted" style="font-size:13px">Loading…</span>';
+  try{
+    const r = await api('signature_list',{});
+    ACC_SIGS = r.signatures || [];
+  }catch(e){ ACC_SIGS = []; }
+  if(!ACC_SIGS.length){
+    box.innerHTML = '<span class="muted" style="font-size:13px">No signatures stored yet — the report will carry an empty signature line.</span>';
+    return;
+  }
+  box.innerHTML = ACC_SIGS.map(g=>`
+    <div onclick="accPickSig('${esc(g.id)}')" style="cursor:pointer;border:2px solid ${g.id===ACC_SIG?'#2563a8':'#DDE3EA'};
+      border-radius:10px;padding:6px 8px;background:#fff;text-align:center">
+      <img src="${g.image}" style="height:40px;max-width:160px;display:block">
+      <div style="font-size:12px;color:#667;margin-top:4px">${esc(g.ownerName||g.ownerEmail)}${g.label?' · '+esc(g.label):''}</div>
+    </div>`).join('')
+    + `<div onclick="accPickSig('')" style="cursor:pointer;border:2px solid ${ACC_SIG?'#DDE3EA':'#2563a8'};
+        border-radius:10px;padding:14px 12px;background:#fff;font-size:13px;color:#667">No signature</div>`;
+}
+function accPickSig(id){ ACC_SIG = id; accLoadSignatures(); }
+
 async function askAccept(aid){
-  ACC_ID = aid;
+  ACC_ID = aid; ACC_SIG = '';
   notice('acc_err','','');
+  accLoadSignatures();
   try{
     const r = await api('accept_defaults',{ assignmentId:aid });
     accFillSignatories(r.signatories, r.acceptedBy, r.acceptedTitle);
@@ -4216,7 +4354,8 @@ async function acceptNow(btn){
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
   try{
     const payload = { assignmentId:ACC_ID, acceptedBy:$('acc_name').value.trim(),
-      acceptedTitle:$('acc_role').value.trim(), acceptedAt:$('acc_date').value };
+      acceptedTitle:$('acc_role').value.trim(), acceptedAt:$('acc_date').value,
+      signatureId: ACC_SIG || '' };
     if(UP_ST){
       payload.upliftGranted = $('acc_upGrant').checked;
       payload.upliftBase = $('acc_upBase').value;

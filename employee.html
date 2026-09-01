@@ -135,6 +135,22 @@
       <input id="submitDate" type="date"></div>
 
     <div style="height:18px"></div>
+    <div class="hoursbox" id="sigWrap">
+      <label>Your signature <span style="font-weight:400;color:#667">— appears on the report you submit</span></label>
+      <div id="sigList" style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0"></div>
+      <div id="sigPadWrap" style="display:none">
+        <canvas id="sigPad" style="width:100%;max-width:420px;height:150px;border:1px dashed #9AA7B5;
+          border-radius:10px;background:#fff;touch-action:none"></canvas>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <input id="sigLabel" placeholder="Label, e.g. full name" style="flex:1;min-width:150px">
+          <button class="btn ghost" onclick="sigClear()">Clear</button>
+          <button class="btn" onclick="sigSave(this)">Save signature</button>
+        </div>
+      </div>
+      <button class="btn ghost" id="sigAddBtn" onclick="sigShowPad()">Add a signature</button>
+    </div>
+
+    <div style="height:18px"></div>
     <div id="submitMsg"></div>
     <div class="actions" id="reportActions">
       <button class="btn ghost" id="draftBtn" onclick="saveReport(false)">Save draft</button>
@@ -185,7 +201,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-08-08.139';
+const BUILD='2026-08-08.141';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -295,12 +311,14 @@ async function openReport(aid){
     $('curWrap').style.display = allowCur ? '' : 'none';
     $('payoutCur').value = a.PayoutCurrency || '';
     applyMode(ro);
+    STATE.signatureId = a.PerformerSignatureID || STATE.signatureId || '';
+    if(!ro) sigLoad();
     show('screen-report'); window.scrollTo(0,0);
   }catch(e){ notice('reportsErr','err', esc(e.message)); show('screen-reports'); }
 }
 
 function applyMode(ro){
-  ['addBtn','reportActions','hoursWrap','dateWrap'].forEach(id=>{ const el=$(id); if(el) el.style.display = ro ? 'none' : ''; });
+  ['addBtn','reportActions','hoursWrap','dateWrap','sigWrap'].forEach(id=>{ const el=$(id); if(el) el.style.display = ro ? 'none' : ''; });
   if(STATE.current && STATE.current.PricingType==='lump' && $('hoursWrap')) $('hoursWrap').style.display='none';
   if(ro && $('curWrap')) $('curWrap').style.display='none';
   if(ro) notice('submitMsg','info','This report has been submitted — it is now read-only. You can still download a PDF below. The administrator can return it to you for corrections.');
@@ -324,6 +342,89 @@ function recalc(){
   $('dAmount').textContent = s+fmtMoney(hours*rate);
 }
 
+let SIG_LIMIT = 3;
+// ── Signatures ──
+// Drawn with a finger on the tablet, kept as a small PNG and reused. Up to three, so there
+// can be a full name and a set of initials.
+function sigCanvasSetup(){
+  const cv = $('sigPad'); if(!cv || cv.dataset.ready) return;
+  const ratio = window.devicePixelRatio || 1;
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round(box.width * ratio);
+  cv.height = Math.round(box.height * ratio);
+  const ctx = cv.getContext('2d');
+  ctx.scale(ratio, ratio);
+  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
+  let drawing = false, empty = true;
+  const at = e => {
+    const r = cv.getBoundingClientRect();
+    const p = e.touches ? e.touches[0] : e;
+    return { x: p.clientX - r.left, y: p.clientY - r.top };
+  };
+  const start = e => { e.preventDefault(); drawing = true; const p = at(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+  const move  = e => { if(!drawing) return; e.preventDefault(); const p = at(e); ctx.lineTo(p.x, p.y); ctx.stroke(); empty = false; };
+  const end   = () => { drawing = false; };
+  ['pointerdown','touchstart','mousedown'].forEach(t=>cv.addEventListener(t, start, {passive:false}));
+  ['pointermove','touchmove','mousemove'].forEach(t=>cv.addEventListener(t, move, {passive:false}));
+  ['pointerup','pointerleave','touchend','mouseup','mouseleave'].forEach(t=>cv.addEventListener(t, end));
+  cv.dataset.ready = '1';
+  cv.__isEmpty = () => empty;
+  cv.__reset = () => { ctx.clearRect(0,0,cv.width,cv.height); empty = true; };
+}
+function sigShowPad(){
+  $('sigPadWrap').style.display = '';
+  $('sigAddBtn').style.display = 'none';
+  sigCanvasSetup();
+}
+function sigClear(){ const cv=$('sigPad'); if(cv && cv.__reset) cv.__reset(); }
+
+async function sigLoad(){
+  try{
+    const r = await api('signature_list', auth());
+    STATE.signatures = r.signatures || [];
+    SIG_LIMIT = r.limit || SIG_LIMIT;
+  }catch(e){ STATE.signatures = []; }
+  const list = $('sigList'); if(!list) return;
+  if(!STATE.signatures.length){
+    list.innerHTML = '<span style="color:#667;font-size:14px">No signature yet — the report will go out with an empty signature line.</span>';
+  }else{
+    if(!STATE.signatureId) STATE.signatureId = STATE.signatures[0].id;
+    list.innerHTML = STATE.signatures.map(g=>`
+      <div onclick="sigPick('${g.id}')" style="cursor:pointer;border:2px solid ${g.id===STATE.signatureId?'#2563a8':'#DDE3EA'};
+        border-radius:10px;padding:6px 8px;background:#fff;text-align:center">
+        <img src="${g.image}" style="height:44px;max-width:170px;display:block">
+        <div style="font-size:12px;color:#667;margin-top:4px">${esc(g.label||'signature')}
+          <a href="#" onclick="sigDelete('${g.id}',event)" style="color:#B4232A;margin-left:6px">delete</a></div>
+      </div>`).join('');
+  }
+  $('sigAddBtn').style.display = (STATE.signatures.length >= SIG_LIMIT) ? 'none' : '';
+}
+function sigPick(id){ STATE.signatureId = id; sigLoad(); }
+
+async function sigSave(btn){
+  const cv = $('sigPad');
+  if(!cv || cv.__isEmpty()){ notice('submitMsg','err','Draw the signature first.'); return; }
+  const old = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try{
+    await api('signature_save', auth({ image: cv.toDataURL('image/png'), label: $('sigLabel').value.trim() }));
+    cv.__reset(); $('sigLabel').value = '';
+    $('sigPadWrap').style.display = 'none'; $('sigAddBtn').style.display = '';
+    await sigLoad();
+    notice('submitMsg','ok','Signature saved — it will appear on the reports you submit.');
+  }catch(e){ notice('submitMsg','err', esc(e.message)); }
+  finally{ btn.disabled = false; btn.textContent = old; }
+}
+
+async function sigDelete(id, ev){
+  ev.preventDefault(); ev.stopPropagation();
+  if(!confirm('Delete this signature?')) return;
+  try{
+    await api('signature_delete', auth({ signatureId:id }));
+    if(STATE.signatureId===id) STATE.signatureId = '';
+    await sigLoad();
+  }catch(e){ notice('submitMsg','err', esc(e.message)); }
+}
+
 async function saveReport(finalize){
   const activities = [...document.querySelectorAll('#items .item textarea')].map(t=>t.value.trim()).filter(Boolean);
   const hours = parseFloat(($('totalHours').value||'').replace(',','.'))||0;
@@ -335,7 +436,9 @@ async function saveReport(finalize){
   const oldText = btn.textContent; btn.disabled=true; other.disabled=true;
   btn.innerHTML = `<span class="spin ${finalize?'':'dark'}"></span>`;
   try{
-    const r = await api(action, auth({assignmentId:STATE.current.AssignmentID, activities, hours, submittedDate:$('submitDate').value, payoutCurrency:$('payoutCur').value}));
+    const r = await api(action, auth({assignmentId:STATE.current.AssignmentID, activities, hours,
+      submittedDate:$('submitDate').value, payoutCurrency:$('payoutCur').value,
+      signatureId: STATE.signatureId||''}));
     const s = cur(STATE.current.Currency);
     if(finalize){
       const msg = `Report submitted: ${r.totals.activities} activities, ${fmtH(r.totals.hours)} h for ${s}${fmtMoney(r.totals.amount)}. The admin has been notified.`;

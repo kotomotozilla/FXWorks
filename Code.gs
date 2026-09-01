@@ -27,11 +27,12 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.139';
+const BUILD = '2026-08-08.141';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
-                 queue: 'ParseQueue', queueText: 'ParseQueueText', queueFile: 'ParseQueueFile', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+                 queue: 'ParseQueue', queueText: 'ParseQueueText', queueFile: 'ParseQueueFile',
+                 signatures: 'Signatures', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
@@ -50,6 +51,7 @@ const HEADERS = {
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
                 'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
   employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt'],
+  signatures:  ['SignatureID', 'OwnerEmail', 'OwnerName', 'Label', 'DriveFileID', 'CreatedAt'],
   contracts:   ['ContractID', 'Number', 'Description', 'CounterpartyID', 'Direction', 'SignDate', 'StartDate', 'EndDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'ParentContractID', 'CreatedAt',
                 'TemplateType', 'OurRole', 'OurRequisiteID', 'TheirRequisiteID', 'Subject',
@@ -73,6 +75,7 @@ const HEADERS = {
                 'ContractID', 'RateSource', 'PricingType',
                 'UpliftGranted', 'UpliftBase', 'UpliftK1', 'UpliftK2', 'UpliftK3',
                 'UpliftPercent', 'UpliftAmount', 'UpliftNote', 'UpliftSetBy', 'UpliftSetAt',
+                'PerformerSignatureID', 'AcceptorSignatureID',
                 'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
@@ -141,6 +144,9 @@ function route_(action, d) {
     case 'report_pdf':         return reportPdf_(d);
     case 'report_html':        return reportHtmlRoute_(d);
     case 'pdf_inspect':        return pdfInspect_(d);
+    case 'signature_list':     return signatureList_(d);
+    case 'signature_save':     return signatureSave_(d);
+    case 'signature_delete':   return signatureDelete_(d);
     case 'v2_sent_text':       return v2SentText_(d);
     case 'v2_list':            requireAdmin_(d); return v2List_(d);
     case 'v2_delete_doc':      return v2DeleteDoc_(d);
@@ -1781,10 +1787,8 @@ function v2Generate_(d) {
   try { DriveApp.getRootFolder().removeFile(file); } catch (e) {}
 
   var pdfBlob = file.getAs('application/pdf').setName(title + '.pdf');
-  // Dates the receiving side expects: when the document was made, and when it was last
-  // touched. For a generated draft both are now; a report overrides them on submission
-  // and on acceptance.
-  var norm = pdfNormalise_(pdfBlob, pdfStamp_(new Date()), pdfStamp_(new Date()),
+  var dates = contractDates_(trim_(d.contractId));
+  var norm = pdfNormalise_(pdfBlob, pdfStamp_(dates.created, '12:00'), pdfStamp_(dates.modified, '12:00'),
                            { Title: PDF_META.title, Producer: PDF_META.producer, Creator: PDF_META.producer });
   var pdf = folder.createFile(norm.ok ? norm.blob : pdfBlob);
   var docx = null;
@@ -1987,6 +1991,15 @@ function pdfStamp_(dateOrIso, hhmm) {
 // file is dated by the day the report was submitted and last modified on the day it was
 // accepted — that is what the receiving system verifies, and it is the whole reason the
 // metadata is rewritten at all.
+// The images chosen when the report was submitted and when it was accepted.
+function reportSignatures_(a) {
+  var byId = function (id) {
+    id = trim_(id);
+    return id ? signatureDataUri_(findRow_(SHEETS.signatures, 'SignatureID', id)) : '';
+  };
+  return { performer: byId(a.PerformerSignatureID), acceptor: byId(a.AcceptorSignatureID) };
+}
+
 function reportHtmlRoute_(d) {
   requireAdmin_(d);
   var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
@@ -2000,7 +2013,7 @@ function reportHtmlRoute_(d) {
   if (trim_(d.hours) !== '') a.ReportedHours = num_(d.hours);
   if (trim_(d.submittedAt)) a.SubmittedAt = trim_(d.submittedAt);
 
-  return { ok: true, html: reportHtml_(a, items, truthy_(d.withSignature), true) };
+  return { ok: true, html: reportHtml_(a, items, truthy_(d.withSignature), true, reportSignatures_(a)) };
 }
 
 function reportPdf_(d) {
@@ -2012,7 +2025,7 @@ function reportPdf_(d) {
   var submitted = trim_(a.SubmittedAt) || trim_(a.ReleasedAt) || new Date().toISOString().slice(0, 10);
   var accepted = trim_(a.AcceptedAt);
 
-  var html = reportHtml_(a, items, truthy_(d.withSignature));
+  var html = reportHtml_(a, items, truthy_(d.withSignature), false, reportSignatures_(a));
   var name = 'Report ' + String(a.AssignmentID).slice(0, 8) + ' ' + submitted + '.pdf';
   var blob = Utilities.newBlob(html, 'text/html', name).getAs('application/pdf').setName(name);
 
@@ -2026,7 +2039,8 @@ function reportPdf_(d) {
 
 // The report, in one place. Both the downloadable file and the print view are built from
 // here — a report that differed between the two would be worse than either.
-function reportHtml_(a, items, withSign, forPrint) {
+function reportHtml_(a, items, withSign, forPrint, sigs) {
+  sigs = sigs || {};
   var esc = function (x) {
     return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   };
@@ -2044,12 +2058,17 @@ function reportHtml_(a, items, withSign, forPrint) {
 
   // Signatures side by side in a table, not a flex box: print engines lay tables out
   // reliably, and a stacked block pushed the signatures onto a page of their own.
-  var col = function (heading, who, when, title) {
+  var col = function (heading, who, when, title, image) {
+    // A drawn signature sits above its line, as it would on paper. Without one the line is
+    // left empty for a pen, and only when a signature field was asked for.
+    var sigCell = image
+      ? '<div class="scv sig"><img src="' + image + '" alt=""></div><div class="scl">Signature</div>'
+      : (withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : '');
     return '<div class="sch">' + heading + '</div>'
       + '<div class="scv">' + (who || '&nbsp;') + '</div><div class="scl">Name</div>'
       + (title ? '<div class="scv">' + title + '</div><div class="scl">Title</div>' : '')
       + '<div class="scv">' + (when || '&nbsp;') + '</div><div class="scl">Date</div>'
-      + (withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : '');
+      + sigCell;
   };
 
   var rows = ''
@@ -2089,15 +2108,17 @@ function reportHtml_(a, items, withSign, forPrint) {
     + '.sch{font-weight:bold;margin:0 0 10px;line-height:1.25;height:2.5em;overflow:hidden}'
     + '.scv{border-bottom:1px solid #333;padding:2px 0 3px;min-height:19px}'
     + '.scl{font-size:8.5pt;color:#555;margin:2px 0 10px;font-family:Arial,Helvetica,sans-serif}'
+    + '.scv.sig{padding-bottom:0;height:52px;position:relative}'
+    + '.scv.sig img{max-height:48px;max-width:100%;display:block;margin:0 auto -2px}'
     + '</style></head><body>'
     + '<div class="lh"><span>' + esc(company) + '</span><span>Project Work Completion Report</span></div>'
     + '<h1>Project Work Completion Report</h1>'
     + '<table>' + rows + '</table>'
     + '<table class="srow"><tr>'
     + '<td valign="top">' + col('Performed by the Service Provider',
-        esc(trim_(a.EmployeeName) || trim_(a.EmployeeEmail)), submitted || '&mdash;', '') + '</td>'
+        esc(trim_(a.EmployeeName) || trim_(a.EmployeeEmail)), submitted || '&mdash;', '', sigs.performer) + '</td>'
     + '<td valign="top">' + col('Accepted on behalf of ' + esc(company),
-        esc(trim_(a.AcceptedBy)), esc(date(a.AcceptedAt)), esc(trim_(a.AcceptedTitle))) + '</td>'
+        esc(trim_(a.AcceptedBy)), esc(date(a.AcceptedAt)), esc(trim_(a.AcceptedTitle)), sigs.acceptor) + '</td>'
     + '</tr></table>'
     + '<div class="foot">CONFIDENTIAL</div>'
     + (forPrint
@@ -2131,6 +2152,121 @@ function pdfInspect_(d) {
   } catch (e) {
     return { ok: false, error: 'PDF service unreachable: ' + String(e).slice(0, 150) };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Signatures.
+//
+// A signature is a small PNG the person draws once and reuses. It belongs to the person,
+// not to a role: the same Konstantin Maiorov signs as the performer on one report and as
+// the one accepting it on another. Three per person is enough for a variant with initials
+// and one with the full name.
+//
+// The images live in a folder of their own on Drive and are inlined into the report as
+// data URIs when it is built — nothing points at Drive from the finished PDF.
+// ─────────────────────────────────────────────────────────────────────────────
+var SIGNATURE_LIMIT = 3;
+
+function signaturesFolder_() {
+  var name = 'FXWorks Signatures';
+  var it = DriveApp.getFoldersByName(name);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(name);
+}
+
+// Either the admin, or an employee with their own password. Returns the owner's email.
+function signatureOwner_(d) {
+  if (trim_(d.passcode) === CONFIG.ADMIN_PASSCODE) {
+    return { email: normEmail_(d.ownerEmail) || normEmail_(CONFIG.ADMIN_EMAIL), admin: true };
+  }
+  var emp = verifyEmployee_(d);
+  if (!emp) return null;
+  return { email: normEmail_(d.email), admin: false, name: trim_(emp.FullName) };
+}
+
+function signatureDataUri_(row) {
+  if (!row || !trim_(row.DriveFileID)) return '';
+  try {
+    var blob = DriveApp.getFileById(trim_(row.DriveFileID)).getBlob();
+    return 'data:image/png;base64,' + Utilities.base64Encode(blob.getBytes());
+  } catch (e) { return ''; }
+}
+
+function signatureList_(d) {
+  var who = signatureOwner_(d);
+  if (!who) return { ok: false, error: 'Invalid email or password' };
+  // The admin sees everyone's: acceptance is done from the admin page, and the signature
+  // used there belongs to whoever is accepting.
+  var rows = readAll_(SHEETS.signatures).filter(function (r) {
+    return who.admin ? true : normEmail_(r.OwnerEmail) === who.email;
+  });
+  return { ok: true, owner: who.email, limit: SIGNATURE_LIMIT,
+    signatures: rows.map(function (r) {
+      return { id: String(r.SignatureID), ownerEmail: String(r.OwnerEmail), ownerName: String(r.OwnerName),
+               label: String(r.Label || ''), image: signatureDataUri_(r), createdAt: String(r.CreatedAt || '') };
+    }) };
+}
+
+function signatureSave_(d) {
+  var who = signatureOwner_(d);
+  if (!who) return { ok: false, error: 'Invalid email or password' };
+  var owner = who.admin ? (normEmail_(d.ownerEmail) || who.email) : who.email;
+  var mine = readAll_(SHEETS.signatures).filter(function (r) { return normEmail_(r.OwnerEmail) === owner; });
+  if (mine.length >= SIGNATURE_LIMIT) {
+    return { ok: false, error: 'Three signatures is the limit — delete one first' };
+  }
+  var data = String(d.image || '');
+  var b64 = data.indexOf(',') >= 0 ? data.split(',')[1] : data;
+  if (!b64) return { ok: false, error: 'Nothing was drawn' };
+  var id = Utilities.getUuid();
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(b64), 'image/png', 'signature-' + id + '.png');
+    var file = signaturesFolder_().createFile(blob);
+    appendRow_(SHEETS.signatures, {
+      SignatureID: id, OwnerEmail: owner,
+      OwnerName: trim_(d.ownerName) || who.name || owner,
+      Label: trim_(d.label), DriveFileID: file.getId(), CreatedAt: new Date().toISOString()
+    });
+  } catch (e) { return { ok: false, error: 'Could not store the signature: ' + e }; }
+  return { ok: true, id: id };
+}
+
+function signatureDelete_(d) {
+  var who = signatureOwner_(d);
+  if (!who) return { ok: false, error: 'Invalid email or password' };
+  var row = findRow_(SHEETS.signatures, 'SignatureID', trim_(d.signatureId));
+  if (!row) return { ok: false, error: 'Signature not found' };
+  if (!who.admin && normEmail_(row.OwnerEmail) !== who.email) return { ok: false, error: 'Not yours to delete' };
+  try { DriveApp.getFileById(trim_(row.DriveFileID)).setTrashed(true); } catch (e) {}
+  deleteRowsWhere_(SHEETS.signatures, 'SignatureID', trim_(d.signatureId));
+  return { ok: true };
+}
+
+// Business dates for a contract: it came into being on the day it was signed, and it was
+// last touched on the day of its latest amendment. A draft that has not been signed yet
+// falls back to today — there is no other honest answer.
+function contractDates_(contractId) {
+  var today = new Date().toISOString().slice(0, 10);
+  var c = contractId && contractId !== '__sandbox'
+        ? findRow_(SHEETS.contracts, 'ContractID', contractId) : null;
+  if (!c) return { created: today, modified: today };
+
+  var created = trim_(c.SignDate) || trim_(c.StartDate) || String(c.CreatedAt || today).slice(0, 10);
+  var last = created;
+  var later = function (x) { var v = String(x || '').slice(0, 10); if (v && v > last) last = v; };
+
+  // an amendment may be a contract of its own, hanging off this one …
+  readAll_(SHEETS.contracts).forEach(function (r) {
+    if (String(r.ParentContractID) === String(contractId)) later(trim_(r.SignDate) || trim_(r.StartDate));
+  });
+  // … or a file attached to it, or a parsed document of kind "amendment"
+  readAll_(SHEETS.attachments).forEach(function (r) {
+    if (String(r.ParentType) === 'contract' && String(r.ParentID) === String(contractId)
+        && String(r.DocType) === 'amendment') later(trim_(r.DocDate));
+  });
+  readAll_(SHEETS.documents).forEach(function (r) {
+    if (String(r.ContractID) === String(contractId) && String(r.Kind) === 'amendment') later(trim_(r.SignDate));
+  });
+  return { created: created, modified: last };
 }
 
 function pdfServiceCheck_(d) {
@@ -2459,7 +2595,8 @@ function adminGenerateContract_(d) {
   doc.saveAndClose();
 
   var tplBlob = copy.getAs('application/pdf').setName(name + '.pdf');
-  var tplNorm = pdfNormalise_(tplBlob, pdfStamp_(new Date()), pdfStamp_(new Date()),
+  var tplDates = contractDates_(String(c.ContractID));
+  var tplNorm = pdfNormalise_(tplBlob, pdfStamp_(tplDates.created, '12:00'), pdfStamp_(tplDates.modified, '12:00'),
                               { Title: PDF_META.title, Producer: PDF_META.producer, Creator: PDF_META.producer });
   var pdf = folder.createFile(tplNorm.ok ? tplNorm.blob : tplBlob);
   appendRow_(SHEETS.attachments, {
@@ -2468,7 +2605,8 @@ function adminGenerateContract_(d) {
     DocType: 'draft', DocDate: new Date().toISOString().slice(0, 10), IsCurrent: 'no',
     DriveFileID: pdf.getId(), Url: pdf.getUrl(), CreatedAt: new Date().toISOString()
   });
-  return { ok: true, name: name, docUrl: doc.getUrl(), pdfUrl: pdf.getUrl() };
+  return { ok: true, name: name, docUrl: doc.getUrl(), pdfUrl: pdf.getUrl(), pdfFileId: pdf.getId(),
+           created: tplDates.created, modified: tplDates.modified, normalised: !!tplNorm.ok };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3794,6 +3932,11 @@ function adminSaveReport_(d) {
   // Admin can always set/clear the submission date.
   var sub = trim_(d.submittedDate);
   var upd = { ReportedHours: hours, ReportedAmount: amount, SubmittedAt: sub, UpdatedAt: now };
+  // The signature is chosen at submission and belongs to the person submitting.
+  if (d.signatureId !== undefined) {
+    var sig = findRow_(SHEETS.signatures, 'SignatureID', trim_(d.signatureId));
+    upd.PerformerSignatureID = (sig && normEmail_(sig.OwnerEmail) === normEmail_(d.email)) ? trim_(d.signatureId) : '';
+  }
   if (d.title !== undefined) upd.Title = trim_(d.title);
   if (d.payoutCurrency !== undefined) upd.PayoutCurrency = payoutCur_(d.payoutCurrency);
   if (d.markSubmitted) { upd.Status = 'submitted'; if (!sub) upd.SubmittedAt = now.slice(0, 10); }
@@ -4396,7 +4539,8 @@ function adminAcceptAssignment_(d) {
   if (a.Status !== 'submitted') return { ok: false, error: 'Only a submitted report can be accepted' };
   var revoke = truthy_(d.revoke);
   if (revoke) {
-    updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { AcceptedBy: '', AcceptedTitle: '', AcceptedAt: '', UpdatedAt: new Date().toISOString() });
+    updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, { AcceptedBy: '', AcceptedTitle: '', AcceptedAt: '',
+      AcceptorSignatureID: '', UpdatedAt: new Date().toISOString() });
     return { ok: true, revoked: true };
   }
   var by = trim_(d.acceptedBy);
@@ -4404,6 +4548,11 @@ function adminAcceptAssignment_(d) {
   var date = trim_(d.acceptedAt) || new Date().toISOString().slice(0, 10);
   var title = trim_(d.acceptedTitle);
   var upd = { AcceptedBy: by, AcceptedTitle: title, AcceptedAt: date, UpdatedAt: new Date().toISOString() };
+  // Whoever accepts may put their signature on it; any of the stored ones will do, since
+  // acceptance happens from the admin page on behalf of a named person.
+  if (d.signatureId !== undefined) {
+    upd.AcceptorSignatureID = findRow_(SHEETS.signatures, 'SignatureID', trim_(d.signatureId)) ? trim_(d.signatureId) : '';
+  }
   var res = { ok: true, acceptedBy: by, acceptedTitle: title, acceptedAt: date };
   var up = applyUpliftFields_(a, d, by);
   for (var k in up.fields) upd[k] = up.fields[k];
