@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.152';
+const BUILD = '2026-08-08.153';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -2141,7 +2141,7 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
     var sigCell = image
       ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>'
         + '<div class="ink"><img src="' + image + '" alt="" style="margin:'
-        + (-88 + jitter.dy) + 'px 0 0 ' + jitter.dx + 'px"></div>'
+        + (-94 + jitter.dy) + 'px 0 0 ' + jitter.dx + 'px"></div>'
       : (withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : '');
     return '<div class="sch">' + heading + '</div>'
       + '<div class="scv">' + (who || '&nbsp;') + '</div><div class="scl">Name</div>'
