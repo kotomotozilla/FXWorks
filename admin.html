@@ -935,7 +935,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.146';
+const BUILD = '2026-08-08.147';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4303,25 +4303,44 @@ function sigPadSetup(id){
   let drawing = false, empty = true;
   const at = e => { const r = cv.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e;
                     return { x: p.clientX - r.left, y: p.clientY - r.top }; };
-  // Each new point is joined with a curve through the midpoint of the last two, so the
-  // stroke follows the finger smoothly instead of showing every sampled corner.
-  let pts = [];
-  const start = e => { e.preventDefault(); drawing = true; const p = at(e); pts = [p, p];
-                       ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+  // A finger reports few, widely spaced points, and drawing straight from them leaves the
+  // corners visible. Each incoming point is first pulled towards the previous one, then the
+  // whole stroke is redrawn as one smooth curve — cheap enough at this size, and the result
+  // has no joints at all.
+  let pts = [], strokes = [];
+  const redraw = () => {
+    if(pts.length < 2) return;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    strokes.concat([pts]).forEach(line=>{
+      if(line.length < 2) return;
+      ctx.beginPath(); ctx.moveTo(line[0].x, line[0].y);
+      if(line.length === 2){ ctx.lineTo(line[1].x, line[1].y); }
+      else{
+        for(let i = 1; i < line.length - 1; i++){
+          const mid = { x:(line[i].x + line[i+1].x)/2, y:(line[i].y + line[i+1].y)/2 };
+          ctx.quadraticCurveTo(line[i].x, line[i].y, mid.x, mid.y);
+        }
+        const last = line[line.length-1];
+        ctx.quadraticCurveTo(last.x, last.y, last.x, last.y);
+      }
+      ctx.stroke();
+    });
+  };
+  const start = e => { e.preventDefault(); drawing = true; pts = [at(e)]; };
   const move  = e => {
     if(!drawing) return; e.preventDefault();
-    const p = at(e), a = pts[pts.length-2], b = pts[pts.length-1];
-    const mid1 = { x:(a.x+b.x)/2, y:(a.y+b.y)/2 }, mid2 = { x:(b.x+p.x)/2, y:(b.y+p.y)/2 };
-    ctx.beginPath(); ctx.moveTo(mid1.x, mid1.y); ctx.quadraticCurveTo(b.x, b.y, mid2.x, mid2.y); ctx.stroke();
-    pts.push(p); empty = false;
+    const raw = at(e), prev = pts[pts.length-1];
+    if(Math.abs(raw.x-prev.x) + Math.abs(raw.y-prev.y) < 1.2) return;   // ignore jitter of the finger
+    pts.push({ x: prev.x + (raw.x-prev.x)*0.55, y: prev.y + (raw.y-prev.y)*0.55 });
+    empty = false; redraw();
   };
-  const end   = () => { drawing = false; pts = []; };
+  const end   = () => { if(drawing && pts.length > 1) strokes.push(pts); drawing = false; pts = []; };
   ['pointerdown','touchstart','mousedown'].forEach(t=>cv.addEventListener(t, start, {passive:false}));
   ['pointermove','touchmove','mousemove'].forEach(t=>cv.addEventListener(t, move, {passive:false}));
   ['pointerup','pointerleave','touchend','mouseup','mouseleave'].forEach(t=>cv.addEventListener(t, end));
   cv.dataset.ready = '1';
   cv.__isEmpty = () => empty;
-  cv.__reset = () => { ctx.clearRect(0,0,cv.width,cv.height); empty = true; };
+  cv.__reset = () => { ctx.clearRect(0,0,cv.width,cv.height); empty = true; strokes = []; pts = []; };
   cv.__setInk = c => { window.SIG_INK = c; ctx.strokeStyle = c; };
   // Store what was drawn, not the empty canvas around it: the report then places the
   // signature at its natural size instead of stretching a mostly blank picture.
@@ -4661,8 +4680,9 @@ async function reportPdfFile(aid, btn){
     }
     // Read the dates back out of the file itself — a file manager would show the ones
     // belonging to the filesystem, which prove nothing.
-    // No dialog: the dates can be looked up on the PDF check tab whenever they matter.
-    window.open(r.url, '_blank');
+    // The download link, not Drive's viewer — the viewer offers to share a link, while this
+    // hands over the file, so "Save to Files" appears where it should.
+    window.open(r.downloadUrl || r.url, '_blank');
   }catch(e){ alert(e.message); }
   finally{ btn.disabled = false; btn.textContent = t; }
 }

@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.146';
+const BUILD = '2026-08-08.147';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -2054,6 +2054,9 @@ function reportPdf_(d) {
                            { Title: PDF_META.title, Producer: PDF_META.producer, Creator: PDF_META.producer });
   var file = attachmentsFolder_().createFile(norm.ok ? norm.blob : blob);
   return { ok: true, url: file.getUrl(), fileId: file.getId(), name: name,
+           // Drive's viewer offers to share a link; this one hands over the file itself,
+           // so "Save to Files" appears where it should.
+           downloadUrl: 'https://drive.google.com/uc?export=download&id=' + file.getId(),
            created: submitted, modified: accepted || submitted,
            normalised: !!norm.ok, note: norm.ok ? '' : (norm.error || '') };
 }
@@ -2066,7 +2069,7 @@ function signatureJitter_(seed, salt) {
   var h = 0, str = String(seed || '') + '|' + salt;
   for (var i = 0; i < str.length; i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
   var pick = function (n, span) { return ((Math.abs(h >> n) % (span * 2 + 1)) - span); };
-  return { dx: pick(3, 14), dy: pick(9, 5) };
+  return { dx: pick(3, 22), dy: pick(9, 11) };
 }
 
 // The report, in one place. Both the downloadable file and the print view are built from
@@ -2096,8 +2099,8 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
     // ignores z-index, so anything written later would sit on top of the signature instead.
     var sigCell = image
       ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>'
-        + '<div class="ink" style="margin:' + (-46 + jitter.dy) + 'px 0 0 ' + jitter.dx + 'px">'
-        + '<img src="' + image + '" alt=""></div>'
+        + '<div class="ink"><img src="' + image + '" alt="" style="margin:'
+        + (-58 + jitter.dy) + 'px 0 0 ' + jitter.dx + 'px"></div>'
       : (withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : '');
     return '<div class="sch">' + heading + '</div>'
       + '<div class="scv">' + (who || '&nbsp;') + '</div><div class="scl">Name</div>'
@@ -2147,7 +2150,7 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
     // hangs out of it, so it crosses the line without moving anything below. It must not
     // reach the label — whatever comes later in the flow is drawn on top, and the word
     // "Signature" would then sit over the ink.
-    + '.ink{height:0;overflow:visible;text-align:center}'
+    + '.ink{height:0;overflow:visible;text-align:center;line-height:0}'
     + '.ink img{max-height:58px;max-width:88%;display:inline-block}'
     + '</style></head><body>'
     + '<div class="lh"><span>' + esc(company) + '</span><span>Project Work Completion Report</span></div>'
@@ -2167,7 +2170,8 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
           + '<button onclick="window.print()" style="font:600 14px system-ui;padding:9px 18px;border:0;'
           + 'background:#2563a8;color:#fff;border-radius:8px;cursor:pointer">Print / Save as PDF</button></div>'
           + '<style>@media print{.no-print{display:none}}</style>'
-          + '<script>setTimeout(function(){try{window.print();}catch(e){}},500);<' + '/script>'
+          + '<script>window.addEventListener("load",function(){setTimeout(function(){'
+          + 'try{window.print();}catch(e){}},900);});<' + '/script>'
         : '')
     + '</body></html>';
 }
