@@ -935,7 +935,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.144';
+const BUILD = '2026-08-08.146';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4294,18 +4294,28 @@ async function pdfCheckUpload(input){
 let SIG_PAD_READY = false;
 function sigPadSetup(id){
   const cv = $(id); if(!cv || cv.dataset.ready) return cv;
-  const ratio = window.devicePixelRatio || 1;
+  const ratio = Math.max(3, window.devicePixelRatio || 1);   // extra resolution for the PDF
   const box = cv.getBoundingClientRect();
   cv.width = Math.round(box.width * ratio); cv.height = Math.round(box.height * ratio);
   const ctx = cv.getContext('2d'); ctx.scale(ratio, ratio);
-  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.lineWidth = 3.1; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.strokeStyle = window.SIG_INK || '#1B3A8C';        // ink, not print: blue reads as signed by hand
   let drawing = false, empty = true;
   const at = e => { const r = cv.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e;
                     return { x: p.clientX - r.left, y: p.clientY - r.top }; };
-  const start = e => { e.preventDefault(); drawing = true; const p = at(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
-  const move  = e => { if(!drawing) return; e.preventDefault(); const p = at(e); ctx.lineTo(p.x, p.y); ctx.stroke(); empty = false; };
-  const end   = () => { drawing = false; };
+  // Each new point is joined with a curve through the midpoint of the last two, so the
+  // stroke follows the finger smoothly instead of showing every sampled corner.
+  let pts = [];
+  const start = e => { e.preventDefault(); drawing = true; const p = at(e); pts = [p, p];
+                       ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+  const move  = e => {
+    if(!drawing) return; e.preventDefault();
+    const p = at(e), a = pts[pts.length-2], b = pts[pts.length-1];
+    const mid1 = { x:(a.x+b.x)/2, y:(a.y+b.y)/2 }, mid2 = { x:(b.x+p.x)/2, y:(b.y+p.y)/2 };
+    ctx.beginPath(); ctx.moveTo(mid1.x, mid1.y); ctx.quadraticCurveTo(b.x, b.y, mid2.x, mid2.y); ctx.stroke();
+    pts.push(p); empty = false;
+  };
+  const end   = () => { drawing = false; pts = []; };
   ['pointerdown','touchstart','mousedown'].forEach(t=>cv.addEventListener(t, start, {passive:false}));
   ['pointermove','touchmove','mousemove'].forEach(t=>cv.addEventListener(t, move, {passive:false}));
   ['pointerup','pointerleave','touchend','mouseup','mouseleave'].forEach(t=>cv.addEventListener(t, end));

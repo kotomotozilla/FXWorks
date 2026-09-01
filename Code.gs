@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.144';
+const BUILD = '2026-08-08.146';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -2058,6 +2058,17 @@ function reportPdf_(d) {
            normalised: !!norm.ok, note: norm.ok ? '' : (norm.error || '') };
 }
 
+// Nobody signs twice in exactly the same spot, and a page where both signatures sit at
+// identical coordinates looks printed rather than signed. The offset is small and derived
+// from the report itself, so regenerating the same report gives the same file — which
+// matters when the receiving side verifies it.
+function signatureJitter_(seed, salt) {
+  var h = 0, str = String(seed || '') + '|' + salt;
+  for (var i = 0; i < str.length; i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
+  var pick = function (n, span) { return ((Math.abs(h >> n) % (span * 2 + 1)) - span); };
+  return { dx: pick(3, 14), dy: pick(9, 5) };
+}
+
 // The report, in one place. Both the downloadable file and the print view are built from
 // here — a report that differed between the two would be worse than either.
 function reportHtml_(a, items, withSign, forPrint, sigs) {
@@ -2079,13 +2090,14 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
 
   // Signatures side by side in a table, not a flex box: print engines lay tables out
   // reliably, and a stacked block pushed the signatures onto a page of their own.
-  var col = function (heading, who, when, title, image) {
-    // A drawn signature sits above its line, as it would on paper. Without one the line is
-    // left empty for a pen, and only when a signature field was asked for.
-    // Ink over the line, not inside a box above it: the image keeps the size it was drawn
-    // at and hangs below its own line so it crosses it, the way a pen would.
+  var col = function (heading, who, when, title, image, jitter) {
+    // The ink comes last in the flow and is then pulled back up over the line and the label.
+    // Order is what decides overlap here: the converter draws elements as it meets them and
+    // ignores z-index, so anything written later would sit on top of the signature instead.
     var sigCell = image
-      ? '<div class="scv sig"><img src="' + image + '" alt=""></div><div class="scl sigl">Signature</div>'
+      ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>'
+        + '<div class="ink" style="margin:' + (-46 + jitter.dy) + 'px 0 0 ' + jitter.dx + 'px">'
+        + '<img src="' + image + '" alt=""></div>'
       : (withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : '');
     return '<div class="sch">' + heading + '</div>'
       + '<div class="scv">' + (who || '&nbsp;') + '</div><div class="scl">Name</div>'
@@ -2131,18 +2143,23 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
     + '.sch{font-weight:bold;margin:0 0 10px;line-height:1.25;height:2.5em;overflow:hidden}'
     + '.scv{border-bottom:1px solid #333;padding:2px 0 3px;min-height:19px}'
     + '.scl{font-size:8.5pt;color:#555;margin:2px 0 10px;font-family:Arial,Helvetica,sans-serif}'
-    + '.scv.sig{padding:0;border-bottom:1px solid #333;height:34px;overflow:visible}'
-    + '.scv.sig img{max-height:64px;display:block;margin:-26px 0 -12px 6px}'
-    + '.scl.sigl{margin-top:14px}'
+    // The line is the bottom border of a box of fixed height; the image is taller and
+    // hangs out of it, so it crosses the line without moving anything below. It must not
+    // reach the label — whatever comes later in the flow is drawn on top, and the word
+    // "Signature" would then sit over the ink.
+    + '.ink{height:0;overflow:visible;text-align:center}'
+    + '.ink img{max-height:58px;max-width:88%;display:inline-block}'
     + '</style></head><body>'
     + '<div class="lh"><span>' + esc(company) + '</span><span>Project Work Completion Report</span></div>'
     + '<h1>Project Work Completion Report</h1>'
     + '<table>' + rows + '</table>'
     + '<table class="srow"><tr>'
     + '<td valign="top">' + col('Performed by the Service Provider',
-        esc(trim_(a.EmployeeName) || trim_(a.EmployeeEmail)), submitted || '&mdash;', '', sigs.performer) + '</td>'
+        esc(trim_(a.EmployeeName) || trim_(a.EmployeeEmail)), submitted || '&mdash;', '',
+        sigs.performer, signatureJitter_(a.AssignmentID, 'performer')) + '</td>'
     + '<td valign="top">' + col('Accepted on behalf of ' + esc(company),
-        esc(trim_(a.AcceptedBy)), esc(date(a.AcceptedAt)), esc(trim_(a.AcceptedTitle)), sigs.acceptor) + '</td>'
+        esc(trim_(a.AcceptedBy)), esc(date(a.AcceptedAt)), esc(trim_(a.AcceptedTitle)),
+        sigs.acceptor, signatureJitter_(a.AssignmentID, 'acceptor')) + '</td>'
     + '</tr></table>'
     + '<div class="foot">CONFIDENTIAL</div>'
     + (forPrint
