@@ -102,6 +102,10 @@
     <div id="sigScreenErr"></div>
     <div id="sigScreenList" style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0"></div>
     <div id="sigScreenPadWrap" style="display:none">
+<div style="display:flex;gap:8px;align-items:center;margin:8px 0">
+          <span style="font-size:13px;color:#667">Ink</span>
+          <button onclick="sigInk('#1B3A8C')" title="blue" style="width:26px;height:26px;border-radius:50%;border:2px solid #DDE3EA;background:#1B3A8C;cursor:pointer"></button><button onclick="sigInk('#111111')" title="black" style="width:26px;height:26px;border-radius:50%;border:2px solid #DDE3EA;background:#111111;cursor:pointer"></button><button onclick="sigInk('#0B6E4F')" title="green" style="width:26px;height:26px;border-radius:50%;border:2px solid #DDE3EA;background:#0B6E4F;cursor:pointer"></button>
+        </div>
       <canvas id="sigScreenPad" style="width:100%;max-width:430px;height:170px;border:1px dashed #9AA7B5;
         border-radius:12px;background:#fff;touch-action:none;display:block"></canvas>
       <div style="height:10px"></div>
@@ -225,7 +229,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-08-08.143';
+const BUILD='2026-08-08.144';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -378,7 +382,8 @@ function sigCanvasSetup(id){
   cv.height = Math.round(box.height * ratio);
   const ctx = cv.getContext('2d');
   ctx.scale(ratio, ratio);
-  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
+  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = window.SIG_INK || '#1B3A8C';        // ink, not print: blue reads as signed by hand
   let drawing = false, empty = true;
   const at = e => {
     const r = cv.getBoundingClientRect();
@@ -394,6 +399,25 @@ function sigCanvasSetup(id){
   cv.dataset.ready = '1';
   cv.__isEmpty = () => empty;
   cv.__reset = () => { ctx.clearRect(0,0,cv.width,cv.height); empty = true; };
+  cv.__setInk = c => { window.SIG_INK = c; ctx.strokeStyle = c; };
+  // Store what was drawn, not the empty canvas around it: the report then places the
+  // signature at its natural size instead of stretching a mostly blank picture.
+  cv.__trimmed = () => {
+    const w = cv.width, h = cv.height, px = ctx.getImageData(0,0,w,h).data;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0, found = false;
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+      if(px[(y*w+x)*4+3] > 8){ found = true;
+        if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+    }
+    if(!found) return cv.toDataURL('image/png');
+    const pad = Math.round(6 * (window.devicePixelRatio||1));
+    x0 = Math.max(0, x0-pad); y0 = Math.max(0, y0-pad);
+    x1 = Math.min(w-1, x1+pad); y1 = Math.min(h-1, y1+pad);
+    const out = document.createElement('canvas');
+    out.width = x1-x0+1; out.height = y1-y0+1;
+    out.getContext('2d').drawImage(cv, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+    return out.toDataURL('image/png');
+  };
   return cv;
 }
 function sigShowPad(){
@@ -415,13 +439,19 @@ function sigScreenShowPad(){
   $('sigScreenAdd').style.display = 'none';
   sigCanvasSetup('sigScreenPad');
 }
+// The colour applies to what is drawn next; the reports keep whatever colour each was
+// signed in.
+function sigInk(c){
+  ['sigScreenPad','sigPad'].forEach(id=>{ const cv=$(id); if(cv && cv.__setInk) cv.__setInk(c); });
+  window.SIG_INK = c;
+}
 function sigScreenClear(){ const cv = $('sigScreenPad'); if(cv && cv.__reset) cv.__reset(); }
 async function sigScreenSave(btn){
   const cv = $('sigScreenPad');
   if(!cv || cv.__isEmpty()){ notice('sigScreenErr','err','Draw the signature first.'); return; }
   const old = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
   try{
-    await api('signature_save', auth({ image: cv.toDataURL('image/png'), label: $('sigScreenLabel').value.trim() }));
+    await api('signature_save', auth({ image: cv.__trimmed(), label: $('sigScreenLabel').value.trim() }));
     cv.__reset(); $('sigScreenLabel').value = '';
     $('sigScreenPadWrap').style.display = 'none'; $('sigScreenAdd').style.display = '';
     await sigLoad();
@@ -458,7 +488,7 @@ async function sigSave(btn){
   if(!cv || cv.__isEmpty()){ notice('submitMsg','err','Draw the signature first.'); return; }
   const old = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
   try{
-    await api('signature_save', auth({ image: cv.toDataURL('image/png'), label: $('sigLabel').value.trim() }));
+    await api('signature_save', auth({ image: cv.__trimmed(), label: $('sigLabel').value.trim() }));
     cv.__reset(); $('sigLabel').value = '';
     $('sigPadWrap').style.display = 'none'; $('sigAddBtn').style.display = '';
     await sigLoad();

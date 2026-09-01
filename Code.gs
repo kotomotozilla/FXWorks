@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.143';
+const BUILD = '2026-08-08.144';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -144,6 +144,7 @@ function route_(action, d) {
     case 'report_pdf':         return reportPdf_(d);
     case 'report_html':        return reportHtmlRoute_(d);
     case 'pdf_inspect':        return pdfInspect_(d);
+    case 'pdf_files':          return pdfFiles_(d);
     case 'signature_list':     return signatureList_(d);
     case 'signature_save':     return signatureSave_(d);
     case 'signature_delete':   return signatureDelete_(d);
@@ -2081,8 +2082,10 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
   var col = function (heading, who, when, title, image) {
     // A drawn signature sits above its line, as it would on paper. Without one the line is
     // left empty for a pen, and only when a signature field was asked for.
+    // Ink over the line, not inside a box above it: the image keeps the size it was drawn
+    // at and hangs below its own line so it crosses it, the way a pen would.
     var sigCell = image
-      ? '<div class="scv sig"><img src="' + image + '" alt=""></div><div class="scl">Signature</div>'
+      ? '<div class="scv sig"><img src="' + image + '" alt=""></div><div class="scl sigl">Signature</div>'
       : (withSign ? '<div class="scv">&nbsp;</div><div class="scl">Signature</div>' : '');
     return '<div class="sch">' + heading + '</div>'
       + '<div class="scv">' + (who || '&nbsp;') + '</div><div class="scl">Name</div>'
@@ -2128,8 +2131,9 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
     + '.sch{font-weight:bold;margin:0 0 10px;line-height:1.25;height:2.5em;overflow:hidden}'
     + '.scv{border-bottom:1px solid #333;padding:2px 0 3px;min-height:19px}'
     + '.scl{font-size:8.5pt;color:#555;margin:2px 0 10px;font-family:Arial,Helvetica,sans-serif}'
-    + '.scv.sig{padding-bottom:0;height:52px;position:relative}'
-    + '.scv.sig img{max-height:48px;max-width:100%;display:block;margin:0 auto -2px}'
+    + '.scv.sig{padding:0;border-bottom:1px solid #333;height:34px;overflow:visible}'
+    + '.scv.sig img{max-height:64px;display:block;margin:-26px 0 -12px 6px}'
+    + '.scl.sigl{margin-top:14px}'
     + '</style></head><body>'
     + '<div class="lh"><span>' + esc(company) + '</span><span>Project Work Completion Report</span></div>'
     + '<h1>Project Work Completion Report</h1>'
@@ -2153,16 +2157,52 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
 
 // What is really inside a file we produced. The dates a file manager shows belong to the
 // filesystem and prove nothing; these are read out of the document itself.
+// Everything we hold as a PDF, newest first — attachments of contracts and projects, and
+// the report files built for the customer's system.
+function pdfFiles_(d) {
+  requireAdmin_(d);
+  var out = [];
+  readAll_(SHEETS.attachments).forEach(function (r) {
+    if (!/\.pdf$/i.test(String(r.FileName || ''))) return;
+    out.push({ fileId: String(r.DriveFileID), name: String(r.FileName),
+               where: String(r.ParentType || '') + (r.DocType ? ' · ' + r.DocType : ''),
+               createdAt: String(r.CreatedAt || '') });
+  });
+  try {
+    var files = attachmentsFolder_().getFilesByType('application/pdf');
+    var seen = {};
+    out.forEach(function (x) { seen[x.fileId] = 1; });
+    while (files.hasNext()) {
+      var f = files.next();
+      if (seen[f.getId()]) continue;
+      out.push({ fileId: f.getId(), name: f.getName(), where: 'generated',
+                 createdAt: f.getDateCreated().toISOString() });
+    }
+  } catch (e) {}
+  out.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
+  return { ok: true, files: out.slice(0, 200) };
+}
+
 function pdfInspect_(d) {
   requireAdmin_(d);
   var url = pdfServiceUrl_();
   if (!url) return { ok: false, error: 'PDF service is not configured' };
-  var fileId = trim_(d.fileId);
-  if (!fileId) return { ok: false, error: 'No file' };
+  var blob;
+  if (d.dataBase64) {
+    try {
+      blob = Utilities.newBlob(Utilities.base64Decode(String(d.dataBase64)), 'application/pdf',
+                               trim_(d.fileName) || 'upload.pdf');
+    } catch (e) { return { ok: false, error: 'Could not read the uploaded file' }; }
+  } else if (trim_(d.fileId)) {
+    try { blob = DriveApp.getFileById(trim_(d.fileId)).getBlob(); }
+    catch (e) { return { ok: false, error: 'File not found on Drive' }; }
+  } else {
+    return { ok: false, error: 'No file' };
+  }
   var base = url.replace(/\/+$/, '');
   try {
     var res = UrlFetchApp.fetch(base + '/inspect', {
-      method: 'post', payload: { file: DriveApp.getFileById(fileId).getBlob() },
+      method: 'post', payload: { file: blob },
       muteHttpExceptions: true, headers: pdfAuthHeaders_(base)
     });
     if (res.getResponseCode() !== 200) {

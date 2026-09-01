@@ -117,6 +117,7 @@
       <button id="tab-costs" onclick="switchTab('costs')">Costs</button>
       <button id="tab-v2" onclick="switchTab('v2')">Contracts 2.0</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
+      <button id="tab-pdf" onclick="switchTab('pdf')">PDF check</button>
     </div>
 
     <!-- PROJECTS -->
@@ -329,6 +330,23 @@
     </section>
 
     <!-- DATA -->
+    <section id="view-pdf" class="hidden">
+      <div class="panel">
+        <h2>PDF check</h2>
+        <p class="muted">What a file says about itself — the dates written inside it, not the ones a file
+          manager shows. Pick a document the system holds, or open any PDF from this device.</p>
+        <div id="pdfCheckErr"></div>
+        <div class="row" style="align-items:flex-end">
+          <div style="flex:2;min-width:220px"><label>A document in the system</label>
+            <select id="pdfCheckPick"></select></div>
+          <div style="flex:0 0 auto"><button class="btn sm" onclick="pdfCheckPicked(this)">Check</button></div>
+          <div style="flex:0 0 auto"><label>Or a file from this device</label>
+            <input id="pdfCheckFile" type="file" accept="application/pdf" onchange="pdfCheckUpload(this)"></div>
+        </div>
+        <div id="pdfCheckOut" style="margin-top:14px"></div>
+      </div>
+    </section>
+
     <section id="view-data" class="hidden">
       <div class="panel">
         <h2>Signatures</h2>
@@ -343,6 +361,10 @@
             <input id="sigAdminLabel" placeholder="full name, initials…"></div>
         </div>
         <div style="height:10px"></div>
+<div style="display:flex;gap:8px;align-items:center;margin:8px 0">
+          <span style="font-size:13px;color:#667">Ink</span>
+          <button onclick="sigAdminInk('#1B3A8C')" title="blue" style="width:26px;height:26px;border-radius:50%;border:2px solid #DDE3EA;background:#1B3A8C;cursor:pointer"></button><button onclick="sigAdminInk('#111111')" title="black" style="width:26px;height:26px;border-radius:50%;border:2px solid #DDE3EA;background:#111111;cursor:pointer"></button><button onclick="sigAdminInk('#0B6E4F')" title="green" style="width:26px;height:26px;border-radius:50%;border:2px solid #DDE3EA;background:#0B6E4F;cursor:pointer"></button>
+        </div>
         <canvas id="sigAdminPad" style="width:100%;max-width:430px;height:150px;border:1px dashed #9AA7B5;
           border-radius:10px;background:#fff;touch-action:none;display:block"></canvas>
         <div style="height:10px"></div>
@@ -913,7 +935,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.143';
+const BUILD = '2026-08-08.144';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -993,8 +1015,8 @@ function enterApp(){
 }
 function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){
-  ['projects','contracts','invoices','counterparties','perf','pay','costs','v2','data'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data'){ loadData(); sigAdminInit(); } if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
+  ['projects','contracts','invoices','counterparties','perf','pay','costs','v2','data','pdf'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
+  if(t==='data'){ loadData(); sigAdminInit(); } if(t==='pdf') pdfCheckInit(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
   document.querySelector('.wrap').classList.toggle('wide', t==='costs' || t==='perf' || t==='pay');
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
@@ -4221,6 +4243,53 @@ function accSignatoryChange(){
   if(s) $('acc_role').value = s.title || '';
 }
 let ACC_ID = '', PDF_AFTER_UPLIFT = false;
+// ── PDF check ──
+// A place to look, instead of a dialog box after every generated file.
+async function pdfCheckInit(){
+  const sel = $('pdfCheckPick'); if(!sel) return;
+  sel.innerHTML = '<option>Loading…</option>';
+  try{
+    const r = await api('pdf_files',{});
+    const files = r.files||[];
+    sel.innerHTML = files.length
+      ? files.map(f=>`<option value="${esc(f.fileId)}">${esc(f.name)}${f.where?' · '+esc(f.where):''}</option>`).join('')
+      : '<option value="">nothing stored yet</option>';
+  }catch(e){ sel.innerHTML='<option value="">—</option>'; notice('pdfCheckErr','err', esc(e.message)); }
+}
+function pdfCheckShow(i){
+  if(i.ok===false){ notice('pdfCheckErr','err', esc(i.error||'Could not read the file')); return; }
+  notice('pdfCheckErr','','');
+  const info = Object.entries(i.info||{}).map(([k,v])=>`<tr><td class="muted">${esc(k)}</td><td>${esc(v)}</td></tr>`).join('');
+  $('pdfCheckOut').innerHTML = `
+    <table style="max-width:640px">
+      <tr><td class="muted" style="width:38%">Created</td><td><b>${esc(i.creation_date||'—')}</b></td></tr>
+      <tr><td class="muted">Modified</td><td><b>${esc(i.mod_date||'—')}</b></td></tr>
+      <tr><td class="muted">XMP metadata</td><td>${i.has_xmp?'<b style="color:var(--warn)">present</b>':'none'}</td></tr>
+      <tr><td class="muted">Revisions in the file</td><td>${i.revisions}${i.revisions>1?' <span class="muted">— appended, not rewritten</span>':''}</td></tr>
+      <tr><td class="muted">Object streams</td><td>${i.object_streams}</td></tr>
+      <tr><td class="muted">Format</td><td>PDF ${esc(i.version)} · ${i.pages} page(s) · ${Math.round((i.size||0)/1024)} KB</td></tr>
+    </table>
+    <div style="height:12px"></div>
+    <div class="muted" style="font-size:13px">Info dictionary as written in the file:</div>
+    <table style="max-width:640px">${info||'<tr><td class="muted">empty</td></tr>'}</table>`;
+}
+async function pdfCheckPicked(btn){
+  const id = $('pdfCheckPick').value;
+  if(!id){ notice('pdfCheckErr','err','Nothing to check.'); return; }
+  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try{ pdfCheckShow(await api('pdf_inspect',{fileId:id})); }
+  catch(e){ notice('pdfCheckErr','err', esc(e.message)); }
+  finally{ btn.disabled = false; btn.textContent = t; }
+}
+async function pdfCheckUpload(input){
+  const f = input.files && input.files[0]; if(!f) return;
+  notice('pdfCheckErr','info','Reading '+esc(f.name)+'…');
+  try{
+    pdfCheckShow(await api('pdf_inspect',{ fileName:f.name, dataBase64: await fileToBase64(f) }));
+  }catch(e){ notice('pdfCheckErr','err', esc(e.message)); }
+  finally{ input.value=''; }
+}
+
 // ── Signatures, from the admin side ──
 let SIG_PAD_READY = false;
 function sigPadSetup(id){
@@ -4229,7 +4298,8 @@ function sigPadSetup(id){
   const box = cv.getBoundingClientRect();
   cv.width = Math.round(box.width * ratio); cv.height = Math.round(box.height * ratio);
   const ctx = cv.getContext('2d'); ctx.scale(ratio, ratio);
-  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
+  ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = window.SIG_INK || '#1B3A8C';        // ink, not print: blue reads as signed by hand
   let drawing = false, empty = true;
   const at = e => { const r = cv.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e;
                     return { x: p.clientX - r.left, y: p.clientY - r.top }; };
@@ -4242,8 +4312,28 @@ function sigPadSetup(id){
   cv.dataset.ready = '1';
   cv.__isEmpty = () => empty;
   cv.__reset = () => { ctx.clearRect(0,0,cv.width,cv.height); empty = true; };
+  cv.__setInk = c => { window.SIG_INK = c; ctx.strokeStyle = c; };
+  // Store what was drawn, not the empty canvas around it: the report then places the
+  // signature at its natural size instead of stretching a mostly blank picture.
+  cv.__trimmed = () => {
+    const w = cv.width, h = cv.height, px = ctx.getImageData(0,0,w,h).data;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0, found = false;
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+      if(px[(y*w+x)*4+3] > 8){ found = true;
+        if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+    }
+    if(!found) return cv.toDataURL('image/png');
+    const pad = Math.round(6 * (window.devicePixelRatio||1));
+    x0 = Math.max(0, x0-pad); y0 = Math.max(0, y0-pad);
+    x1 = Math.min(w-1, x1+pad); y1 = Math.min(h-1, y1+pad);
+    const out = document.createElement('canvas');
+    out.width = x1-x0+1; out.height = y1-y0+1;
+    out.getContext('2d').drawImage(cv, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+    return out.toDataURL('image/png');
+  };
   return cv;
 }
+function sigAdminInk(c){ const cv=$('sigAdminPad'); if(cv && cv.__setInk) cv.__setInk(c); window.SIG_INK=c; }
 function sigAdminClear(){ const cv = $('sigAdminPad'); if(cv && cv.__reset) cv.__reset(); }
 function sigAdminOwnerChange(){}
 
@@ -4288,7 +4378,7 @@ async function sigAdminSave(btn){
   const sel = $('sigOwner'), who = (sel.__people||[])[+sel.value] || {};
   const old = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
   try{
-    await api('signature_save',{ image: cv.toDataURL('image/png'), label: $('sigAdminLabel').value.trim(),
+    await api('signature_save',{ image: cv.__trimmed(), label: $('sigAdminLabel').value.trim(),
       ownerEmail: who.email || '', ownerName: who.name || '' });
     cv.__reset(); $('sigAdminLabel').value = '';
     notice('sigAdminErr','ok','Signature saved.');
@@ -4561,14 +4651,7 @@ async function reportPdfFile(aid, btn){
     }
     // Read the dates back out of the file itself — a file manager would show the ones
     // belonging to the filesystem, which prove nothing.
-    let seen = '';
-    try{
-      const i = await api('pdf_inspect',{fileId:r.fileId});
-      if(i.ok!==false) seen = `\n\nInside the file:\n  created  ${i.creation_date||'—'}`
-        + `\n  modified ${i.mod_date||'—'}\n  XMP: ${i.has_xmp?'present':'none'}`
-        + ` · revisions: ${i.revisions} · ${i.pages} page(s)`;
-    }catch(e){}
-    alert(`Report PDF ready.\n  submitted ${r.created}\n  accepted  ${r.modified}` + seen);
+    // No dialog: the dates can be looked up on the PDF check tab whenever they matter.
     window.open(r.url, '_blank');
   }catch(e){ alert(e.message); }
   finally{ btn.disabled = false; btn.textContent = t; }
