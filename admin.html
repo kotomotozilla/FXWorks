@@ -935,7 +935,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.148';
+const BUILD = '2026-08-08.150';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -2854,7 +2854,10 @@ function payRender(){
         <td class="num">${cur(x.line.currency)}${money(x.line.amount)}</td>
         <td class="muted" style="max-width:280px;font-size:12px">${esc(x.line.reference||'—')}</td>
         <td><select id="pay_sel_${i}" onchange="payDiff(${i})" style="font-size:12px">${opts(x.match?x.match.id:'')}</select>
-          ${x.match&&projectOfId(x.match.id)?`<div style="margin-top:4px"><a href="#" onclick="payOpenProject('${esc(projectOfId(x.match.id))}');return false;" style="font-size:12px">open the project</a></div>`:''}</td>
+          ${x.match?`<div style="margin-top:4px;font-size:12px">
+              ${projectOfId(x.match.id)?`<a href="#" onclick="payOpenProject('${esc(projectOfId(x.match.id))}');return false;">open the project</a>`:''}
+              ${x.match.pdfUrl?`${projectOfId(x.match.id)?' · ':''}<a href="${esc(x.match.pdfUrl)}" target="_blank" rel="noopener">report PDF ↗</a>`:''}
+            </div>`:''}</td>
         <td class="num" id="pay_diff_${i}">${x.match?payDiffText(x.line, x.match, x.gapDays):'—'}</td></tr>`).join('');
 }
 function payDiffText(line, c, gap){
@@ -2949,7 +2952,7 @@ function perfRender(){
     return `<th class="srt ${cls||''}" onclick="perfSort('${k}')">${label}${arr}</th>`;
   };
   tb.innerHTML = '<tr>'+th('date','Submitted')+th('accepted','Accepted')+th('project','Project')+th('contract','Their contract')
-    + th('job','Work for')+th('hours','Hours','num')+th('fee','Fee','num')+th('uplift','Uplift','num')+th('status','Status')+'</tr>'
+    + th('job','Work for')+th('hours','Hours','num')+th('fee','Fee','num')+th('uplift','Uplift','num')+th('status','Status &amp; file')+'</tr>'
     + (rows.length ? rows.map(a=>{
         const s=cur(a.Currency), fee=feeOf(a), up=upOf(a);
         return `<tr>
@@ -2964,7 +2967,8 @@ function perfRender(){
           <td class="num">${a.PricingType==='lump'?'—':(a.ReportedHours||'—')}</td>
           <td class="num">${fee?s+money(fee):'—'}</td>
           <td class="num">${up?`${s}${money(up)} <span class="muted">${esc(a.UpliftPercent)}%</span>`:'—'}</td>
-          <td><span class="tag ${a.AcceptedBy?'submitted':esc(a.Status)}">${esc(a.AcceptedBy?'accepted':statusEn(a.Status))}</span></td>
+          <td><span class="tag ${a.AcceptedBy?'submitted':esc(a.Status)}">${esc(a.AcceptedBy?'accepted':statusEn(a.Status))}</span>
+            ${a.ReportPdfUrl?` <a href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener" style="font-size:12px">PDF ↗</a>`:''}</td>
         </tr>`;
       }).join('')
       : '<tr><td class="empty" colspan="9">No reports in this period.</td></tr>');
@@ -4095,7 +4099,10 @@ function renderProjectModal(){
         <button class="btn ghost sm" onclick="saveComment('${a.AssignmentID}',this)">Save comment</button>
         ${toggle}${acceptBtn}${remindBtn}${reportBtn}
         <button class="btn ghost sm" onclick="pdfFromList('${a.AssignmentID}')">PDF</button>
-        <button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this)" title="A PDF file dated by the business dates: created on the day of submission, modified on the day of acceptance">PDF file</button>
+        ${a.ReportPdfUrl
+          ? `<a class="btn ghost sm" href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener" title="Built ${esc(fmtDate(a.ReportPdfAt)||'')}">PDF file ↗</a>
+             <button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this,true)" title="Build it again from the current data">rebuild</button>`
+          : `<button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this)" title="A PDF file dated by the business dates: created on the day of submission, modified on the day of acceptance">PDF file</button>`}
         <button class="btn warn sm" onclick="deleteAssignment('${a.AssignmentID}',this)">Delete</button>
       </div>
     </div>`;
@@ -4252,7 +4259,12 @@ async function pdfCheckInit(){
     const r = await api('pdf_files',{});
     const files = r.files||[];
     sel.innerHTML = files.length
-      ? files.map(f=>`<option value="${esc(f.fileId)}">${esc(f.name)}${f.where?' · '+esc(f.where):''}</option>`).join('')
+      ? files.map(f=>{
+          const when = f.createdAt ? fmtDate(f.createdAt) : '';
+          const what = f.about || f.where || '';
+          return `<option value="${esc(f.fileId)}">${esc(f.name.replace(/\.pdf$/i,''))}`
+               + `${what?' — '+esc(what):''}${when?' · '+esc(when):''}</option>`;
+        }).join('')
       : '<option value="">nothing stored yet</option>';
   }catch(e){ sel.innerHTML='<option value="">—</option>'; notice('pdfCheckErr','err', esc(e.message)); }
 }
@@ -4673,11 +4685,11 @@ async function printReportPdf(){
 // from the project's report list (uses saved data)
 // The file for the customer's system: assembled on the server so its metadata can be
 // rewritten — created on the day the report was submitted, modified on the day it was accepted.
-async function reportPdfFile(aid, btn){
+async function reportPdfFile(aid, btn, rebuild){
   const withSign = confirm('Add a signature field at the bottom of the PDF?');
   const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
   try{
-    const r = await api('report_pdf',{assignmentId:aid, withSignature:withSign});
+    const r = await api('report_pdf',{assignmentId:aid, withSignature:withSign, rebuild:!!rebuild});
     if(!r.normalised){
       alert('The file was created, but the PDF service did not rewrite it'
         + (r.note ? ':\n' + r.note : ' (not configured).')
@@ -4690,6 +4702,7 @@ async function reportPdfFile(aid, btn){
     // The download link, not Drive's viewer — the viewer offers to share a link, while this
     // hands over the file, so "Save to Files" appears where it should.
     window.open(r.downloadUrl || r.url, '_blank');
+    if(typeof refreshModal==='function'){ try{ await refreshModal(); }catch(_){} }
   }catch(e){ alert(e.message); }
   finally{ btn.disabled = false; btn.textContent = t; }
 }

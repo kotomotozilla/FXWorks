@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.148';
+const BUILD = '2026-08-08.150';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -76,6 +76,7 @@ const HEADERS = {
                 'UpliftGranted', 'UpliftBase', 'UpliftK1', 'UpliftK2', 'UpliftK3',
                 'UpliftPercent', 'UpliftAmount', 'UpliftNote', 'UpliftSetBy', 'UpliftSetAt',
                 'PerformerSignatureID', 'AcceptorSignatureID',
+                'ReportPdfID', 'ReportPdfUrl', 'ReportPdfAt',
                 'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
@@ -2042,17 +2043,35 @@ function reportPdf_(d) {
   var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
   if (!a) return { ok: false, error: 'Report not found' };
 
+  // Already built, and nothing asked for a fresh one: hand back what exists.
+  if (!truthy_(d.rebuild) && trim_(a.ReportPdfID)) {
+    try {
+      var have = DriveApp.getFileById(trim_(a.ReportPdfID));
+      return { ok: true, url: have.getUrl(), fileId: have.getId(), name: have.getName(),
+               downloadUrl: 'https://drive.google.com/uc?export=download&id=' + have.getId(),
+               created: trim_(a.SubmittedAt), modified: trim_(a.AcceptedAt) || trim_(a.SubmittedAt),
+               reused: true, normalised: true };
+    } catch (e) {}          // deleted from Drive — fall through and build it again
+  }
+
   var items = readAll_(SHEETS.entries).filter(function (r) { return String(r.AssignmentID) === String(a.AssignmentID); });
   var submitted = trim_(a.SubmittedAt) || trim_(a.ReleasedAt) || new Date().toISOString().slice(0, 10);
   var accepted = trim_(a.AcceptedAt);
 
   var html = reportHtml_(a, items, truthy_(d.withSignature), false, reportSignatures_(a));
-  var name = 'Report ' + String(a.AssignmentID).slice(0, 8) + ' ' + submitted + '.pdf';
+  var name = reportFileName_(a, submitted);
   var blob = Utilities.newBlob(html, 'text/html', name).getAs('application/pdf').setName(name);
 
   var norm = pdfNormalise_(blob, pdfStamp_(submitted, '12:00'), pdfStamp_(accepted || submitted, '12:00'),
                            { Title: PDF_META.title, Producer: PDF_META.producer, Creator: PDF_META.producer });
   var file = attachmentsFolder_().createFile(norm.ok ? norm.blob : blob);
+  // Remember it on the report: the file can then be opened from anywhere it is listed,
+  // without building it again.
+  var prev = trim_(a.ReportPdfID);
+  if (prev && prev !== file.getId()) { try { DriveApp.getFileById(prev).setTrashed(true); } catch (e) {} }
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, {
+    ReportPdfID: file.getId(), ReportPdfUrl: file.getUrl(), ReportPdfAt: new Date().toISOString()
+  });
   return { ok: true, url: file.getUrl(), fileId: file.getId(), name: name,
            // Drive's viewer offers to share a link; this one hands over the file itself,
            // so "Save to Files" appears where it should.
@@ -2070,6 +2089,28 @@ function signatureJitter_(seed, salt) {
   for (var i = 0; i < str.length; i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
   var pick = function (n, span) { return ((Math.abs(h >> n) % (span * 2 + 1)) - span); };
   return { dx: pick(3, 22), dy: pick(9, 11) };
+}
+
+// A file name someone can read: date, project, who did the work. The eight hex characters
+// of an identifier told nobody anything, and a folder full of them is unusable.
+function reportFileName_(a, submitted) {
+  var clean = function (x, max) {
+    var t = String(x || '').replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (t.length <= max) return t;
+    var cut = t.slice(0, max);
+    var space = cut.lastIndexOf(' ');
+    return (space > max * 0.6 ? cut.slice(0, space) : cut).trim();
+  };
+  // Family name and an initial: "Shukhrat Tashpulotov" -> "S Tashpulotov".
+  var who = clean(trim_(a.EmployeeName) || trim_(a.EmployeeEmail).split('@')[0], 40);
+  var parts = who.split(' ');
+  if (parts.length > 1) who = parts[0].charAt(0) + ' ' + parts[parts.length - 1];
+
+  // RPT up front marks it as a report at a glance in a folder of mixed documents; the
+  // submission date, compact, closes the name.
+  return ['RPT', clean(a.ProjectName, 34), who].filter(function (x) { return x; }).join(' · ')
+    + ' · ' + String(submitted || '').slice(0, 10).replace(/-/g, '')
+    + ' (' + String(a.AssignmentID).slice(0, 6) + ').pdf';
 }
 
 // The report, in one place. Both the downloadable file and the print view are built from
@@ -2183,11 +2224,25 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
 function pdfFiles_(d) {
   requireAdmin_(d);
   var out = [];
+  // Reports made before names got readable are matched back to their assignment, so the
+  // list says what they are rather than showing six hex characters.
+  var byShortId = {};
+  readAll_(SHEETS.assignments).forEach(function (a) {
+    byShortId[String(a.AssignmentID).slice(0, 8)] = a;
+    byShortId[String(a.AssignmentID).slice(0, 6)] = a;
+  });
+  var describe = function (fileName) {
+    var m = String(fileName).match(/(?:Report[ _])([0-9a-f]{6,8})|\(([0-9a-f]{6,8})\)/i);
+    var a = m ? byShortId[(m[1] || m[2]).toLowerCase()] : null;
+    if (!a) return '';
+    return [trim_(a.ProjectName), trim_(a.EmployeeName) || trim_(a.EmployeeEmail)]
+      .filter(function (x) { return x; }).join(' · ');
+  };
   readAll_(SHEETS.attachments).forEach(function (r) {
     if (!/\.pdf$/i.test(String(r.FileName || ''))) return;
     out.push({ fileId: String(r.DriveFileID), name: String(r.FileName),
                where: String(r.ParentType || '') + (r.DocType ? ' · ' + r.DocType : ''),
-               createdAt: String(r.CreatedAt || '') });
+               about: describe(r.FileName), createdAt: String(r.CreatedAt || '') });
   });
   try {
     var files = attachmentsFolder_().getFilesByType('application/pdf');
@@ -2197,7 +2252,7 @@ function pdfFiles_(d) {
       var f = files.next();
       if (seen[f.getId()]) continue;
       out.push({ fileId: f.getId(), name: f.getName(), where: 'generated',
-                 createdAt: f.getDateCreated().toISOString() });
+                 about: describe(f.getName()), createdAt: f.getDateCreated().toISOString() });
     }
   } catch (e) {}
   out.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
@@ -4211,6 +4266,7 @@ function matchPayments_(d) {
       expected = payAmt;
     }
     return { id: trim_(a.AssignmentID), project: trim_(a.ProjectName), title: trim_(a.Title),
+             pdfUrl: trim_(a.ReportPdfUrl),          // so the settled report can be opened from here
              date: String(trim_(a.AcceptedAt) || trim_(a.SubmittedAt)).slice(0, 10),
              amount: expected, currency: expectedCur, indicative: indicative,
              baseAmount: base, baseCurrency: baseCur,
