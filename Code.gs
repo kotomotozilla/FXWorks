@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.153';
+const BUILD = '2026-08-08.154';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -146,6 +146,8 @@ function route_(action, d) {
     case 'report_html':        return reportHtmlRoute_(d);
     case 'pdf_inspect':        return pdfInspect_(d);
     case 'pdf_files':          return pdfFiles_(d);
+    case 'pdf_system_dates':   return pdfSystemDates_(d);
+    case 'pdf_apply':          return pdfApply_(d);
     case 'signature_list':     return signatureList_(d);
     case 'signature_save':     return signatureSave_(d);
     case 'signature_delete':   return signatureDelete_(d);
@@ -2257,6 +2259,70 @@ function pdfFiles_(d) {
   } catch (e) {}
   out.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
   return { ok: true, files: out.slice(0, 200) };
+}
+
+// What the system believes about a file: a report knows when it was submitted and accepted,
+// a contract document when it was signed and last amended. Offered as a starting point, so
+// nobody types dates by hand that we already hold.
+function pdfSystemDates_(d) {
+  requireAdmin_(d);
+  var fileId = trim_(d.fileId);
+  if (!fileId) return { ok: false, error: 'No file' };
+
+  var byPdf = readAll_(SHEETS.assignments).filter(function (a) { return trim_(a.ReportPdfID) === fileId; })[0];
+  if (byPdf) {
+    var sub = trim_(byPdf.SubmittedAt) || trim_(byPdf.ReleasedAt);
+    return { ok: true, created: sub, modified: trim_(byPdf.AcceptedAt) || sub,
+             title: PDF_META.title, producer: PDF_META.producer,
+             source: 'report of ' + (trim_(byPdf.EmployeeName) || trim_(byPdf.EmployeeEmail))
+                     + ' — submitted ' + (sub || '?')
+                     + (trim_(byPdf.AcceptedAt) ? ', accepted ' + trim_(byPdf.AcceptedAt) : ', not accepted yet') };
+  }
+
+  var att = readAll_(SHEETS.attachments).filter(function (r) { return trim_(r.DriveFileID) === fileId; })[0];
+  if (att && String(att.ParentType) === 'contract') {
+    var dates = contractDates_(String(att.ParentID));
+    var c = findRow_(SHEETS.contracts, 'ContractID', String(att.ParentID));
+    return { ok: true, created: dates.created, modified: dates.modified,
+             title: PDF_META.title, producer: PDF_META.producer,
+             source: 'contract ' + (c ? trim_(c.Number) : '')
+                     + ' — signed ' + dates.created
+                     + (dates.modified !== dates.created ? ', last amended ' + dates.modified : ', no amendments') };
+  }
+  if (att && trim_(att.DocDate)) {
+    return { ok: true, created: trim_(att.DocDate), modified: trim_(att.DocDate),
+             title: PDF_META.title, producer: PDF_META.producer,
+             source: 'attachment dated ' + trim_(att.DocDate) };
+  }
+  return { ok: true, created: '', modified: '', title: PDF_META.title, producer: PDF_META.producer,
+           source: 'the system holds no dates for this file' };
+}
+
+// Write the properties into the file itself, keeping its Drive id so every link to it
+// still works.
+function pdfApply_(d) {
+  requireAdmin_(d);
+  var fileId = trim_(d.fileId);
+  if (!fileId) return { ok: false, error: 'No file' };
+  if (!trim_(d.created)) return { ok: false, error: 'A creation date is required' };
+
+  var info = {};
+  if (trim_(d.title)) info.Title = trim_(d.title);
+  if (trim_(d.producer)) { info.Producer = trim_(d.producer); info.Creator = trim_(d.producer); }
+
+  var file = DriveApp.getFileById(fileId);
+  var r = pdfNormalise_(file.getBlob(), pdfStamp_(trim_(d.created), '12:00'),
+                        pdfStamp_(trim_(d.modified) || trim_(d.created), '12:00'), info);
+  if (!r.ok) return { ok: false, error: r.error || 'The PDF service did not answer' };
+
+  var resp = UrlFetchApp.fetch(
+    'https://www.googleapis.com/upload/drive/v3/files/' + fileId + '?uploadType=media&supportsAllDrives=true',
+    { method: 'patch', contentType: 'application/pdf', payload: r.blob.getBytes(),
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) {
+    return { ok: false, error: 'Could not write the file back: ' + resp.getContentText().slice(0, 200) };
+  }
+  return { ok: true, fileId: fileId };
 }
 
 function pdfInspect_(d) {

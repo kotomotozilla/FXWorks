@@ -338,12 +338,34 @@
         <div id="pdfCheckErr"></div>
         <div class="row" style="align-items:flex-end">
           <div style="flex:2;min-width:220px"><label>A document in the system</label>
-            <select id="pdfCheckPick"></select></div>
+            <select id="pdfCheckPick" onchange="pdfFillFromSystemQuiet()"></select></div>
           <div style="flex:0 0 auto"><button class="btn sm" onclick="pdfCheckPicked(this)">Check</button></div>
           <div style="flex:0 0 auto"><label>Or a file from this device</label>
             <input id="pdfCheckFile" type="file" accept="application/pdf" onchange="pdfCheckUpload(this)"></div>
         </div>
         <div id="pdfCheckOut" style="margin-top:14px"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Set the properties</h2>
+        <p class="muted">What gets written into the chosen document. The dates are the business ones —
+          for a report, submitted and accepted; for a contract, signed and last amended.</p>
+        <div id="pdfSetErr"></div>
+        <div class="row">
+          <div style="flex:1;min-width:190px"><label>Created</label><input id="pdfSetCreated" type="date"></div>
+          <div style="flex:1;min-width:190px"><label>Modified</label><input id="pdfSetModified" type="date"></div>
+        </div>
+        <div class="row">
+          <div style="flex:1;min-width:190px"><label>Title</label><input id="pdfSetTitle"></div>
+          <div style="flex:1;min-width:190px"><label>Producer / Creator</label><input id="pdfSetProducer"></div>
+        </div>
+        <div id="pdfSetSource" class="muted" style="font-size:13px;margin-top:8px"></div>
+        <div style="height:10px"></div>
+        <div class="acts">
+          <button class="btn sm" onclick="pdfApplyProps(this)">Write into the document</button>
+          <button class="btn ghost sm" onclick="pdfFillFromSystem(this)">Take from the system</button>
+          <button class="btn ghost sm" onclick="pdfFillFromFile(this)">Take from the file</button>
+        </div>
       </div>
     </section>
 
@@ -935,7 +957,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.153';
+const BUILD = '2026-08-08.154';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4267,7 +4289,64 @@ async function pdfCheckInit(){
         }).join('')
       : '<option value="">nothing stored yet</option>';
   }catch(e){ sel.innerHTML='<option value="">—</option>'; notice('pdfCheckErr','err', esc(e.message)); }
+  pdfFillFromSystemQuiet();
 }
+// Where the values in the form came from — filling them silently would leave no way to
+// tell a date read out of the file from one the system believes in.
+function pdfSetSource(text){ $('pdfSetSource').innerHTML = text ? '<b>Values from:</b> '+text : ''; }
+function pdfSetFill(v){
+  if(v.created !== undefined)  $('pdfSetCreated').value  = String(v.created||'').slice(0,10);
+  if(v.modified !== undefined) $('pdfSetModified').value = String(v.modified||'').slice(0,10);
+  if(v.title !== undefined)    $('pdfSetTitle').value    = v.title||'';
+  if(v.producer !== undefined) $('pdfSetProducer').value = v.producer||'';
+  pdfSetSource(v.source||'');
+}
+// "D:20260811120000+04'00'" as it sits in the file -> a date an input can show
+function pdfDateToInput(x){
+  const m = String(x||'').match(/^D:(\d{4})(\d{2})(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+async function pdfFillFromSystem(btn){
+  const id = $('pdfCheckPick').value;
+  if(!id){ notice('pdfSetErr','err','Choose a document first.'); return; }
+  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try{
+    const r = await api('pdf_system_dates',{fileId:id});
+    pdfSetFill({ created:r.created, modified:r.modified, title:r.title, producer:r.producer,
+                 source:'the system — '+esc(r.source||'') });
+    notice('pdfSetErr','','');
+  }catch(e){ notice('pdfSetErr','err', esc(e.message)); }
+  finally{ btn.disabled = false; btn.textContent = t; }
+}
+async function pdfFillFromFile(btn){
+  const id = $('pdfCheckPick').value;
+  if(!id){ notice('pdfSetErr','err','Choose a document first.'); return; }
+  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try{
+    const i = await api('pdf_inspect',{fileId:id});
+    pdfCheckShow(i);
+    pdfSetFill({ created: pdfDateToInput(i.creation_date), modified: pdfDateToInput(i.mod_date),
+                 title: (i.info||{})['/Title']||'', producer: (i.info||{})['/Producer']||'',
+                 source:'the document itself' });
+    notice('pdfSetErr','','');
+  }catch(e){ notice('pdfSetErr','err', esc(e.message)); }
+  finally{ btn.disabled = false; btn.textContent = t; }
+}
+async function pdfApplyProps(btn){
+  const id = $('pdfCheckPick').value;
+  if(!id){ notice('pdfSetErr','err','Choose a document first.'); return; }
+  if(!$('pdfSetCreated').value){ notice('pdfSetErr','err','A creation date is required.'); return; }
+  if(!confirm('Rewrite the properties of this document? The file keeps its place and its links.')) return;
+  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try{
+    await api('pdf_apply',{ fileId:id, created:$('pdfSetCreated').value, modified:$('pdfSetModified').value,
+                            title:$('pdfSetTitle').value.trim(), producer:$('pdfSetProducer').value.trim() });
+    notice('pdfSetErr','ok','Written. Below is what the file says now.');
+    pdfCheckShow(await api('pdf_inspect',{fileId:id}));
+  }catch(e){ notice('pdfSetErr','err', esc(e.message)); }
+  finally{ btn.disabled = false; btn.textContent = t; }
+}
+
 function pdfCheckShow(i){
   if(i.ok===false){ notice('pdfCheckErr','err', esc(i.error||'Could not read the file')); return; }
   notice('pdfCheckErr','','');
@@ -4284,6 +4363,15 @@ function pdfCheckShow(i){
     <div style="height:12px"></div>
     <div class="muted" style="font-size:13px">Info dictionary as written in the file:</div>
     <table style="max-width:640px">${info||'<tr><td class="muted">empty</td></tr>'}</table>`;
+}
+// Selecting a document fills the form with what we know about it, without a fuss.
+async function pdfFillFromSystemQuiet(){
+  const id = $('pdfCheckPick').value; if(!id) return;
+  try{
+    const r = await api('pdf_system_dates',{fileId:id});
+    pdfSetFill({ created:r.created, modified:r.modified, title:r.title, producer:r.producer,
+                 source:'the system — '+esc(r.source||'') });
+  }catch(e){}
 }
 async function pdfCheckPicked(btn){
   const id = $('pdfCheckPick').value;
