@@ -985,33 +985,15 @@
     <p class="muted" style="font-size:11px;margin:4px 0 0">The hours above are this person's own and are paid to
       them. What the contractor charges is entered below: it is a cost of the project, not part of anyone's fee.</p>
     <div id="rm_extWrap" style="display:none;margin-top:8px">
-      <div class="row">
-        <div style="flex:1;min-width:170px"><label>Contractor</label>
-          <input id="rm_extSupplier" placeholder="Wasat Technologies LLC"></div>
-        <div style="flex:2;min-width:190px"><label>Against the request or order</label>
-          <select id="rm_extRequest"></select></div>
-      </div>
-      <div class="row">
-        <div style="flex:1;min-width:110px"><label>Their role</label>
-          <input id="rm_extRole1" placeholder="Developer"></div>
-        <div style="max-width:100px"><label>Rate</label>
-          <input id="rm_extRate1" type="number" min="0" step="0.01" oninput="rmExtCalc()"></div>
-        <div style="max-width:100px"><label>Hours</label>
-          <input id="rm_extHours1" type="number" min="0" step="0.1" oninput="rmExtCalc()"></div>
-        <div style="flex:1;min-width:110px"><label>Second role</label>
-          <input id="rm_extRole2" placeholder="Project Manager"></div>
-        <div style="max-width:100px"><label>Rate</label>
-          <input id="rm_extRate2" type="number" min="0" step="0.01" oninput="rmExtCalc()"></div>
-        <div style="max-width:100px"><label>Hours</label>
-          <input id="rm_extHours2" type="number" min="0" step="0.1" oninput="rmExtCalc()"></div>
-      </div>
       <div class="row" style="align-items:end">
+        <div style="flex:2;min-width:220px"><label>Against the request or order</label>
+          <select id="rm_extRequest" onchange="rmExtRequestChange()"></select></div>
         <div style="max-width:190px"><label>Cost of the external work</label>
           <input id="rm_extAmount" type="number" min="0" step="0.01" placeholder="from their report" oninput="rmExtCalc()"></div>
         <div style="max-width:130px"><label>Currency</label>
-          <select id="rm_extCur"><option value="">as the report</option><option>USD</option><option>EUR</option><option>AED</option><option>SGD</option></select></div>
-        <div style="flex:1"><div id="rm_extCalc" class="muted" style="font-size:12px"></div></div>
+          <select id="rm_extCur" onchange="rmExtCalc()"><option value="">as the report</option><option>USD</option><option>EUR</option><option>AED</option><option>SGD</option></select></div>
       </div>
+      <div id="rm_extCalc" class="muted" style="font-size:12px;margin-top:4px"></div>
       <div id="rm_extState" class="muted" style="font-size:13px;margin:6px 0"></div>
       <button class="btn ghost sm" onclick="rmExtPick(this)">Upload their signed report</button>
     </div>
@@ -1035,7 +1017,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.169';
+const BUILD = '2026-08-08.170';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4953,13 +4935,6 @@ function rmExtShow(a){
   if(!$('rm_isExt')) return;
   const isExt = !!(a && a.ReportKind === 'ext_acceptance');
   $('rm_isExt').checked = isExt;
-  $('rm_extSupplier').value = (a && a.ExtSupplier) || '';
-  $('rm_extRole1').value = (a && a.ExtRole1) || '';
-  $('rm_extRate1').value = (a && a.ExtRate1) || '';
-  $('rm_extHours1').value = (a && a.ExtHours1) || '';
-  $('rm_extRole2').value = (a && a.ExtRole2) || '';
-  $('rm_extRate2').value = (a && a.ExtRate2) || '';
-  $('rm_extHours2').value = (a && a.ExtHours2) || '';
   $('rm_extAmount').value = (a && a.ExtAmount) || '';
   $('rm_extCur').value = (a && a.ExtCurrency) || '';
   const sel = $('rm_extRequest');
@@ -4979,21 +4954,25 @@ function rmExtToggle(){
   $('rm_extWrap').style.display = on ? '' : 'none';
   rmExtCalc();
 }
-// Their roles times their rates, against the total they stated. Where the two disagree, the
-// stated total is what we owe — their paper decides — but the difference is said out loud.
+// Picking the request says who the contractor is and in what currency they bill — both are
+// in the contract already.
+function rmExtRequestChange(){
+  const c = (CONTRACTS||[]).find(x=>String(x.ContractID)===String($('rm_extRequest').value));
+  if(c && !$('rm_extCur').value) $('rm_extCur').value = c.Currency || '';
+  rmExtCalc();
+}
 function rmExtCalc(){
   if(!$('rm_isExt') || !$('rm_isExt').checked){ $('rm_extCalc').textContent=''; return; }
-  const num = id => parseFloat(($(id).value||'').replace(',','.'))||0;
-  const computed = Math.round((num('rm_extRate1')*num('rm_extHours1')
-                             + num('rm_extRate2')*num('rm_extHours2'))*100)/100;
-  const stated = num('rm_extAmount');
-  const s = cur($('rm_extCur').value || (REP && REP.Currency) || 'USD');
-  $('rm_extCalc').innerHTML = computed
-    ? `Their hours × rates: ${s}${money(computed)}`
-      + (stated && Math.abs(stated-computed) >= 1
-          ? ` · <span style="color:var(--warn)">their total differs by ${s}${money(Math.abs(stated-computed))}</span>`
-          : (stated ? '' : ' — leave the cost empty to use this'))
-    : (stated ? `Cost of the external work: ${s}${money(stated)}` : '');
+  const c = (CONTRACTS||[]).find(x=>String(x.ContractID)===String($('rm_extRequest').value));
+  const amount = parseFloat(($('rm_extAmount').value||'').replace(',','.'))||0;
+  const s = cur($('rm_extCur').value || (c && c.Currency) || (REP && REP.Currency) || 'USD');
+  const who = c ? cpName(c.CounterpartyID) : '';
+  $('rm_extCalc').innerHTML = amount
+    ? `${who ? esc(who) : 'The contractor'} charges <b>${s}${money(amount)}</b> under this report`
+      + (c && c.ContractKind==='work_request' && c.Amount
+          ? ` <span class="muted">· ceiling ${esc(c.Currency||'')} ${money(c.Amount)}</span>` : '')
+    : (who ? `${esc(who)} — enter what they charge, from their signed report.`
+           : 'Pick the request, then enter what the contractor charges.');
 }
 function rmExtPick(btn){
   if(!REP) return;
@@ -5049,12 +5028,7 @@ async function saveAdminReport(markSubmitted){
       submittedDate:$('rm_date').value, markSubmitted:!!markSubmitted,
       reportKind: ext ? 'ext_acceptance' : '',
       requestContractId: ext ? $('rm_extRequest').value : '',
-      extSupplier: ext ? $('rm_extSupplier').value.trim() : '',
       extCurrency: ext ? $('rm_extCur').value : '',
-      extRole1: ext ? $('rm_extRole1').value.trim() : '', extRate1: ext ? $('rm_extRate1').value : '',
-      extHours1: ext ? $('rm_extHours1').value : '',
-      extRole2: ext ? $('rm_extRole2').value.trim() : '', extRate2: ext ? $('rm_extRate2').value : '',
-      extHours2: ext ? $('rm_extHours2').value : '',
       extAmount: ext ? $('rm_extAmount').value : ''});
     closeModal('repModal'); await refreshModal();
   }catch(e){ notice('rm_err','err', esc(e.message)); }

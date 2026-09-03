@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.169';
+const BUILD = '2026-08-08.170';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -90,7 +90,6 @@ const HEADERS = {
                 // own hours are their fee; what the contractor charges is a cost of the project
                 // and is kept apart — adding the two would pay our person the contractor's money.
                 'ReportKind', 'RequestContractID', 'ExtSupplier', 'ExtAmount', 'ExtCurrency',
-                'ExtRole1', 'ExtHours1', 'ExtRate1', 'ExtRole2', 'ExtHours2', 'ExtRate2',
                 'ExtPdfID', 'ExtPdfUrl', 'ExtPdfAt',
                 'OverrunApprovedBy', 'OverrunApprovedAt', 'OverrunPdfID', 'OverrunPdfUrl',
                 'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate'],
@@ -4296,10 +4295,12 @@ function adminSaveReport_(d) {
     extra.ReportKind = isExt ? 'ext_acceptance' : '';
     if (isExt) {
       extra.RequestContractID = trim_(d.requestContractId);
-      extra.ExtSupplier = trim_(d.extSupplier);
-      extra.ExtCurrency = trim_(d.extCurrency) || trim_(a.Currency);
-      extra.ExtRole1 = trim_(d.extRole1); extra.ExtHours1 = num_(d.extHours1); extra.ExtRate1 = num_(d.extRate1);
-      extra.ExtRole2 = trim_(d.extRole2); extra.ExtHours2 = num_(d.extHours2); extra.ExtRate2 = num_(d.extRate2);
+      // The contractor is whoever the request belongs to — no need to type a name that the
+      // contract already knows.
+      var req = trim_(d.requestContractId)
+        ? findRow_(SHEETS.contracts, 'ContractID', trim_(d.requestContractId)) : null;
+      extra.ExtSupplier = req ? cpName_(req.CounterpartyID) : trim_(d.extSupplier);
+      extra.ExtCurrency = trim_(d.extCurrency) || (req ? trim_(req.Currency) : '') || trim_(a.Currency);
       extra.ExtAmount = num_(d.extAmount);
     } else {
       extra.RequestContractID = ''; extra.ExtAmount = '';
@@ -4605,13 +4606,12 @@ function adminUnmatchPayment_(d) {
 // reported so far. Reports count separately, split into accepted (already owed) and
 // submitted-but-not-yet-accepted (likely to be owed). Drafts and recalled ones count
 // for nothing. Currencies are kept apart and also converted to USD for comparison.
-// What the contractor charges under this report: their own total where they stated one,
-// otherwise their roles times their rates.
+// What the contractor charges under this report. Their own signed report is the source; the
+// figure from it is what we record — breaking it down by role here would only duplicate a
+// document we already keep.
 function externalCost_(a) {
   if (trim_(a.ReportKind) !== 'ext_acceptance') return 0;
-  var stated = num_(a.ExtAmount);
-  if (stated) return stated;
-  return round2_(num_(a.ExtHours1) * num_(a.ExtRate1) + num_(a.ExtHours2) * num_(a.ExtRate2));
+  return num_(a.ExtAmount);
 }
 
 function reportDateOf_(a) {
