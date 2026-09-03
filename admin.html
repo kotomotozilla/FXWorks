@@ -461,13 +461,18 @@
   <div class="pj-only" style="border-left:3px solid var(--line);padding-left:10px">
     <label style="display:flex;align-items:center;gap:8px;font-weight:600">
       <input type="checkbox" id="pm_addContractor" onchange="pmContractorToggle()" style="width:auto;margin:0">
-      A contractor company reports, not one of our people</label>
-    <p class="muted" style="font-size:11px;margin:4px 0 0">Same acceptance and invoicing, but the work is billed
-      at two roles and rates, against a request with a budget ceiling.</p>
+      Third-party report</label>
+    <p class="muted" style="font-size:11px;margin:4px 0 0">A contractor company did the work and signs its own form.
+      Our person confirms it was done; acceptance on behalf of the company is separate, as always.
+      Their hours are billed at their own roles and rates — ours are not part of this report.</p>
     <div id="pm_contractorFields" style="display:none;margin-top:8px">
       <div class="row">
         <div style="flex:2"><label>Against the request or order</label><select id="pm_addRequest"></select></div>
-        <div style="flex:1;min-width:130px"><label>Second role</label>
+        <div style="flex:1;min-width:150px"><label>Confirmed by (our side)</label>
+          <input id="pm_addSupervisor" placeholder="who checked the work was done"></div>
+      </div>
+      <div class="row">
+        <div style="flex:1;min-width:130px"><label>Their second role</label>
           <input id="pm_addRole2" placeholder="Project Manager"></div>
         <div style="max-width:130px"><label>Its rate</label>
           <input id="pm_addRate2" type="number" min="0" step="0.01" placeholder="115"></div>
@@ -656,6 +661,15 @@
   </div>
   <div style="height:10px"></div>
   <div style="max-width:220px"><label>Date of acceptance</label><input id="acc_date" type="date"></div>
+
+  <div id="acc_ceiling" style="display:none;margin-top:12px;border-left:3px solid var(--warn);padding-left:10px">
+    <div id="acc_ceilingText" style="font-size:13px"></div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:600">
+      <input type="checkbox" id="acc_overrun" style="width:auto;margin:0">
+      The budget overrun is approved</label>
+    <p class="muted" style="font-size:11px;margin:4px 0 0">Ticking this accepts the report and produces a short
+      approval document on our letterhead — the request, the ceiling, the overrun and your signature.</p>
+  </div>
 
   <div style="height:12px"></div>
   <div class="row">
@@ -1001,7 +1015,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.161';
+const BUILD = '2026-08-08.163';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4217,6 +4231,11 @@ function renderProjectModal(){
       <div class="muted" style="font-size:12px">${a.ContractID?('Contract: '+esc(ctNumber(a.ContractID))+(a.PricingType==='lump'?' · lump sum':' · hourly')):'Counterparty rate · non-contractual'}</div>
       ${a.PayoutEstimate?`<div class="muted" style="font-size:12px">≈ ${cur(a.PayoutCurrency)}${money(a.PayoutEstimate)} at ${esc(a.PayoutFxRate)}${a.PayoutFxAsOf?' on '+esc(fmtDate(a.PayoutFxAsOf)):''} <span title="Indicative only: payment converts at the rate on the day it is made">(indicative)</span></div>`:''}
       ${a.AcceptedBy?`<div class="muted" style="font-size:12px">✓ Accepted by ${esc(a.AcceptedBy)}${a.AcceptedTitle?', '+esc(a.AcceptedTitle):''}${a.AcceptedAt?' on '+esc(fmtDate(a.AcceptedAt)):''}${String(a.UpliftGranted).toLowerCase()==='yes'?` · uplift ${esc(a.UpliftPercent)}% = ${cur(a.Currency)}${money(a.UpliftAmount)}`:''}${a.PayoutCurrency?' · payout in '+esc(a.PayoutCurrency):''}</div>`:(a.PayoutCurrency?`<div class="muted" style="font-size:12px">Payout currency: ${esc(a.PayoutCurrency)}</div>`:'')}
+      ${a.PerformerType==='contractor'?`<div style="margin-bottom:4px"><span class="tag draft">third-party report</span>`
+        + `${a.SupervisedBy?` <span class="muted">· confirmed by ${esc(a.SupervisedBy)}</span>`:''}</div>`:''}
+      ${a.OverrunPdfUrl?`<div style="margin-bottom:4px;font-size:13px"><span style="color:var(--warn)">over the ceiling</span>`
+        + ` · approved by ${esc(a.OverrunApprovedBy||'')}${a.OverrunApprovedAt?' on '+esc(fmtDate(a.OverrunApprovedAt)):''}`
+        + ` · <a href="${esc(a.OverrunPdfUrl)}" target="_blank" rel="noopener">approval ↗</a></div>`:''}
       ${(a.ReportedHours!==''&&a.ReportedHours!=null)?`<div class="muted" style="margin-bottom:4px">Reported: ${hrs(a.ReportedHours)} h${
           a.HoursSecondary?` + ${hrs(a.HoursSecondary)} h ${esc(a.SecondaryRole||'second role')}`:''
         } · ${s}${money(a.ReportedAmount||0)}${arithmeticNote(a)}</div>`:''}
@@ -4228,12 +4247,17 @@ function renderProjectModal(){
         <button class="btn ghost sm" onclick="saveComment('${a.AssignmentID}',this)">Save comment</button>
         ${toggle}${acceptBtn}${remindBtn}${reportBtn}
         <button class="btn ghost sm" onclick="pdfFromList('${a.AssignmentID}')">PDF</button>
-        ${a.ReportPdfUrl
-          ? `<a class="btn ghost sm" href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener" title="Built ${esc(fmtDate(a.ReportPdfAt)||'')}">PDF file ↗</a>
-             <button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this,true)" title="Build it again from the current data">rebuild</button>
-             <button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="Attach a ready PDF — a report signed on paper, or one made before the system">attach a file</button>`
-          : `<button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this)" title="A PDF file dated by the business dates: created on the day of submission, modified on the day of acceptance">PDF file</button>
-             <button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="Attach a ready PDF — a report signed on paper, or one made before the system">attach a file</button>`}
+        ${a.PerformerType === 'contractor'
+          ? (a.ReportPdfUrl
+              ? `<a class="btn ghost sm" href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener">their report ↗</a>
+                 <button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="Replace it with another file">replace the file</button>`
+              : `<button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="The contractor signs its own form — upload the signed PDF">attach their report</button>`)
+          : (a.ReportPdfUrl
+              ? `<a class="btn ghost sm" href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener" title="Built ${esc(fmtDate(a.ReportPdfAt)||'')}">PDF file ↗</a>
+                 <button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this,true)" title="Build it again from the current data">rebuild</button>
+                 <button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="Attach a ready PDF — a report signed on paper, or one made before the system">attach a file</button>`
+              : `<button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this)" title="A PDF file dated by the business dates: created on the day of submission, modified on the day of acceptance">PDF file</button>
+                 <button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="Attach a ready PDF — a report signed on paper, or one made before the system">attach a file</button>`)}
         <button class="btn warn sm" onclick="deleteAssignment('${a.AssignmentID}',this)">Delete</button>
       </div>
     </div>`;
@@ -4293,7 +4317,7 @@ function pmContractorToggle(){
   const sel = $('pm_addRequest');
   const orders = (CONTRACTS||[]).filter(c=>['work_order','work_request'].indexOf(c.ContractKind)>=0);
   sel.innerHTML = '<option value="">— not against a particular request —</option>'
-    + orders.map(c=>`<option value="${esc(c.ContractID)}">${esc(c.Number)}`
+    + orders.map(c=>`<option value="${esc(c.ContractID)}">${esc(c.Number)} · ${esc(cpName(c.CounterpartyID))}`
         + `${c.ContractKind==='work_request'?' · ceiling':' · fixed'}`
         + `${c.Amount?' '+esc(c.Currency||'')+' '+money(c.Amount):''}</option>`).join('');
 }
@@ -4322,6 +4346,7 @@ async function addAssignment(){
       contractId:($('pm_addContract')?$('pm_addContract').value:''), comment:$('pm_addComment').value.trim(),
       performerType: contractor ? 'contractor' : 'employee',
       requestContractId: contractor ? $('pm_addRequest').value : '',
+      supervisedBy: contractor ? $('pm_addSupervisor').value.trim() : '',
       secondaryRole: contractor ? $('pm_addRole2').value.trim() : '',
       rateSecondary: contractor ? $('pm_addRate2').value : '' }); await refreshModal(); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
@@ -4750,6 +4775,7 @@ async function accLoadSignatures(defaults){
 async function askAccept(aid){
   ACC_ID = aid;
   notice('acc_err','','');
+  if($('acc_ceiling')){ $('acc_ceiling').style.display='none'; $('acc_overrun').checked=false; }
   try{
     const r = await api('accept_defaults',{ assignmentId:aid });
     accFillSignatories(r.signatories, r.acceptedBy, r.acceptedTitle);
@@ -4792,7 +4818,23 @@ async function acceptNow(btn){
       payload.upliftK1 = $('acc_upK1').value; payload.upliftK2 = $('acc_upK2').value; payload.upliftK3 = $('acc_upK3').value;
       payload.upliftNote = $('acc_upNote').value.trim();
     }
-    const res = await api('accept_assignment', payload);
+    let res;
+    try{
+      res = await api('accept_assignment', Object.assign({}, payload,
+        { overrunApproved: $('acc_overrun') && $('acc_overrun').checked }));
+    }catch(e){
+      const w = e.data && e.data.ceilingWarning;
+      if(!w) throw e;
+      // The ceiling is a decision, not an obstacle: show what it would become and let the
+      // person accepting it say yes deliberately.
+      $('acc_ceiling').style.display = '';
+      $('acc_ceilingText').innerHTML = `<b>Past the budget ceiling.</b> ${esc(w.request)}: `
+        + `${esc(w.currency)} ${money(w.wouldBe)} accepted in total against a ceiling of `
+        + `${esc(w.currency)} ${money(w.ceiling)} — over by ${esc(w.currency)} `
+        + `${money(Math.round((w.wouldBe-w.ceiling)*100)/100)}.`;
+      notice('acc_err','err','Tick the approval below, then accept again.');
+      return;
+    }
     closeModal('acceptModal');
     // Patch what is already in memory instead of re-fetching the project, the report and the
     // whole project list one after another — that was four round trips for one click.

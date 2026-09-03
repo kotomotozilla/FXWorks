@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.161';
+const BUILD = '2026-08-08.163';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -67,7 +67,10 @@ const HEADERS = {
                 'UpliftK3Min', 'UpliftK3Max', 'UpliftNumber', 'UpliftDate', 'UpliftFrom',
                 // A framework agreement promises no volume and carries no total of its own; the
                 // money lives in the work orders issued under it.
-                'ContractKind', 'RfpReference', 'TargetAcceptance', 'PricingModel', 'Deviations'],
+                'ContractKind', 'RfpReference', 'TargetAcceptance', 'PricingModel', 'Deviations',
+                // A ceiling may be raised, but only in writing (Wasat clause 3.4) — so the
+                // approval itself is recorded, not just the new number.
+                'CeilingApproved', 'CeilingApprovedBy', 'CeilingApprovedAt'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
   attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt'],
@@ -84,6 +87,7 @@ const HEADERS = {
                 // same acceptance, same invoicing, but two roles at two rates and a request it
                 // answers, with a budget ceiling of its own.
                 'PerformerType', 'RequestContractID', 'SecondaryRole', 'HoursSecondary', 'RateSecondary',
+                'SupervisedBy', 'OverrunApprovedBy', 'OverrunApprovedAt', 'OverrunPdfID', 'OverrunPdfUrl',
                 'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
@@ -4079,7 +4083,7 @@ function adminAddAssignment_(d) {
     Comment: comment, LastNotifiedComment: comment, Status: 'released',
     // A contractor's report: booked against a request or order, and billed at two rates.
     PerformerType: (trim_(d.performerType) === 'contractor' ? 'contractor' : 'employee'),
-    RequestContractID: trim_(d.requestContractId),
+    RequestContractID: trim_(d.requestContractId), SupervisedBy: trim_(d.supervisedBy),
     SecondaryRole: trim_(d.secondaryRole), RateSecondary: num_(d.rateSecondary), HoursSecondary: '',
     ReportedHours: '', ReportedAmount: (pricing === 'lump' ? rate : ''),
     ReleasedAt: now, SubmittedAt: '', UpdatedAt: now, CreatedAt: now,
@@ -4665,16 +4669,18 @@ function costReport_(d) {
     // A ceiling that has been passed is worth saying out loud: clause 3.4 of the Wasat
     // agreement forbids exceeding it without written approval.
     orders.forEach(function (x) {
-      if (trim_(x.ContractKind) !== 'work_request' || !num_(x.Amount)) return;
+      if (trim_(x.ContractKind) !== 'work_request') return;
+      var limit = num_(x.CeilingApproved) || num_(x.Amount);
+      if (!limit) return;
       var used = 0;
       assignments.forEach(function (a) {
         if (!trim_(a.AcceptedBy)) return;
         if (trim_(a.RequestContractID) !== String(x.ContractID)) return;
         used += reportTotal_(a);
       });
-      if (used > num_(x.Amount)) {
-        ceilingBreach.push({ number: trim_(x.Number), ceiling: num_(x.Amount), used: round2_(used),
-                             currency: trim_(x.Currency) });
+      if (used > limit) {
+        ceilingBreach.push({ number: trim_(x.Number), ceiling: limit, used: round2_(used),
+                             approved: num_(x.CeilingApproved) > 0, currency: trim_(x.Currency) });
       }
     });
 
@@ -4901,6 +4907,108 @@ function applyUpliftFields_(a, d, who) {
                    total: round2_(fee + r.amount), k1: r.k1, k2: r.k2, k3: r.k3, base: r.base } };
 }
 
+// The approval itself, as a document: our letterhead, the numbers, and the signature of
+// whoever allowed it. Short on purpose — it records one decision and nothing else.
+function overrunNote_(a, ceiling, by, title, date) {
+  var esc = function (x) {
+    return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  };
+  var req = findRow_(SHEETS.contracts, 'ContractID', ceiling.requestId) || {};
+  var framework = trim_(req.ParentContractID)
+    ? (findRow_(SHEETS.contracts, 'ContractID', trim_(req.ParentContractID)) || {}) : {};
+  var money = function (v) { return ceiling.currency + ' ' + money_(v); };
+  var sigs = reportSignatures_(a);
+  var jitter = signatureJitter_(a.AssignmentID, 'overrun');
+
+  var html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Budget overrun approval</title>'
+    + '<style>@page{margin:20mm 18mm}*{box-sizing:border-box}'
+    + "body{font-family:'Times New Roman',Georgia,serif;color:#111;font-size:12pt;margin:0}"
+    + '.lh{display:flex;justify-content:space-between;font-size:9pt;color:#444;border-bottom:1px solid #999;'
+    + 'padding-bottom:6px;margin-bottom:26px;letter-spacing:.4px;text-transform:uppercase;'
+    + 'font-family:Arial,Helvetica,sans-serif}'
+    + 'h1{text-align:center;font-size:15pt;margin:0 0 22px}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:20px}'
+    + 'td{border:1px solid #333;padding:8px 10px;vertical-align:top}'
+    + 'td.label{width:44%;font-weight:bold;background:#f2f2f2}'
+    + 'p{line-height:1.5;margin:0 0 12px}'
+    + '.sig{margin-top:40px;width:58%}'
+    + '.scv{border-bottom:1px solid #333;padding:2px 0 3px;min-height:19px}'
+    + '.scl{font-size:8.5pt;color:#555;margin:2px 0 12px;font-family:Arial,Helvetica,sans-serif}'
+    + '.ink{height:0;overflow:visible;text-align:center;line-height:0}'
+    + '.ink img{max-height:58px;max-width:88%;display:inline-block}'
+    + '.foot{margin-top:30px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;'
+    + 'font-family:Arial,Helvetica,sans-serif}'
+    + '</style></head><body>'
+    + '<div class="lh"><span>' + esc(CONFIG.COMPANY_NAME) + '</span><span>Budget overrun approval</span></div>'
+    + '<h1>Approval of a Budget Overrun</h1>'
+    + '<table>'
+    + '<tr><td class="label">Project:</td><td>' + esc(a.ProjectName) + '</td></tr>'
+    + '<tr><td class="label">Framework agreement:</td><td>'
+      + esc(trim_(framework.Number) || '&mdash;')
+      + (trim_(framework.SignDate) ? ' dated ' + esc(String(framework.SignDate).slice(0, 10)) : '') + '</td></tr>'
+    + '<tr><td class="label">Work request:</td><td>' + esc(trim_(req.Number) || ceiling.request) + '</td></tr>'
+    + '<tr><td class="label">Supplier:</td><td>'
+      + esc(trim_(a.EmployeeName) || trim_(a.EmployeeEmail)) + '</td></tr>'
+    + '<tr><td class="label">Budget ceiling in the request:</td><td>' + esc(money(ceiling.ceiling)) + '</td></tr>'
+    + '<tr><td class="label">Accepted under the request, including this report:</td><td><b>'
+      + esc(money(ceiling.wouldBe)) + '</b></td></tr>'
+    + '<tr><td class="label">Overrun:</td><td><b>'
+      + esc(money(round2_(ceiling.wouldBe - ceiling.ceiling))) + '</b></td></tr>'
+    + '</table>'
+    + '<p>The budget ceiling set in the work request identified above has been exceeded by the reports '
+    + 'accepted under it. The overrun is hereby approved on behalf of ' + esc(CONFIG.COMPANY_NAME)
+    + ', and the amount accepted under the request is confirmed as stated.</p>'
+    + '<div class="sig">'
+    + '<div class="scv">' + esc(by) + '</div><div class="scl">Name</div>'
+    + (title ? '<div class="scv">' + esc(title) + '</div><div class="scl">Title</div>' : '')
+    + '<div class="scv">' + esc(date) + '</div><div class="scl">Date</div>'
+    + '<div class="scv">&nbsp;</div><div class="scl">Signature</div>'
+    + (sigs.acceptor
+        ? '<div class="ink"><img src="' + sigs.acceptor + '" alt="" style="margin:'
+          + (-94 + jitter.dy) + 'px 0 0 ' + jitter.dx + 'px"></div>'
+        : '')
+    + '</div>'
+    + '<div class="foot">CONFIDENTIAL</div>'
+    + '</body></html>';
+
+  var name = 'OVR · ' + String(trim_(req.Number) || ceiling.request).replace(/[\\/:*?"<>|]/g, '-')
+           + ' · ' + String(date).slice(0, 10).replace(/-/g, '')
+           + ' (' + String(a.AssignmentID).slice(0, 6) + ').pdf';
+  try {
+    var blob = Utilities.newBlob(html, 'text/html', name).getAs('application/pdf').setName(name);
+    var norm = pdfNormalise_(blob, pdfStamp_(date, '12:00'), pdfStamp_(date, '12:00'),
+                             { Title: PDF_META.title, Producer: PDF_META.producer, Creator: PDF_META.producer });
+    var file = attachmentsFolder_().createFile(norm.ok ? norm.blob : blob);
+    return { ok: true, fileId: file.getId(), url: file.getUrl(), name: name };
+  } catch (e) {
+    return { ok: false, error: String(e).slice(0, 200) };
+  }
+}
+
+// What accepting this report would do to the ceiling of the request it answers. Reports
+// already accepted count; this one is added on top.
+function ceilingCheck_(a) {
+  var reqId = trim_(a.RequestContractID);
+  if (!reqId) return { over: false };
+  var req = findRow_(SHEETS.contracts, 'ContractID', reqId);
+  if (!req || trim_(req.ContractKind) !== 'work_request') return { over: false };
+  // A ceiling raised in writing is the ceiling that counts.
+  var limit = num_(req.CeilingApproved) || num_(req.Amount);
+  if (!limit) return { over: false };
+
+  var used = 0;
+  readAll_(SHEETS.assignments).forEach(function (x) {
+    if (String(x.AssignmentID) === String(a.AssignmentID)) return;
+    if (trim_(x.RequestContractID) !== reqId) return;
+    if (!trim_(x.AcceptedBy)) return;
+    used += reportTotal_(x);
+  });
+  var wouldBe = round2_(used + reportTotal_(a));
+  return { over: wouldBe > limit, request: trim_(req.Number), ceiling: limit,
+           approved: num_(req.CeilingApproved) > 0, used: round2_(used), wouldBe: wouldBe,
+           currency: trim_(req.Currency), requestId: reqId };
+}
+
 function adminAcceptAssignment_(d) {
   requireAdmin_(d);
   var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
@@ -4916,6 +5024,18 @@ function adminAcceptAssignment_(d) {
   if (!by) return { ok: false, error: 'Enter the name of the person accepting the report' };
   var date = trim_(d.acceptedAt) || new Date().toISOString().slice(0, 10);
   var title = trim_(d.acceptedTitle);
+  // A ceiling is a promise not to spend more without asking. Accepting a report that would
+  // break it needs a decision, not a silent overrun — so the caller is told first and has to
+  // come back having agreed to it.
+  var ceiling = ceilingCheck_(a);
+  if (ceiling.over && !truthy_(d.overrunApproved)) {
+    return { ok: false, ceilingWarning: ceiling,
+             error: 'This report takes ' + ceiling.request + ' past its ceiling: '
+                  + ceiling.currency + ' ' + money_(ceiling.wouldBe) + ' against '
+                  + ceiling.currency + ' ' + money_(ceiling.ceiling)
+                  + '. Approving the overrun is a decision for whoever accepts the report.' };
+  }
+
   var upd = { AcceptedBy: by, AcceptedTitle: title, AcceptedAt: date, UpdatedAt: new Date().toISOString() };
   // Whoever accepts may put their signature on it; any of the stored ones will do, since
   // acceptance happens from the admin page on behalf of a named person.
@@ -4927,6 +5047,15 @@ function adminAcceptAssignment_(d) {
                              ? trim_(d.performerSignatureId) : '';
   }
   var res = { ok: true, acceptedBy: by, acceptedTitle: title, acceptedAt: date };
+  // An approved overrun leaves a document of its own: what was spent, against what ceiling,
+  // and who allowed it. The report itself stays the contractor's paper, untouched.
+  if (ceiling.over && truthy_(d.overrunApproved)) {
+    upd.OverrunApprovedBy = by;
+    upd.OverrunApprovedAt = date;
+    var note = overrunNote_(a, ceiling, by, title, date);
+    if (note.ok) { upd.OverrunPdfID = note.fileId; upd.OverrunPdfUrl = note.url; res.overrunNote = note.url; }
+    else { res.overrunNoteError = note.error; }
+  }
   var up = applyUpliftFields_(a, d, by);
   for (var k in up.fields) upd[k] = up.fields[k];
   res.uplift = up.info;
