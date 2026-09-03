@@ -338,7 +338,10 @@
         <div id="pdfCheckErr"></div>
         <div class="row" style="align-items:flex-end">
           <div style="flex:2;min-width:220px"><label>A document in the system</label>
-            <select id="pdfCheckPick" onchange="pdfFillFromSystemQuiet()"></select></div>
+            <input id="pdfCheckSearch" placeholder="type to narrow the list — project, name, date…"
+                   oninput="pdfCheckFilter()" style="margin-bottom:6px">
+            <select id="pdfCheckPick" onchange="pdfFillFromSystemQuiet()"></select>
+            <div id="pdfCheckCount" class="muted" style="font-size:12px;margin-top:4px"></div></div>
           <div style="flex:0 0 auto"><button class="btn sm" onclick="pdfCheckPicked(this)">Check</button></div>
           <div style="flex:0 0 auto"><label>Or a file from this device</label>
             <input id="pdfCheckFile" type="file" accept="application/pdf" onchange="pdfCheckUpload(this)"></div>
@@ -957,7 +960,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.154';
+const BUILD = '2026-08-08.155';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4274,20 +4277,35 @@ function accSignatoryChange(){
 let ACC_ID = '', PDF_AFTER_UPLIFT = false;
 // ── PDF check ──
 // A place to look, instead of a dialog box after every generated file.
+let PDF_FILES = [];
+// A document attached to a contract is either the version in force or one that a later
+// file replaced — worth knowing before rewriting its properties.
+function pdfFileLabel(f){
+  const when = f.createdAt ? fmtDate(f.createdAt) : '';
+  const what = f.about || f.where || '';
+  const mark = (f.parentType === 'contract') ? (f.current ? '✓ current · ' : '· superseded · ') : '';
+  return mark + f.name.replace(/\.pdf$/i,'') + (what ? ' — ' + what : '') + (when ? ' · ' + when : '');
+}
+function pdfCheckFilter(){
+  const sel = $('pdfCheckPick'), q = ($('pdfCheckSearch').value||'').trim().toLowerCase();
+  const keep = q ? PDF_FILES.filter(f=>pdfFileLabel(f).toLowerCase().includes(q)) : PDF_FILES;
+  const had = sel.value;
+  sel.innerHTML = keep.length
+    ? keep.map(f=>`<option value="${esc(f.fileId)}">${esc(pdfFileLabel(f))}</option>`).join('')
+    : '<option value="">nothing matches</option>';
+  if(keep.some(f=>f.fileId===had)) sel.value = had;
+  $('pdfCheckCount').textContent = q
+    ? `${keep.length} of ${PDF_FILES.length} document(s)`
+    : `${PDF_FILES.length} document(s)`;
+}
 async function pdfCheckInit(){
   const sel = $('pdfCheckPick'); if(!sel) return;
   sel.innerHTML = '<option>Loading…</option>';
   try{
     const r = await api('pdf_files',{});
-    const files = r.files||[];
-    sel.innerHTML = files.length
-      ? files.map(f=>{
-          const when = f.createdAt ? fmtDate(f.createdAt) : '';
-          const what = f.about || f.where || '';
-          return `<option value="${esc(f.fileId)}">${esc(f.name.replace(/\.pdf$/i,''))}`
-               + `${what?' — '+esc(what):''}${when?' · '+esc(when):''}</option>`;
-        }).join('')
-      : '<option value="">nothing stored yet</option>';
+    PDF_FILES = r.files||[];
+    pdfCheckFilter();
+    if(!PDF_FILES.length) sel.innerHTML = '<option value="">nothing stored yet</option>';
   }catch(e){ sel.innerHTML='<option value="">—</option>'; notice('pdfCheckErr','err', esc(e.message)); }
   pdfFillFromSystemQuiet();
 }

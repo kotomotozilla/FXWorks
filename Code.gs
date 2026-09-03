@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.154';
+const BUILD = '2026-08-08.155';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -2244,6 +2244,8 @@ function pdfFiles_(d) {
     if (!/\.pdf$/i.test(String(r.FileName || ''))) return;
     out.push({ fileId: String(r.DriveFileID), name: String(r.FileName),
                where: String(r.ParentType || '') + (r.DocType ? ' · ' + r.DocType : ''),
+               // whether this is the version in force, or one superseded by a later file
+               current: truthy_(r.IsCurrent), parentType: String(r.ParentType || ''),
                about: describe(r.FileName), createdAt: String(r.CreatedAt || '') });
   });
   try {
