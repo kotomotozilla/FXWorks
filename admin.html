@@ -1017,7 +1017,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.164';
+const BUILD = '2026-08-08.165';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1029,6 +1029,9 @@ function notice(h,t,m){$(h).innerHTML = m?`<div class="notice ${t}">${m}</div>`:
 
 let PIN = sessionStorage.getItem('fx_pin') || '';
 let COUNTERPARTIES = [], CONTRACTS = [], INVOICES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '', EDIT_CT = '', EDIT_INV = '', WR = null;
+// Server time comes back with every answer; keeping the slowest few turns "it feels slow"
+// into a number.
+let API_SLOW = [];
 
 // Timing of every call is kept, so a slow screen can be traced to the request that caused it.
 window.API_LOG = [];
