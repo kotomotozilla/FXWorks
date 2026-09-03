@@ -754,16 +754,12 @@
       <select id="ct_pricing"><option value="lump">Lump sum (total)</option><option value="hourly">Hourly rate</option></select></div>
     <div style="max-width:150px"><label>Currency</label>
       <select id="ct_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
-    <div style="flex:2"><label>General (parent) contract — empty for a general contract</label><select id="ct_parent"></select></div>
+    <div style="flex:2"><label>General (parent) contract — empty for a general contract</label>
+      <select id="ct_parent" onchange="ctKindOptions()"></select></div>
   </div>
   <div class="row">
     <div style="max-width:230px"><label>Kind</label>
-      <select id="ct_kind" onchange="ctKindChange()">
-        <option value="">Ordinary contract</option>
-        <option value="framework">Framework — no total of its own</option>
-        <option value="work_order">Work order under a framework — fixed price</option>
-        <option value="work_request">Work request under a framework — budget ceiling</option>
-      </select></div>
+      <select id="ct_kind" onchange="ctKindChange()"></select></div>
     <div id="ct_woFields" style="flex:2;display:none">
       <div class="row">
         <div style="flex:1;min-width:150px"><label>RFP / request reference</label><input id="ct_rfp" placeholder="AUT-SMS-RFP-2026-01"></div>
@@ -1005,7 +1001,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.160';
+const BUILD = '2026-08-08.161';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3364,6 +3360,7 @@ function ctFillForm(c){
   $('ct_pricing').value = (c && c.PricingType==='hourly') ? 'hourly' : 'lump';
   $('ct_template').value = (c && c.TemplateType==='ica') ? 'ica' : 'b2b';
   $('ct_parent').innerHTML = ctParentOptions(c ? c.ParentContractID : '', c ? c.ContractID : '');
+  ctKindOptions();
   $('ct_kind').value = c ? (c.ContractKind||'') : '';
   $('ct_rfp').value = c ? (c.RfpReference||'') : '';
   $('ct_targetAcc').value = c && c.TargetAcceptance ? fmtDate(c.TargetAcceptance) : '';
@@ -3373,6 +3370,22 @@ function ctFillForm(c){
   $('ct_desc').value = c ? (c.Description||'') : '';
   notice('ctm_err','','');
 }
+// Orders and requests only mean anything under a framework, so they are offered only when
+// the parent is one. A contract with no parent can be ordinary or a framework itself.
+function ctKindOptions(){
+  const sel = $('ct_kind'), had = sel.value;
+  const parent = (CONTRACTS||[]).find(c=>String(c.ContractID)===String($('ct_parent').value));
+  const underFramework = parent && parent.ContractKind === 'framework';
+  const opts = underFramework
+    ? [['','Ordinary sub-contract'],
+       ['work_order','Work order under a framework — fixed price'],
+       ['work_request','Work request under a framework — budget ceiling']]
+    : [['','Ordinary contract'], ['framework','Framework — no total of its own']];
+  sel.innerHTML = opts.map(([v,t])=>`<option value="${v}">${esc(t)}</option>`).join('');
+  sel.value = opts.some(o=>o[0]===had) ? had : '';
+  ctKindChange();
+}
+
 // A framework has no amount of its own; a work order has a period, a pricing model and,
 // often, clauses of the framework it varies.
 function ctKindChange(){
