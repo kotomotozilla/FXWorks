@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.156';
+const BUILD = '2026-08-08.160';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -64,7 +64,10 @@ const HEADERS = {
                 'OptAcceptanceAct', 'OptPenalties', 'OptUsageRights', 'OptInsurance', 'OptDataSecurity', 'OptWarranty',
                 'OptPayoutCurrency', 'ExternalForm', 'ExtractedAt', 'PricingType',
                 'OptUplift', 'UpliftBase', 'UpliftK1Min', 'UpliftK1Max', 'UpliftK2Min', 'UpliftK2Max',
-                'UpliftK3Min', 'UpliftK3Max', 'UpliftNumber', 'UpliftDate', 'UpliftFrom'],
+                'UpliftK3Min', 'UpliftK3Max', 'UpliftNumber', 'UpliftDate', 'UpliftFrom',
+                // A framework agreement promises no volume and carries no total of its own; the
+                // money lives in the work orders issued under it.
+                'ContractKind', 'RfpReference', 'TargetAcceptance', 'PricingModel', 'Deviations'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
   attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt'],
@@ -77,6 +80,10 @@ const HEADERS = {
                 'UpliftPercent', 'UpliftAmount', 'UpliftNote', 'UpliftSetBy', 'UpliftSetAt',
                 'PerformerSignatureID', 'AcceptorSignatureID',
                 'ReportPdfID', 'ReportPdfUrl', 'ReportPdfAt',
+                // A report can come from a contractor company instead of one of our own people:
+                // same acceptance, same invoicing, but two roles at two rates and a request it
+                // answers, with a budget ceiling of its own.
+                'PerformerType', 'RequestContractID', 'SecondaryRole', 'HoursSecondary', 'RateSecondary',
                 'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
@@ -143,6 +150,7 @@ function route_(action, d) {
     case 'v2_queue_clear':     return v2QueueClear_(d);
     case 'pdf_service_check':  return pdfServiceCheck_(d);
     case 'report_pdf':         return reportPdf_(d);
+    case 'report_pdf_upload':  return reportPdfUpload_(d);
     case 'report_html':        return reportHtmlRoute_(d);
     case 'pdf_inspect':        return pdfInspect_(d);
     case 'pdf_files':          return pdfFiles_(d);
@@ -2050,6 +2058,29 @@ function reportHtmlRoute_(d) {
   return { ok: true, html: reportHtml_(a, items, truthy_(d.withSignature), true, reportSignatures_(a)) };
 }
 
+// A report that was signed on paper, or built long ago outside the system: the admin uploads
+// the file and it becomes the report's document, in place of anything generated before.
+function reportPdfUpload_(d) {
+  requireAdmin_(d);
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  if (!a) return { ok: false, error: 'Report not found' };
+  if (!d.dataBase64) return { ok: false, error: 'No file' };
+
+  var name = trim_(d.fileName) || 'report.pdf';
+  var file;
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(String(d.dataBase64)), 'application/pdf', name);
+    file = attachmentsFolder_().createFile(blob);
+  } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
+
+  var prev = trim_(a.ReportPdfID);
+  if (prev && prev !== file.getId()) { try { DriveApp.getFileById(prev).setTrashed(true); } catch (e) {} }
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, {
+    ReportPdfID: file.getId(), ReportPdfUrl: file.getUrl(), ReportPdfAt: new Date().toISOString()
+  });
+  return { ok: true, fileId: file.getId(), url: file.getUrl(), name: name, replaced: !!prev };
+}
+
 function reportPdf_(d) {
   requireAdmin_(d);
   var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
@@ -2243,6 +2274,16 @@ function pdfFiles_(d) {
     byShortId[String(a.AssignmentID).slice(0, 8)] = a;
     byShortId[String(a.AssignmentID).slice(0, 6)] = a;
   });
+  // "Superseded" only means something when a newer file of the same kind exists for the same
+  // contract. An invoice or a one-off "other" document has no current version to be behind.
+  var currentByKind = {};
+  readAll_(SHEETS.attachments).forEach(function (r) {
+    if (truthy_(r.IsCurrent)) currentByKind[String(r.ParentType) + '|' + String(r.ParentID) + '|' + String(r.DocType)] = 1;
+  });
+  var versioned = function (r) {
+    return !!currentByKind[String(r.ParentType) + '|' + String(r.ParentID) + '|' + String(r.DocType)];
+  };
+
   var describe = function (fileName) {
     var m = String(fileName).match(/(?:Report[ _])([0-9a-f]{6,8})|\(([0-9a-f]{6,8})\)/i);
     var a = m ? byShortId[(m[1] || m[2]).toLowerCase()] : null;
@@ -2254,8 +2295,9 @@ function pdfFiles_(d) {
     if (!/\.pdf$/i.test(String(r.FileName || ''))) return;
     out.push({ fileId: String(r.DriveFileID), name: String(r.FileName),
                where: String(r.ParentType || '') + (r.DocType ? ' · ' + r.DocType : ''),
-               // whether this is the version in force, or one superseded by a later file
-               current: truthy_(r.IsCurrent), parentType: String(r.ParentType || ''),
+               // in force, behind a newer file of the same kind, or simply not versioned
+               current: truthy_(r.IsCurrent), versioned: versioned(r),
+               parentType: String(r.ParentType || ''),
                about: describe(r.FileName), createdAt: String(r.CreatedAt || '') });
   });
   // Generated reports, by the link stored on the report itself — not by sweeping the folder,
@@ -2881,7 +2923,16 @@ function contractFields_(d) {
     Direction: (trim_(d.direction) === 'outgoing') ? 'outgoing' : 'incoming',
     OurRole: (trim_(d.direction) === 'outgoing') ? 'customer' : 'supplier',
     SignDate: trim_(d.signDate), StartDate: trim_(d.startDate), EndDate: trim_(d.endDate),
-    Amount: num_(d.amount), Currency: currency, PricingType: (trim_(d.pricingType)==='hourly'?'hourly':'lump'), ParentContractID: trim_(d.parentContractId)
+    Amount: num_(d.amount), Currency: currency, PricingType: (trim_(d.pricingType)==='hourly'?'hourly':'lump'),
+    ParentContractID: trim_(d.parentContractId),
+    // A framework carries no amount of its own — whatever is typed in is ignored, because the
+    // work orders are what it is worth.
+    // work_order — a fixed commitment (Eller); work_request — a ceiling, with the real amount
+    // settled by accepted reports (Wasat). Both hang off a framework.
+    ContractKind: (['framework', 'work_order', 'work_request'].indexOf(trim_(d.contractKind)) >= 0
+                   ? trim_(d.contractKind) : ''),
+    RfpReference: trim_(d.rfpReference), TargetAcceptance: trim_(d.targetAcceptance),
+    PricingModel: trim_(d.pricingModel), Deviations: trim_(d.deviations)
   };
 }
 function adminCreateContract_(d) {
@@ -2897,8 +2948,11 @@ function adminCreateContract_(d) {
   var row = {
     ContractID: Utilities.getUuid(), Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID,
     Direction: f.Direction, OurRole: f.OurRole, SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate,
-    Amount: f.Amount, Currency: f.Currency, PricingType: f.PricingType, AmountUSD: '', FxRate: '', FxAsOf: '',
-    ParentContractID: f.ParentContractID, CreatedAt: new Date().toISOString()
+    Amount: (f.ContractKind === 'framework' ? '' : f.Amount), Currency: f.Currency,
+    PricingType: f.PricingType, AmountUSD: '', FxRate: '', FxAsOf: '',
+    ParentContractID: f.ParentContractID, ContractKind: f.ContractKind, RfpReference: f.RfpReference,
+    TargetAcceptance: f.TargetAcceptance, PricingModel: f.PricingModel, Deviations: f.Deviations,
+    CreatedAt: new Date().toISOString()
   };
   var fx = computeFx_(f.Currency, f.Amount, f.SignDate);
   row.AmountUSD = fx.AmountUSD; row.FxRate = fx.FxRate; row.FxAsOf = fx.FxAsOf;
@@ -2916,9 +2970,12 @@ function adminUpdateContract_(d) {
   var cfx = computeFx_(f.Currency, f.Amount, f.SignDate);
   updateRow_(SHEETS.contracts, 'ContractID', id, {
     Number: number, Description: f.Description, CounterpartyID: f.CounterpartyID, Direction: f.Direction, OurRole: f.OurRole,
-    SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate, Amount: f.Amount, Currency: f.Currency,
-    AmountUSD: cfx.AmountUSD, FxRate: cfx.FxRate, FxAsOf: cfx.FxAsOf,
-    PricingType: f.PricingType, ParentContractID: f.ParentContractID
+    SignDate: f.SignDate, StartDate: f.StartDate, EndDate: f.EndDate,
+    Amount: (f.ContractKind === 'framework' ? '' : f.Amount), Currency: f.Currency,
+    AmountUSD: (f.ContractKind === 'framework' ? '' : cfx.AmountUSD), FxRate: cfx.FxRate, FxAsOf: cfx.FxAsOf,
+    PricingType: f.PricingType, ParentContractID: f.ParentContractID,
+    ContractKind: f.ContractKind, RfpReference: f.RfpReference, TargetAcceptance: f.TargetAcceptance,
+    PricingModel: f.PricingModel, Deviations: f.Deviations
   });
   return { ok: true };
 }
@@ -4020,6 +4077,10 @@ function adminAddAssignment_(d) {
     AssignmentID: Utilities.getUuid(), ProjectID: p.ProjectID, ProjectName: p.Name, Customer: p.Customer, ProjectDescription: p.Description,
     EmployeeEmail: email, EmployeeName: cp.Name || '', Title: title, Currency: currency, Rate: (pricing === 'lump' ? '' : rate),
     Comment: comment, LastNotifiedComment: comment, Status: 'released',
+    // A contractor's report: booked against a request or order, and billed at two rates.
+    PerformerType: (trim_(d.performerType) === 'contractor' ? 'contractor' : 'employee'),
+    RequestContractID: trim_(d.requestContractId),
+    SecondaryRole: trim_(d.secondaryRole), RateSecondary: num_(d.rateSecondary), HoursSecondary: '',
     ReportedHours: '', ReportedAmount: (pricing === 'lump' ? rate : ''),
     ReleasedAt: now, SubmittedAt: '', UpdatedAt: now, CreatedAt: now,
     ContractID: contractId, RateSource: rateSource, PricingType: pricing
@@ -4474,7 +4535,10 @@ function reportDateOf_(a) {
 }
 function reportTotal_(a) {
   var fee = num_(a.ReportedAmount);
-  if (!fee) fee = round2_(num_(a.ReportedHours) * num_(a.Rate));
+  // A contractor's report bills two roles at two rates — a developer and a project manager
+  // in the Wasat form. Ours bills one.
+  if (!fee) fee = round2_(num_(a.ReportedHours) * num_(a.Rate)
+                          + num_(a.HoursSecondary) * num_(a.RateSecondary));
   var up = truthy_(a.UpliftGranted) ? num_(a.UpliftAmount) : 0;
   return round2_(fee + up);
 }
@@ -4572,6 +4636,48 @@ function costReport_(d) {
                      amount: num_(x.Amount), currency: trim_(x.Currency) });
     });
     subList.sort(function (a, b) { return num_(b.amount) - num_(a.amount); });
+    // A framework agreement has no total of its own: what it is worth is the sum of the work
+    // orders issued under it, and until the first one is signed that sum is nothing.
+    var kind = trim_(c.ContractKind);
+    // Two ways a framework turns into money. A work order is a fixed commitment known when it
+    // is signed (Eller). A work request only sets a ceiling; what is actually owed is settled
+    // by the accepted reports against it (Wasat). Both are "committed", but only one is final.
+    var orders = subs.filter(function (x) {
+      var k = trim_(x.ContractKind);
+      return k === 'work_order' || k === 'work_request';
+    });
+    var woValue = emptyBucket_();
+    orders.forEach(function (x) { addTo_(woValue, x.Currency, x.Amount, trim_(x.SignDate) || trim_(x.StartDate)); });
+
+    // What accepted reports under this framework and its orders actually confirm.
+    var orderIds = {};
+    orders.forEach(function (x) { orderIds[String(x.ContractID)] = 1; });
+    var confirmed = emptyBucket_(), confirmedReports = 0, ceilingBreach = [];
+    assignments.forEach(function (a) {
+      if (!trim_(a.AcceptedBy)) return;
+      var against = trim_(a.RequestContractID) || trim_(a.ContractID);
+      if (against !== id && !orderIds[against]) return;
+      var dt = reportDateOf_(a);
+      if (!inRange(dt)) return;
+      addTo_(confirmed, a.Currency, reportTotal_(a), dt);
+      confirmedReports++;
+    });
+    // A ceiling that has been passed is worth saying out loud: clause 3.4 of the Wasat
+    // agreement forbids exceeding it without written approval.
+    orders.forEach(function (x) {
+      if (trim_(x.ContractKind) !== 'work_request' || !num_(x.Amount)) return;
+      var used = 0;
+      assignments.forEach(function (a) {
+        if (!trim_(a.AcceptedBy)) return;
+        if (trim_(a.RequestContractID) !== String(x.ContractID)) return;
+        used += reportTotal_(a);
+      });
+      if (used > num_(x.Amount)) {
+        ceilingBreach.push({ number: trim_(x.Number), ceiling: num_(x.Amount), used: round2_(used),
+                             currency: trim_(x.Currency) });
+      }
+    });
+
     var perf = byPerformer[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0 };
     var job = byJob[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0, people: {} };
     var people = Object.keys(job.people).map(function (n) { return { who: n, cost: job.people[n] }; })
@@ -4581,6 +4687,14 @@ function costReport_(d) {
       direction: trim_(c.Direction), currency: trim_(c.Currency), amount: num_(c.Amount),
       startDate: trim_(c.StartDate) || trim_(c.SignDate), endDate: trim_(c.EndDate),
       amountUsd: num_(c.AmountUSD) || toUsd_(c.Currency, c.Amount, c.SignDate),
+      kind: kind, workOrders: orders.length, workOrderValue: woValue,
+      confirmed: confirmed, confirmedReports: confirmedReports, ceilingBreach: ceilingBreach,
+      workOrderList: orders.map(function (x) {
+        return { number: trim_(x.Number), subject: trim_(x.Subject) || trim_(x.Description),
+                 kind: trim_(x.ContractKind), amount: num_(x.Amount), currency: trim_(x.Currency),
+                 start: trim_(x.StartDate), end: trim_(x.EndDate),
+                 acceptance: trim_(x.TargetAcceptance), pricing: trim_(x.PricingModel) };
+      }).sort(function (a, b) { return String(a.number).localeCompare(String(b.number)); }),
       subCount: subs.length, subCost: subCost, subs: subList,
       // what the counterparty of this contract has earned under it
       ownCost: perf.cost, ownPending: perf.pending, ownReports: perf.reports, ownPending_n: perf.reportsPending,

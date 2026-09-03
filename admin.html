@@ -343,6 +343,7 @@
             <select id="pdfCheckPick" onchange="pdfFillFromSystemQuiet()"></select>
             <div id="pdfCheckCount" class="muted" style="font-size:12px;margin-top:4px"></div></div>
           <div style="flex:0 0 auto"><button class="btn sm" onclick="pdfCheckPicked(this)">Check</button></div>
+          <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="pdfCheckOpen()" title="Open the chosen document in a new tab">Open</button></div>
           <div style="flex:0 0 auto"><label>Or a file from this device</label>
             <input id="pdfCheckFile" type="file" accept="application/pdf" onchange="pdfCheckUpload(this)"></div>
         </div>
@@ -456,6 +457,23 @@
   <div style="height:8px" class="pj-only"></div>
   <div class="pj-only"><label>Rate / contract for this report</label><select id="pm_addContract"></select>
     <p class="muted" style="font-size:11px;margin:4px 0 0">Pick one of the counterparty's contracts, or "Counterparty rate" for non-contractual work. A lump-sum contract means the report has no hours.</p></div>
+  <div style="height:8px" class="pj-only"></div>
+  <div class="pj-only" style="border-left:3px solid var(--line);padding-left:10px">
+    <label style="display:flex;align-items:center;gap:8px;font-weight:600">
+      <input type="checkbox" id="pm_addContractor" onchange="pmContractorToggle()" style="width:auto;margin:0">
+      A contractor company reports, not one of our people</label>
+    <p class="muted" style="font-size:11px;margin:4px 0 0">Same acceptance and invoicing, but the work is billed
+      at two roles and rates, against a request with a budget ceiling.</p>
+    <div id="pm_contractorFields" style="display:none;margin-top:8px">
+      <div class="row">
+        <div style="flex:2"><label>Against the request or order</label><select id="pm_addRequest"></select></div>
+        <div style="flex:1;min-width:130px"><label>Second role</label>
+          <input id="pm_addRole2" placeholder="Project Manager"></div>
+        <div style="max-width:130px"><label>Its rate</label>
+          <input id="pm_addRate2" type="number" min="0" step="0.01" placeholder="115"></div>
+      </div>
+    </div>
+  </div>
   <div style="height:8px" class="pj-only"></div>
   <div class="pj-only"><label>Comment</label><textarea id="pm_addComment" placeholder="What this team member must cover"></textarea></div>
   <div style="height:10px" class="pj-only"></div>
@@ -738,6 +756,31 @@
       <select id="ct_currency"><option value="USD">USD ($)</option><option value="EUR">EUR (€)</option><option value="AED">AED</option><option value="SGD">SGD (S$)</option></select></div>
     <div style="flex:2"><label>General (parent) contract — empty for a general contract</label><select id="ct_parent"></select></div>
   </div>
+  <div class="row">
+    <div style="max-width:230px"><label>Kind</label>
+      <select id="ct_kind" onchange="ctKindChange()">
+        <option value="">Ordinary contract</option>
+        <option value="framework">Framework — no total of its own</option>
+        <option value="work_order">Work order under a framework — fixed price</option>
+        <option value="work_request">Work request under a framework — budget ceiling</option>
+      </select></div>
+    <div id="ct_woFields" style="flex:2;display:none">
+      <div class="row">
+        <div style="flex:1;min-width:150px"><label>RFP / request reference</label><input id="ct_rfp" placeholder="AUT-SMS-RFP-2026-01"></div>
+        <div style="max-width:180px"><label>Target final acceptance</label><input id="ct_targetAcc" type="date"></div>
+        <div style="max-width:200px"><label>Pricing model</label>
+          <select id="ct_pricingModel">
+            <option value="fixed">Fixed price</option>
+            <option value="tm">Time and materials</option>
+            <option value="tm_cap">Capped time and materials</option>
+            <option value="milestones">Milestone-based</option>
+            <option value="other">Other</option>
+          </select></div>
+      </div>
+      <label>Deviations from the framework agreement</label>
+      <textarea id="ct_deviations" rows="2" placeholder="Clause 16.2 — acceptance period reduced to five business days…"></textarea>
+    </div>
+  </div>
   <div style="height:8px"></div>
   <div><label>Description</label><textarea id="ct_desc" placeholder="Subject / scope"></textarea></div>
   <div style="height:12px"></div>
@@ -962,7 +1005,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.156';
+const BUILD = '2026-08-08.160';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3082,16 +3125,39 @@ function renderCosts(r){
         // counterparty earned under their own contract is a separate figure — adding both
         // would count the same money twice.
         const totalUsd = Math.round((c.subCost.usd + c.jobCost.usd)*100)/100;
-        const left = (c.amountUsd ? Math.round((c.amountUsd - totalUsd)*100)/100 : null);
+        // A framework agreement carries no total of its own — clause 1.4 of the Eller one says
+        // so outright. Its value is the work orders issued under it, and the margin is measured
+        // against that.
+        const framework = (c.kind === 'framework');
+        const headUsd = framework ? (c.workOrderValue ? c.workOrderValue.usd : 0) : c.amountUsd;
+        const left = (headUsd ? Math.round((headUsd - totalUsd)*100)/100 : null);
         const leftLabel = outgoing ? 'left of the budget' : 'margin';
         const people = (c.people||[]).length
           ? `<br><span class="muted" style="font-size:11px">${c.people.slice(0,4).map(p=>`${esc(p.who)} ${bucketText(p.cost).replace(/<br>/g,', ')}`).join('<br>')}${c.people.length>4?`<br>+${c.people.length-4} more`:''}</span>`
           : '';
         return `<tr>
-          <td><b>${esc(c.number)}</b>${c.subCount?` <span class="muted">· ${c.subCount} sub</span>`:''}
+          <td><b>${esc(c.number)}</b>${framework?' <span class="tag draft">framework</span>':''}${
+              c.subCount?` <span class="muted">· ${c.subCount} sub</span>`:''}
             <br><span class="muted" style="font-size:11px">${outgoing?'we pay':'we are paid'}</span></td>
           <td>${esc(c.counterparty)}${(c.startDate||c.endDate)?`<br><span class="muted" style="font-size:11px">${esc(shortDate(c.startDate))} – ${esc(c.endDate?shortDate(c.endDate):'open')}</span>`:''}</td>
-          <td class="num">${c.amount?`${cur(c.currency)}${money(c.amount)}`:'—'}<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span></td>
+          <td class="num">${framework
+              ? (c.workOrders
+                  ? `${bucketText(c.workOrderValue)}<br><span class="muted" style="font-size:11px">`
+                    + `committed · ${c.workOrders} order(s)</span>`
+                    + (c.confirmedReports
+                        ? `<br><b>${bucketText(c.confirmed)}</b><span class="muted" style="font-size:11px">`
+                          + ` confirmed by ${c.confirmedReports} report(s)</span>` : '')
+                    + `<br><span class="muted" style="font-size:11px">`
+                    + c.workOrderList.map(w=>`${esc(w.number)} ${cur(w.currency)}${money(w.amount)}`
+                        + (w.kind==='work_request'?' <i>ceiling</i>':'')
+                        + (w.end?` · to ${esc(shortDate(w.end))}`:'')).join('<br>')
+                    + `</span>`
+                    + (c.ceilingBreach||[]).map(b=>`<br><span style="color:var(--warn);font-size:11px">`
+                        + `${esc(b.number)}: ${cur(b.currency)}${money(b.used)} against a ceiling of `
+                        + `${cur(b.currency)}${money(b.ceiling)}</span>`).join('')
+                  : '<span class="muted">no orders yet</span>')
+              : (c.amount?`${cur(c.currency)}${money(c.amount)}`:'—')
+                + `<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span>`}</td>
           <td class="num">${bucketText(c.subCost)}${c.subCost.usd?`<br><span class="muted">$${money(c.subCost.usd)}</span>`:''}
             ${(c.subs||[]).length?`<br><span class="muted" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}`).join('<br>')}</span>`:''}</td>
           <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}</span>`:''}${people}
@@ -3298,9 +3364,27 @@ function ctFillForm(c){
   $('ct_pricing').value = (c && c.PricingType==='hourly') ? 'hourly' : 'lump';
   $('ct_template').value = (c && c.TemplateType==='ica') ? 'ica' : 'b2b';
   $('ct_parent').innerHTML = ctParentOptions(c ? c.ParentContractID : '', c ? c.ContractID : '');
+  $('ct_kind').value = c ? (c.ContractKind||'') : '';
+  $('ct_rfp').value = c ? (c.RfpReference||'') : '';
+  $('ct_targetAcc').value = c && c.TargetAcceptance ? fmtDate(c.TargetAcceptance) : '';
+  $('ct_pricingModel').value = (c && c.PricingModel) ? c.PricingModel : 'fixed';
+  $('ct_deviations').value = c ? (c.Deviations||'') : '';
+  ctKindChange();
   $('ct_desc').value = c ? (c.Description||'') : '';
   notice('ctm_err','','');
 }
+// A framework has no amount of its own; a work order has a period, a pricing model and,
+// often, clauses of the framework it varies.
+function ctKindChange(){
+  const kind = $('ct_kind').value;
+  $('ct_woFields').style.display = (kind === 'work_order' || kind === 'work_request') ? '' : 'none';
+  const amount = $('ct_amount');
+  amount.disabled = (kind === 'framework');
+  amount.placeholder = kind === 'framework' ? 'set by the orders under it'
+                     : kind === 'work_request' ? 'budget ceiling' : '0';
+  if(kind === 'framework') amount.value = '';
+}
+
 function newContract(){
   EDIT_CT = '';
   togglePreview();
@@ -3358,7 +3442,10 @@ async function saveContract(){
     direction: (role==='customer' ? 'outgoing' : 'incoming'),
     signDate:$('ct_sign').value, startDate:$('ct_start').value, endDate:$('ct_end').value,
     amount:$('ct_amount').value, currency:$('ct_currency').value, pricingType:$('ct_pricing').value,
-    parentContractId:$('ct_parent').value, description:$('ct_desc').value.trim() };
+    parentContractId:$('ct_parent').value, description:$('ct_desc').value.trim(),
+    contractKind:$('ct_kind').value, rfpReference:$('ct_rfp').value.trim(),
+    targetAcceptance:$('ct_targetAcc').value, pricingModel:$('ct_pricingModel').value,
+    deviations:$('ct_deviations').value.trim() };
   try{
     const r = await api(EDIT_CT?'update_contract':'create_contract', payload);
     const savedId = EDIT_CT || (r.contract && r.contract.ContractID);
@@ -4117,7 +4204,9 @@ function renderProjectModal(){
       <div class="muted" style="font-size:12px">${a.ContractID?('Contract: '+esc(ctNumber(a.ContractID))+(a.PricingType==='lump'?' · lump sum':' · hourly')):'Counterparty rate · non-contractual'}</div>
       ${a.PayoutEstimate?`<div class="muted" style="font-size:12px">≈ ${cur(a.PayoutCurrency)}${money(a.PayoutEstimate)} at ${esc(a.PayoutFxRate)}${a.PayoutFxAsOf?' on '+esc(fmtDate(a.PayoutFxAsOf)):''} <span title="Indicative only: payment converts at the rate on the day it is made">(indicative)</span></div>`:''}
       ${a.AcceptedBy?`<div class="muted" style="font-size:12px">✓ Accepted by ${esc(a.AcceptedBy)}${a.AcceptedTitle?', '+esc(a.AcceptedTitle):''}${a.AcceptedAt?' on '+esc(fmtDate(a.AcceptedAt)):''}${String(a.UpliftGranted).toLowerCase()==='yes'?` · uplift ${esc(a.UpliftPercent)}% = ${cur(a.Currency)}${money(a.UpliftAmount)}`:''}${a.PayoutCurrency?' · payout in '+esc(a.PayoutCurrency):''}</div>`:(a.PayoutCurrency?`<div class="muted" style="font-size:12px">Payout currency: ${esc(a.PayoutCurrency)}</div>`:'')}
-      ${(a.ReportedHours!==''&&a.ReportedHours!=null)?`<div class="muted" style="margin-bottom:4px">Reported: ${hrs(a.ReportedHours)} h · ${s}${money(a.ReportedAmount||0)}</div>`:''}
+      ${(a.ReportedHours!==''&&a.ReportedHours!=null)?`<div class="muted" style="margin-bottom:4px">Reported: ${hrs(a.ReportedHours)} h${
+          a.HoursSecondary?` + ${hrs(a.HoursSecondary)} h ${esc(a.SecondaryRole||'second role')}`:''
+        } · ${s}${money(a.ReportedAmount||0)}${arithmeticNote(a)}</div>`:''}
       <div class="muted" style="margin-bottom:8px">Submitted: ${a.SubmittedAt?fmtDate(a.SubmittedAt):'—'}</div>
       <label>Comment</label>
       <textarea id="cmt_${a.AssignmentID}">${esc(a.Comment||'')}</textarea>
@@ -4128,8 +4217,10 @@ function renderProjectModal(){
         <button class="btn ghost sm" onclick="pdfFromList('${a.AssignmentID}')">PDF</button>
         ${a.ReportPdfUrl
           ? `<a class="btn ghost sm" href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener" title="Built ${esc(fmtDate(a.ReportPdfAt)||'')}">PDF file ↗</a>
-             <button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this,true)" title="Build it again from the current data">rebuild</button>`
-          : `<button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this)" title="A PDF file dated by the business dates: created on the day of submission, modified on the day of acceptance">PDF file</button>`}
+             <button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this,true)" title="Build it again from the current data">rebuild</button>
+             <button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="Attach a ready PDF — a report signed on paper, or one made before the system">attach a file</button>`
+          : `<button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this)" title="A PDF file dated by the business dates: created on the day of submission, modified on the day of acceptance">PDF file</button>
+             <button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="Attach a ready PDF — a report signed on paper, or one made before the system">attach a file</button>`}
         <button class="btn warn sm" onclick="deleteAssignment('${a.AssignmentID}',this)">Delete</button>
       </div>
     </div>`;
@@ -4168,6 +4259,32 @@ async function deleteProject(){
   try{ await api('delete_project',{projectId:CURRENT.project.ProjectID}); closeModal('projModal'); loadProjects(); }
   catch(e){ alert(e.message); }
 }
+// Requests and orders that a contractor's report can be booked against.
+// The stated total against the rates and hours. The first Wasat report claims 55,805 USD
+// where 168 developer hours at 100 and 47 PM hours at 115 come to 22,205 — worth catching
+// before it becomes an invoice.
+function arithmeticNote(a){
+  const stated = +a.ReportedAmount || 0;
+  if(!stated) return '';
+  const computed = Math.round(((+a.ReportedHours||0)*(+a.Rate||0)
+                             + (+a.HoursSecondary||0)*(+a.RateSecondary||0))*100)/100;
+  if(!computed || Math.abs(computed - stated) < 1) return '';
+  return ` <span style="color:var(--warn)" title="Hours × rates give ${money(computed)}, the report states ${money(stated)}">`
+       + `· hours × rates give ${money(computed)}</span>`;
+}
+
+function pmContractorToggle(){
+  const on = $('pm_addContractor').checked;
+  $('pm_contractorFields').style.display = on ? '' : 'none';
+  if(!on) return;
+  const sel = $('pm_addRequest');
+  const orders = (CONTRACTS||[]).filter(c=>['work_order','work_request'].indexOf(c.ContractKind)>=0);
+  sel.innerHTML = '<option value="">— not against a particular request —</option>'
+    + orders.map(c=>`<option value="${esc(c.ContractID)}">${esc(c.Number)}`
+        + `${c.ContractKind==='work_request'?' · ceiling':' · fixed'}`
+        + `${c.Amount?' '+esc(c.Currency||'')+' '+money(c.Amount):''}</option>`).join('');
+}
+
 function pmContractsFor(){
   const email = ($('pm_addEmp').value||'').toLowerCase();
   const cp = COUNTERPARTIES.find(c=>String(c.Email||'').toLowerCase()===email);
@@ -4187,7 +4304,13 @@ async function addAssignment(){
   notice('pm_err','',''); const email=$('pm_addEmp').value;
   if(!email){ notice('pm_err','err','Select a team member.'); return; }
   const b=$('pm_addBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
-  try{ await api('add_assignment',{projectId:CURRENT.project.ProjectID, email, title:$('pm_addTitle').value.trim(), contractId:($('pm_addContract')?$('pm_addContract').value:''), comment:$('pm_addComment').value.trim()}); await refreshModal(); }
+  const contractor = $('pm_addContractor') && $('pm_addContractor').checked;
+  try{ await api('add_assignment',{projectId:CURRENT.project.ProjectID, email, title:$('pm_addTitle').value.trim(),
+      contractId:($('pm_addContract')?$('pm_addContract').value:''), comment:$('pm_addComment').value.trim(),
+      performerType: contractor ? 'contractor' : 'employee',
+      requestContractId: contractor ? $('pm_addRequest').value : '',
+      secondaryRole: contractor ? $('pm_addRole2').value.trim() : '',
+      rateSecondary: contractor ? $('pm_addRate2').value : '' }); await refreshModal(); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
   finally{ b.disabled=false; b.innerHTML='Add &amp; notify'; }
 }
@@ -4285,7 +4408,7 @@ let PDF_FILES = [];
 function pdfFileLabel(f){
   const when = f.createdAt ? fmtDate(f.createdAt) : '';
   const what = f.about || f.where || '';
-  const mark = (f.parentType === 'contract') ? (f.current ? '✓ current · ' : '· superseded · ') : '';
+  const mark = f.current ? '✓ current · ' : (f.versioned ? '· superseded · ' : '');
   return mark + f.name.replace(/\.pdf$/i,'') + (what ? ' — ' + what : '') + (when ? ' · ' + when : '');
 }
 function pdfCheckFilter(){
@@ -4415,6 +4538,11 @@ async function pdfFillFromSystemQuiet(){
     pdfSetFill({ created:r.created, modified:r.modified, title:r.title, producer:r.producer,
                  source:'the system — '+esc(r.source||'') });
   }catch(e){}
+}
+function pdfCheckOpen(){
+  const id = $('pdfCheckPick').value;
+  if(!id){ notice('pdfCheckErr','err','Choose a document first.'); return; }
+  window.open('https://drive.google.com/file/d/'+encodeURIComponent(id)+'/view', '_blank');
 }
 async function pdfCheckPicked(btn){
   const id = $('pdfCheckPick').value;
@@ -4816,6 +4944,34 @@ async function printReportPdf(){
 // from the project's report list (uses saved data)
 // The file for the customer's system: assembled on the server so its metadata can be
 // rewritten — created on the day the report was submitted, modified on the day it was accepted.
+// Attaching a document made elsewhere: an old report signed on paper does not want
+// rebuilding, it wants to be the report's file as it is.
+function reportPdfPick(aid){
+  let input = $('reportPdfInput');
+  if(!input){
+    input = document.createElement('input');
+    input.type = 'file'; input.accept = 'application/pdf'; input.id = 'reportPdfInput';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+  }
+  input.onchange = () => reportPdfUpload(aid, input);
+  input.value = '';
+  input.click();
+}
+async function reportPdfUpload(aid, input){
+  const f = input.files && input.files[0]; if(!f) return;
+  if(!/pdf$/i.test(f.name)){ alert('A PDF is expected.'); return; }
+  try{
+    const r = await api('report_pdf_upload',{ assignmentId:aid, fileName:f.name,
+      dataBase64: await fileToBase64(f) });
+    alert(r.replaced
+      ? `Attached. It replaces the file the report had before.`
+      : `Attached to the report.`);
+    if(typeof refreshModal==='function'){ try{ await refreshModal(); }catch(_){} }
+  }catch(e){ alert(e.message); }
+  finally{ input.value=''; }
+}
+
 async function reportPdfFile(aid, btn, rebuild){
   const withSign = confirm('Add a signature field at the bottom of the PDF?');
   const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
