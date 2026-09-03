@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.163';
+const BUILD = '2026-08-08.164';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -107,7 +107,6 @@ function doPost(e) {
   try {
     var body = {};
     if (e && e.postData && e.postData.contents) body = JSON.parse(e.postData.contents);
-    ensureTextFormat_();
     var res = route_(body.action, body);
     // how long the server itself took — anything beyond this is network or the browser
     if (res && typeof res === 'object') res.serverMs = Date.now() - t0;
@@ -4595,6 +4594,16 @@ function costReport_(d) {
   // A report carries two links: the contract the performer works under (their ICA), and the
   // contract the work is done for (through the project). Both views are needed — one shows
   // what a performer has earned, the other what a job has cost across everyone on it.
+  // Accepted reports, indexed once by what they were booked against. Scanning every report
+  // again for every contract was fine with a dozen reports and is not with hundreds.
+  var acceptedByTarget = {};
+  assignments.forEach(function (a) {
+    if (!trim_(a.AcceptedBy)) return;
+    var key = trim_(a.RequestContractID) || trim_(a.ContractID);
+    if (!key) return;
+    (acceptedByTarget[key] = acceptedByTarget[key] || []).push(a);
+  });
+
   var byPerformer = {}, byJob = {};
   function bucketFor(store, id) {
     if (!store[id]) store[id] = { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0,
@@ -4657,14 +4666,19 @@ function costReport_(d) {
     var orderIds = {};
     orders.forEach(function (x) { orderIds[String(x.ContractID)] = 1; });
     var confirmed = emptyBucket_(), confirmedReports = 0, ceilingBreach = [];
-    assignments.forEach(function (a) {
-      if (!trim_(a.AcceptedBy)) return;
-      var against = trim_(a.RequestContractID) || trim_(a.ContractID);
-      if (against !== id && !orderIds[against]) return;
+    (acceptedByTarget[id] || []).forEach(function (a) {
       var dt = reportDateOf_(a);
       if (!inRange(dt)) return;
       addTo_(confirmed, a.Currency, reportTotal_(a), dt);
       confirmedReports++;
+    });
+    orders.forEach(function (x) {
+      (acceptedByTarget[String(x.ContractID)] || []).forEach(function (a) {
+        var dt = reportDateOf_(a);
+        if (!inRange(dt)) return;
+        addTo_(confirmed, a.Currency, reportTotal_(a), dt);
+        confirmedReports++;
+      });
     });
     // A ceiling that has been passed is worth saying out loud: clause 3.4 of the Wasat
     // agreement forbids exceeding it without written approval.
@@ -4673,8 +4687,7 @@ function costReport_(d) {
       var limit = num_(x.CeilingApproved) || num_(x.Amount);
       if (!limit) return;
       var used = 0;
-      assignments.forEach(function (a) {
-        if (!trim_(a.AcceptedBy)) return;
+      (acceptedByTarget[String(x.ContractID)] || []).forEach(function (a) {
         if (trim_(a.RequestContractID) !== String(x.ContractID)) return;
         used += reportTotal_(a);
       });
@@ -5188,21 +5201,6 @@ function requireAdmin_(d) {
 // call — and with dozens of lookups per request that alone cost seconds. Check each sheet
 // once per request instead; a write invalidates the cached rows, not this handle.
 var SHEET_HANDLES = {};
-// A contract number like "2402-1" is a date to Google Sheets, and a signing date written as
-// "2026-02-02" comes back shifted by a timezone. Both are cured by keeping the cells textual.
-function ensureTextFormat_() {
-  var props = PropertiesService.getScriptProperties();
-  if (props.getProperty('text_format_v1') === '1') return;
-  [SHEETS.documents, SHEETS.blocks, SHEETS.terms, SHEETS.queue, SHEETS.sentText, SHEETS.queueText]
-    .forEach(function (name) {
-      try {
-        var sh = getSheet_(name);
-        sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setNumberFormat('@');
-      } catch (e) {}
-    });
-  props.setProperty('text_format_v1', '1');
-}
-
 function getSheet_(name) {
   if (SHEET_HANDLES[name]) return SHEET_HANDLES[name];
   var ss = ss_(), sh = ss.getSheetByName(name), want = HEADERS[keyByName_(name)];
@@ -5272,20 +5270,23 @@ function readAll_(name) {
 }
 var TEXT_COLS = ['Number', 'GroupKey', 'RegNumber', 'AccountNumber', 'Swift', 'CorrSwift', 'Phone', 'Title',
                  'FileName', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'SemanticKey', 'FromClause', 'Field'];
+// Dates and reference numbers must stay text, or Sheets reads "2515-1" as a date. The whole
+// row is formatted and written in one go: doing it cell by cell meant three calls per column,
+// and with a widening list of text columns that became the slowest thing in the system.
 function appendRow_(name, obj) {
   invalidateCache_(name);
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
   var arr = head.map(function (h) { return obj[h] != null ? obj[h] : ''; });
-  sh.appendRow(arr);
-  // Keep dates and reference numbers as text — otherwise Sheets turns "2515-1" into a date.
-  var r = sh.getLastRow();
-  for (var i = 0; i < arr.length; i++) {
-    var isDate = (typeof arr[i] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(arr[i]));
-    var isRef = (typeof arr[i] === 'string' && arr[i] !== '' && TEXT_COLS.indexOf(head[i]) >= 0);
-    if (isDate || isRef) {
-      var cell = sh.getRange(r, i + 1); cell.setNumberFormat('@'); cell.setValue(arr[i]);
-    }
-  }
+  var formats = head.map(function (h, i) {
+    var v = arr[i];
+    var isDate = (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v));
+    var isRef = (typeof v === 'string' && v !== '' && TEXT_COLS.indexOf(h) >= 0);
+    return (isDate || isRef) ? '@' : 'General';
+  });
+  var r = sh.getLastRow() + 1;
+  var range = sh.getRange(r, 1, 1, arr.length);
+  range.setNumberFormats([formats]);
+  range.setValues([arr]);
 }
 function findRow_(name, idField, idValue) {
   if (idValue === '' || idValue == null) return null;

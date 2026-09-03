@@ -118,6 +118,7 @@
       <button id="tab-v2" onclick="switchTab('v2')">Contracts 2.0</button>
       <button id="tab-data" onclick="switchTab('data')">Collected data</button>
       <button id="tab-pdf" onclick="switchTab('pdf')">PDF check</button>
+      <button onclick="showSlow()" title="Where the time goes" style="margin-left:auto;opacity:.5">⏱</button>
     </div>
 
     <!-- PROJECTS -->
@@ -349,7 +350,8 @@
         </div>
         <div id="pdfCheckOut" style="margin-top:14px"></div>
         <div style="height:12px"></div>
-        <div id="pdfTidy" class="muted" style="font-size:13px"></div>
+        <div id="pdfTidy" class="muted" style="font-size:13px">
+          <button class="btn ghost sm" onclick="pdfTidyCheck(this)">Look for files nothing points at</button></div>
       </div>
 
       <div class="panel">
@@ -1015,7 +1017,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.163';
+const BUILD = '2026-08-08.164';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1056,14 +1058,22 @@ async function api(action, payload={}){
     if(/exceeded maximum execution time|too large|request entity/i.test(text))
       throw new Error('The server gave up on "'+action+'" — the request took too long or was too big ('
         +Math.round(JSON.stringify(payload||{}).length/1024)+' KB sent).');
+    if(res.status === 404)
+      throw new Error('The server answered 404 on "'+action+'". The deployment behind this URL is gone —'
+        + ' publish a new version, or check that the /exec address in this page is the current one.');
     if(/<html/i.test(text))
       throw new Error('The server returned an HTML page on "'+action+'" (HTTP '+res.status+', '
-        +Math.round(JSON.stringify(payload||{}).length/1024)+' KB sent) instead of data — usually a request that ran too long.');
+        +Math.round(JSON.stringify(payload||{}).length/1024)+' KB sent) instead of data.');
     throw new Error('The server returned non-JSON on "'+action+'" (HTTP '+res.status+'). Check the URL (/exec) and publish a new deployment version.');
   }
   API_LOG.push({ action, totalMs: tookMs, serverMs: data.serverMs ?? null,
                  networkMs: data.serverMs != null ? tookMs - data.serverMs : null });
   if(API_LOG.length > 200) API_LOG.shift();
+  if(typeof data.serverMs === 'number'){
+    API_SLOW.push({ action, ms:data.serverMs });
+    API_SLOW.sort((a,b)=>b.ms-a.ms);
+    if(API_SLOW.length > 8) API_SLOW.length = 8;
+  }
   if(!data.ok){ const err = new Error(data.error||'Server error'); err.data = data; throw err; }
   return data;
 }
@@ -3557,6 +3567,13 @@ function applyExtrasToDoc(x){
   if(x.warrantyPeriod && $('dc_optWarranty')) $('dc_optWarranty').checked = true;
   return filled;
 }
+// The slowest calls of this session, server-side. Useful when something starts dragging.
+function showSlow(){
+  alert(API_SLOW.length
+    ? 'Slowest calls this session (server time):\n\n'
+      + API_SLOW.map(x=>`  ${x.ms} ms · ${x.action}`).join('\n')
+    : 'Nothing measured yet.');
+}
 function showSentText(){
   $('sent_body').textContent = AI_SENT_TEXT || 'Nothing has been sent yet.';
   $('sentModal').classList.remove('hidden');
@@ -4462,8 +4479,9 @@ function pdfCheckFilter(){
     : `${PDF_FILES.length} document(s)`;
 }
 // Files on Drive nothing points at any more — sources of test parses, mostly.
-async function pdfTidyCheck(){
+async function pdfTidyCheck(btn){
   const box = $('pdfTidy'); if(!box) return;
+  if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
   try{
     const r = await api('drive_tidy',{});
     box.innerHTML = r.count
