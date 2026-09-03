@@ -163,6 +163,13 @@
       <input id="submitDate" type="date"></div>
 
     <div style="height:18px"></div>
+    <div class="hoursbox" id="extWrap" style="display:none">
+      <label>External report <span style="font-weight:400;color:#667">— the contractor's own signed form</span></label>
+      <div id="extState" style="font-size:14px;color:#667;margin:6px 0"></div>
+      <button class="btn ghost" onclick="extPick(this)">Upload the signed PDF</button>
+    </div>
+
+    <div style="height:18px"></div>
     <div class="hoursbox" id="sigWrap">
       <label>Your signature <span style="font-weight:400;color:#667">— appears on the report you submit</span></label>
       <div id="sigList" style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0"></div>
@@ -229,7 +236,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-08-08.165';
+const BUILD='2026-08-08.167';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -333,13 +340,26 @@ async function openReport(aid){
       recalc();
     }
     $('submitDate').value = a.SubmittedAt ? toDate(a.SubmittedAt) : todayStr();
-    const lump = a.PricingType==='lump';
-    if($('hoursWrap')) $('hoursWrap').style.display = lump ? 'none' : '';
+    // Where there are no hours to give, the box explains itself instead of vanishing.
+    const lump = a.PricingType==='lump', ext = a.PerformerType==='contractor';
+    if($('hoursWrap')){
+      const w = $('hoursWrap');
+      w.style.display = '';
+      $('totalHours').style.display = (lump||ext) ? 'none' : '';
+      let note = w.querySelector('.nohours');
+      if(!note){ note = document.createElement('div'); note.className='nohours';
+                 note.style.cssText='font-size:14px;color:#667'; w.appendChild(note); }
+      note.textContent = lump ? 'Lump sum — this report carries the contract amount, not hours.'
+                       : ext  ? 'The contractor bills their own hours in their report.' : '';
+      const lab = w.querySelector('label');
+      if(lab) lab.textContent = (lump||ext) ? 'Hours' : 'Total hours spent (all activities) *';
+    }
     const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes';
     $('curWrap').style.display = allowCur ? '' : 'none';
     $('payoutCur').value = a.PayoutCurrency || '';
     applyMode(ro);
     STATE.signatureId = a.PerformerSignatureID || STATE.signatureId || '';
+    extShow(a);
     if(!ro) sigLoad();
     show('screen-report'); window.scrollTo(0,0);
   }catch(e){ notice('reportsErr','err', esc(e.message)); show('screen-reports'); }
@@ -347,7 +367,7 @@ async function openReport(aid){
 
 function applyMode(ro){
   ['addBtn','reportActions','hoursWrap','dateWrap','sigWrap'].forEach(id=>{ const el=$(id); if(el) el.style.display = ro ? 'none' : ''; });
-  if(STATE.current && STATE.current.PricingType==='lump' && $('hoursWrap')) $('hoursWrap').style.display='none';
+  if(ro && $('hoursWrap')) $('hoursWrap').style.display='none';
   if(ro && $('curWrap')) $('curWrap').style.display='none';
   if(ro) notice('submitMsg','info','This report has been submitted — it is now read-only. You can still download a PDF below. The administrator can return it to you for corrections.');
 }
@@ -371,6 +391,44 @@ function recalc(){
 }
 
 let SIG_LIMIT = 3;
+function fileToBase64(file){
+  return new Promise((res,rej)=>{ const r=new FileReader();
+    r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
+}
+
+// A report done by a contractor comes on their paper: nothing of ours is generated for it,
+// the signed file is simply attached.
+function extShow(a){
+  const wrap = $('extWrap'); if(!wrap) return;
+  const isExt = a && a.PerformerType === 'contractor';
+  wrap.style.display = isExt ? '' : 'none';
+  if(!isExt) return;
+  $('extState').innerHTML = a.ReportPdfUrl
+    ? `Attached · <a href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener">open it</a>`
+    : 'Nothing attached yet.';
+}
+function extPick(btn){
+  const a = STATE.current; if(!a) return;
+  let input = $('extInput');
+  if(!input){
+    input = document.createElement('input');
+    input.type='file'; input.accept='application/pdf'; input.id='extInput'; input.style.display='none';
+    document.body.appendChild(input);
+  }
+  input.onchange = async () => {
+    const f = input.files && input.files[0]; if(!f) return;
+    const old = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+    try{
+      const r = await api('report_pdf_upload', auth({ assignmentId:a.AssignmentID, fileName:f.name,
+        dataBase64: await fileToBase64(f) }));
+      a.ReportPdfUrl = r.url; extShow(a);
+      notice('submitMsg','ok', r.replaced ? 'Attached, replacing the previous file.' : 'Attached to the report.');
+    }catch(e){ notice('submitMsg','err', esc(e.message)); }
+    finally{ btn.disabled=false; btn.textContent=old; input.value=''; }
+  };
+  input.value=''; input.click();
+}
+
 // ── Signatures ──
 // Drawn with a finger on the tablet, kept as a small PNG and reused. Up to three, so there
 // can be a full name and a set of initials.
@@ -540,7 +598,14 @@ async function sigDelete(id, ev){
 async function saveReport(finalize){
   const activities = [...document.querySelectorAll('#items .item textarea')].map(t=>t.value.trim()).filter(Boolean);
   const hours = parseFloat(($('totalHours').value||'').replace(',','.'))||0;
-  if(finalize && (!activities.length || hours<=0)){ notice('submitMsg','err','Add at least one activity and the total hours before submitting.'); return; }
+  // A lump-sum contract carries its amount instead of hours, and a contractor's report is
+  // billed by their own roles — neither has hours to enter here.
+  const a0 = STATE.current || {};
+  const noHours = a0.PricingType === 'lump' || a0.PerformerType === 'contractor';
+  if(finalize && !activities.length){
+    notice('submitMsg','err','Add at least one activity before submitting.'); return; }
+  if(finalize && !noHours && hours<=0){
+    notice('submitMsg','err','Enter the total hours before submitting.'); return; }
 
   const action = finalize ? 'submit_report' : 'save_draft';
   const btn = finalize ? $('submitBtn') : $('draftBtn');

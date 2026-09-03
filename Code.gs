@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.165';
+const BUILD = '2026-08-08.167';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -2064,9 +2064,19 @@ function reportHtmlRoute_(d) {
 // A report that was signed on paper, or built long ago outside the system: the admin uploads
 // the file and it becomes the report's document, in place of anything generated before.
 function reportPdfUpload_(d) {
-  requireAdmin_(d);
   var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
   if (!a) return { ok: false, error: 'Report not found' };
+  // Either the admin, or the person the report belongs to — they are the one who has the
+  // contractor's signed form in hand.
+  if (trim_(d.passcode) !== CONFIG.ADMIN_PASSCODE) {
+    var emp = verifyEmployee_(d);
+    if (!emp || normEmail_(d.email) !== normEmail_(a.EmployeeEmail)) {
+      return { ok: false, error: 'Invalid email or password' };
+    }
+    if (trim_(a.Status) === 'accepted' || trim_(a.AcceptedBy)) {
+      return { ok: false, error: 'The report has been accepted — ask the administrator to replace the file' };
+    }
+  }
   if (!d.dataBase64) return { ok: false, error: 'No file' };
 
   var name = trim_(d.fileName) || 'report.pdf';

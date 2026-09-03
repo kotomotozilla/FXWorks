@@ -1017,7 +1017,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.165';
+const BUILD = '2026-08-08.167';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1032,6 +1032,21 @@ let COUNTERPARTIES = [], CONTRACTS = [], INVOICES = [], PROJECTS = [], ASSIGNMEN
 // Server time comes back with every answer; keeping the slowest few turns "it feels slow"
 // into a number.
 let API_SLOW = [];
+// Every button that waits looks the same: it keeps its width, spins in place and comes back
+// with the label it had. Setting innerHTML by hand shrank buttons to the size of the spinner
+// and lost their text.
+function busy(btn){
+  if(!btn) return function(){};
+  const box = btn.getBoundingClientRect(), label = btn.innerHTML;
+  btn.style.minWidth = Math.ceil(box.width) + 'px';
+  btn.style.minHeight = Math.ceil(box.height) + 'px';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin' + (btn.classList.contains('ghost') ? ' dark' : '') + '"></span>';
+  return function(){
+    btn.disabled = false; btn.innerHTML = label;
+    btn.style.minWidth = ''; btn.style.minHeight = '';
+  };
+}
 
 // Timing of every call is kept, so a slow screen can be traced to the request that caused it.
 window.API_LOG = [];
@@ -1084,10 +1099,10 @@ async function api(action, payload={}){
 async function gateLogin(){
   const pin = $('pin').value; notice('gateErr','','');
   if(!pin){ notice('gateErr','err','Enter the PIN.'); return; }
-  const b=$('gateBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>'; PIN = pin;
+  const b=$('gateBtn'); const __done = busy(b); PIN = pin;
   try{ const r = await api('admin_login'); BE_BUILD = r.build||''; sessionStorage.setItem('fx_pin', PIN); enterApp(); }
   catch(e){ notice('gateErr','err', esc(e.message)); PIN=''; }
-  finally{ b.disabled=false; b.textContent='Sign in'; }
+  finally{ __done(); }
 }
 function logout(){ sessionStorage.removeItem('fx_pin'); location.reload(); }
 function renderWho(){
@@ -1351,7 +1366,7 @@ async function saveCounterpartyCard(){
   if(!name){ notice('cm_err','err','Name is required.'); return; }
   const access=$('cm_access').checked, email=$('cm_email').value.trim();
   if(access && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ notice('cm_err','err','Reporting access requires a valid email.'); return; }
-  const b=$('cm_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('cm_save'); const __done = busy(b);
   try{
     await api('save_counterparty', { id:CARD_CP, name, type:$('cm_type').value, email, phone:$('cm_phone').value.trim(),
       address:$('cm_address').value.trim(), hasAccess:access, password:$('cm_pass').value, rate:$('cm_rate').value, currency:$('cm_currency').value, rateContractId:($('cm_rateContract')?$('cm_rateContract').value:'') });
@@ -1364,14 +1379,14 @@ async function saveCounterpartyCard(){
     $('cm_pass').value=''; $('cm_invite').style.display = access ? '' : 'none';
     notice('cm_err','ok','Saved.');
   }catch(e){ notice('cm_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Save counterparty'; }
+  finally{ __done(); }
 }
 async function inviteFromCard(btn){
   const email=$('cm_email').value.trim();
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{ await api('invite_counterparty',{email}); notice('cm_err','ok','Invite sent to '+esc(email)+'.'); }
   catch(e){ notice('cm_err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Send invite'; }
+  finally{ __done(); }
 }
 async function deleteFromCard(){
   if(!confirm('Delete this counterparty? Requisite sets and files are removed; existing reports remain.')) return;
@@ -1445,7 +1460,7 @@ async function saveInvoice(){
   notice('invm_err','','');
   const cpId=$('inv_cp').value;
   if(!cpId){ notice('invm_err','err','Select a counterparty.'); return; }
-  const b=$('inv_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('inv_btn'); const __done = busy(b);
   const payload={ id:EDIT_INV, number:$('inv_number').value.trim(), contractId:$('inv_contract').value, counterpartyId:cpId,
     invoiceDate:$('inv_date').value, dueDate:$('inv_due').value, amount:$('inv_amount').value, currency:$('inv_currency').value };
   try{
@@ -1455,7 +1470,7 @@ async function saveInvoice(){
     if(id) openInvoice(id, true);
     notice('invm_err','ok','Invoice saved.');
   }catch(e){ notice('invm_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent = EDIT_INV?'Save invoice':'Create invoice'; }
+  finally{ __done(); }
 }
 async function deleteInvoiceFromCard(){
   const v = INVOICES.find(x=>String(x.InvoiceID)===String(EDIT_INV));
@@ -1658,11 +1673,11 @@ function showFileName(inputId, labelId){
 function curByType(elId){ const t=$(elId+'_type').value, c=$(elId+'_cur'); if(c) c.checked = (t==='signed'); }
 function toggleAttEdit(id){ const el=$('ae_'+id); if(el) el.classList.toggle('hidden'); }
 async function saveAttMeta(id, parentType, parentId, elId, btn){
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     await api('update_attachment',{ id, docType:$('aet_'+id).value, docDate:$('aed_'+id).value, description:$('aex_'+id).value.trim() });
     await renderAttachments(elId, parentType, parentId);
-  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Save'; }
+  }catch(e){ alert(e.message); __done(); }
 }
 async function setCurrentAttachment(id, parentType, parentId, elId){
   try{ await api('set_current_attachment',{id, isCurrent:true}); await renderAttachments(elId, parentType, parentId); }
@@ -1672,7 +1687,7 @@ async function uploadAttachment(parentType, parentId, elId){
   const input=$(elId+'_file'); const file=input.files[0];
   if(!file){ alert('Choose a file first.'); return; }
   if(file.size > 20*1024*1024){ alert('File too large (max ~20 MB).'); return; }
-  const btn=$(elId+'_btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const btn=$(elId+'_btn'); const __done = busy(btn);
   try{
     const b64 = await fileToBase64(file);
     await api('add_attachment',{parentType, parentId, fileName:file.name,
@@ -1683,7 +1698,7 @@ async function uploadAttachment(parentType, parentId, elId){
       mimeType:file.type||'application/octet-stream', dataBase64:b64});
     await renderAttachments(elId, parentType, parentId);
     if(parentType==='contract' && $('ext_src')) extLoadSources(parentId);
-  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Upload'; }
+  }catch(e){ alert(e.message); __done(); }
 }
 async function deleteAttachment(id, parentType, parentId, elId){
   if(!confirm('Delete this file? It will be moved to Trash in your Google Drive.')) return;
@@ -1693,27 +1708,27 @@ async function deleteAttachment(id, parentType, parentId, elId){
 
 // ── FX recalculation ──
 async function recalcContractFx(id, btn){
-  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{ await api('recalc_contract_fx',{id}); await loadContracts();
     if(!$('ctModal').classList.contains('hidden') && String(EDIT_CT)===String(id)) openContract(id, true);
   }catch(e){ alert(e.message); }
-  finally{ btn.disabled=false; btn.textContent=t; }
+  finally{ __done(); }
 }
 async function recalcInvoiceFx(id, btn){
-  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{ await api('recalc_invoice_fx',{id}); await loadInvoices();
     if(!$('invModal').classList.contains('hidden') && String(EDIT_INV)===String(id)) openInvoice(id, true);
   }catch(e){ alert(e.message); }
-  finally{ btn.disabled=false; btn.textContent=t; }
+  finally{ __done(); }
 }
 async function recalcAllFx(btn){
-  const t=btn.textContent; btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{
     const r = await api('recalc_all_fx',{});
     await loadContracts(); await loadInvoices();
     alert(`Recalculated ${r.done}. ${r.remaining? r.remaining+' still without USD — click again (rates may be temporarily unavailable).':'All amounts converted.'}`);
   }catch(e){ alert(e.message); }
-  finally{ btn.disabled=false; btn.textContent=t; }
+  finally{ __done(); }
 }
 
 // ── Requisite sets (per counterparty) ──
@@ -1759,25 +1774,25 @@ function reqEdit(id){
 }
 async function reqSave(){
   notice('rq_err','','');
-  const b=$('rq_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('rq_save'); const __done = busy(b);
   const payload = { id:RQ_EDIT, counterpartyId:RQ_CP, isDefault:$('rq_isDefault').checked };
   RQ_FIELDS.forEach(f=>{ const el=$('rq_'+f); payload[f] = el?el.value.trim():''; });
   try{
     await api('save_requisite', payload);
     reqCancel(); await loadRequisites(RQ_CP); notice('rq_err','ok','Requisite set saved.');
   }catch(e){ notice('rq_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent = RQ_EDIT?'Update requisite set':'Save requisite set'; }
+  finally{ __done(); }
 }
 async function reqDelete(id, btn){
   if(!confirm('Delete this requisite set?')) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{ await api('delete_requisite',{id}); await loadRequisites(RQ_CP); }
-  catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Delete'; }
+  catch(e){ notice('rq_err','err', esc(e.message)); __done(); }
 }
 async function reqSetDefault(id, btn){
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{ await api('set_default_requisite',{id}); await loadRequisites(RQ_CP); }
-  catch(e){ notice('rq_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Make default'; }
+  catch(e){ notice('rq_err','err', esc(e.message)); __done(); }
 }
 
 // ── Contracts 2.0: clause blocks ──
@@ -1837,16 +1852,16 @@ async function v2LoadContract(){
 // Continue a parse that ran out of time, appending to the same document.
 // Is it the model or the document? One short call answers that.
 async function v2CheckModel(btn){
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const r = await api('v2_check_model');
     notice('v2Err','ok',`Model <b>${esc(r.model)}</b> answered in ${r.ms} ms — the key and the quota are fine.`);
   }catch(e){ notice('v2Err','err','The model did not answer: '+esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Test the model'; }
+  finally{ __done(); }
 }
 async function v2ParseMore(btn){
   if(!V2.resume) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   notice('v2Err','info','Carrying on with the rest of the document…');
   try{
     const r = await api('v2_parse_more',{ documentId:V2.resume.documentId, fromPart:V2.resume.from,
@@ -1857,7 +1872,7 @@ async function v2ParseMore(btn){
     notice('v2Err','ok',`${r.blocks} more clause(s) · parts ${r.partsDone} of ${r.partsTotal}.`
       + (V2.resume?`<div style="margin-top:8px"><button class="btn sm" onclick="v2ParseMore(this)">Carry on from part ${V2.resume.from+1} of ${V2.resume.total}</button></div>`:''));
   }catch(e){ notice('v2Err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Carry on'; }
+  finally{ __done(); }
 }
 async function v2Parse(){
   const sandbox = V2.contractId==='__sandbox';
@@ -1869,7 +1884,7 @@ async function v2Parse(){
   if(files.some(f=>f.size > 20*1024*1024)){ notice('v2Err','err','Each file must be under ~20 MB.'); return; }
 
   const total = sandbox ? files.length : attIds.length;
-  const b=$('v2_parseBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('v2_parseBtn'); const __done = busy(b);
   const done=[], lines=[], lastResults=[];
   V2.resume = null; V2.samples = [];
   const secs = ms => (ms==null?'—':(ms/1000).toFixed(1)+'s');
@@ -1951,7 +1966,7 @@ async function v2Parse(){
     notice('v2Err', sum?'ok':'err',
       (sum ? `Parsed ${total} document(s) into ${sum} clauses.` : 'Nothing was parsed — try again or split the document.')
       + `<div class="muted" style="font-size:12px;margin-top:6px">${lines.join('<br>')}</div>`);
-  }finally{ b.disabled=false; b.textContent='Parse into clauses'; }
+  }finally{ __done(); }
 }
 // Testing needs a clean slate: forget every document parsed against this contract
 // (or against the sandbox), with its clauses, terms and stored text.
@@ -1963,7 +1978,7 @@ async function v2QueueParse(){
   const files = $('v2_file').files;
   if(sandbox && !files.length){ notice('v2Err','err','Choose the files first.'); return; }
   if(!sandbox){ notice('v2Err','err','Background parsing works from the sandbox for now — pick "test parsing".'); return; }
-  const b=$('v2_queueBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('v2_queueBtn'); const __done = busy(b);
   const batchId = 'b'+Date.now();
   try{
     for(let i=0;i<files.length;i++){
@@ -2010,7 +2025,7 @@ async function v2QueueParse(){
                        : ' <b style="color:var(--warn)">Background runs are off — keep this tab open</b>, otherwise nothing will be parsed.'));
     v2QueueWatch();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Queue in the background'; v2QueueWatch(); }
+  finally{ __done(); v2QueueWatch(); }
 }
 
 // Show the queue, and keep it moving while the page is open (the timed trigger does the
@@ -2271,7 +2286,7 @@ function v2BlockRow(b, docs, eff, superseded, showKey, asSecondary){
 }
 async function v2SaveBlock(id, btn){
   const g = p => { const e=$(p+id); return e ? e.value : undefined; };
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     await api('v2_save_block',{ blockId:id, path:g('be_p_'), level:g('be_l_'), title:g('be_t_'),
       semanticKey:g('be_k_'), text:g('be_x_') });
@@ -2281,7 +2296,7 @@ async function v2SaveBlock(id, btn){
            if(b.Origin==='external') b.Origin='external-edited'; }
     v2Render();
   }catch(e){ notice('v2Err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Save clause'; }
+  finally{ __done(); }
 }
 async function v2AddBlock(documentId, afterSort){
   try{
@@ -2335,13 +2350,13 @@ async function v2FromTemplate(btn){
   const tplId = $('v2_tpl').value;
   if(!V2.contractId || V2.contractId==='__sandbox'){ notice('v2Err','err','Pick a real contract to fill.'); return; }
   if(!tplId){ notice('v2Err','err','Pick a template.'); return; }
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const r = await api('v2_from_template',{contractId:V2.contractId, templateId:tplId, kind:$('v2_tplKind').value});
     await v2LoadContract();
     notice('v2Err','ok','Filled from the template: '+r.blocks+' clauses. Edit them, then assemble the document.');
   }catch(e){ notice('v2Err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Fill from template'; }
+  finally{ __done(); }
 }
 
 // Read every document in turn and record what each of them established — the agreement's
@@ -2349,7 +2364,7 @@ async function v2FromTemplate(btn){
 async function v2BuildHistory(btn){
   if(!V2.contractId || V2.contractId==='__sandbox'){ notice('v2Err','err','Pick a real contract.'); return; }
   if(!V2.documents.length){ notice('v2Err','err','Parse the documents first.'); return; }
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   notice('v2Err','info','Reading each document in turn — one pass per document…');
   try{
     const r = await api('v2_build_history',{contractId:V2.contractId});
@@ -2357,7 +2372,7 @@ async function v2BuildHistory(btn){
     notice('v2Err','ok',`History built: ${r.added} new entries.`
       + ((r.notes&&r.notes.length)?`<div class="muted" style="font-size:12px;margin-top:6px">${r.notes.map(esc).join('<br>')}</div>`:''));
   }catch(e){ notice('v2Err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Build full history'; }
+  finally{ __done(); }
 }
 // Export the term history together with the values currently read, so the whole chain
 // — clause → value → date it took effect — can be checked outside the app.
@@ -2491,7 +2506,7 @@ async function v2ApplyParams(btn){
   const picked = {};
   Object.keys(V2_PARAMS||{}).forEach(k=>{ if($('pf_'+k) && $('pf_'+k).checked) picked[k] = $('pv_'+k).value; });
   if(!Object.keys(picked).length){ notice('v2Err','err','Nothing ticked.'); return; }
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     // core fields live on the contract itself; the rest are document settings
     const core = {};
@@ -2532,7 +2547,7 @@ async function v2ApplyParams(btn){
     notice('v2Err','ok','Written to contract '+esc(c.Number)+': '+Object.keys(picked).length+' value(s)'
       + (logged?`; ${logged} recorded in the term history`:'') + '.');
   }catch(e){ notice('v2Err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Apply ticked to the contract record'; }
+  finally{ __done(); }
 }
 
 // Assemble the clauses in force into a document: Google Doc + PDF + Word.
@@ -2835,13 +2850,13 @@ async function payClear(btn){
   if(!cp){ notice('payErr','err','Pick a counterparty first.'); return; }
   const name=(COUNTERPARTIES.find(c=>String(c.CounterpartyID)===String(cp))||{}).Name||'';
   if(!confirm(`Delete every recorded payment for ${name}? The reports themselves are not touched.`)) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const r = await api('delete_payments',{counterpartyId:cp});
     await payLoadExisting();
     notice('payErr','ok',`${r.deleted} payment(s) deleted.`);
   }catch(e){ notice('payErr','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Clear all for this counterparty'; }
+  finally{ __done(); }
 }
 
 
@@ -2893,7 +2908,7 @@ async function payParse(btn){
   const cp=$('pay_cp').value, f=($('pay_file').files||[])[0];
   if(!cp){ notice('payErr','err','Pick a counterparty.'); return; }
   if(!f){ notice('payErr','err','Choose a statement file.'); return; }
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   notice('payErr','info','Reading the statement…');
   try{
     const p = await api('parse_statement',{ fileName:f.name, mimeType:f.type||'application/vnd.ms-excel',
@@ -2908,7 +2923,7 @@ async function payParse(btn){
     const hit = PAY_ROWS.filter(x=>x.match).length;
     notice('payErr','ok',`${p.rows.length} line(s) read · ${hit} matched automatically · ${PAY_ROWS.length-hit} left to you.`);
   }catch(e){ notice('payErr','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Read and match'; }
+  finally{ __done(); }
 }
 function payRender(){
   $('pay_matchPanel').style.display = PAY_ROWS.length ? '' : 'none';
@@ -2969,7 +2984,7 @@ function payDiff(i){
 async function paySave(btn){
   const cp=$('pay_cp').value;
   if(!cp || !PAY_ROWS.length) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const items = PAY_ROWS.map((x,i)=>({ date:x.line.date, amount:x.line.amount, currency:x.line.currency,
       reference:x.line.reference, assignmentId: ($('pay_sel_'+i)||{}).value || '' }));
@@ -2978,7 +2993,7 @@ async function paySave(btn){
     await payLoadExisting();
     notice('payErr','ok',`${r.added} payment(s) saved.`);
   }catch(e){ notice('payErr','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Save payments'; }
+  finally{ __done(); }
 }
 async function payUnmatch(id){
   try{ await api('unmatch_payment',{paymentId:id}); await payLoadExisting(); }
@@ -3123,7 +3138,7 @@ function costsTrace(){
   notice('costErr','info','Showing where each report lands. Press Show to go back to the totals.');
 }
 async function loadCosts(){
-  const b=$('cost_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('cost_btn'); const __done = busy(b);
   notice('costErr','info','Calculating…');
   try{
     const r = await api('cost_report',{ from:$('cost_from').value, to:$('cost_to').value });
@@ -3131,7 +3146,7 @@ async function loadCosts(){
     renderCosts(r);
     notice('costErr','','');
   }catch(e){ notice('costErr','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Show'; }
+  finally{ __done(); }
 }
 function renderCosts(r){
   const tb=$('costTable').querySelector('tbody');
@@ -3476,7 +3491,7 @@ function renderContractsList(){
 }
 async function saveContract(){
   notice('ctm_err','','');
-  const b=$('ct_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('ct_btn'); const __done = busy(b);
   const role = $('ct_role').value;
   const payload = { id:EDIT_CT, number:$('ct_number').value.trim(), counterpartyId:$('ct_cp').value,
     direction: (role==='customer' ? 'outgoing' : 'incoming'),
@@ -3520,7 +3535,7 @@ async function saveContract(){
     }
     notice('ctm_err','ok','Contract and document settings saved.');
   }catch(e){ notice('ctm_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent = EDIT_CT?'Save contract':'Create contract'; }
+  finally{ __done(); }
 }
 // ── External contract form + OCR extraction ──
 let PENDING_DOCS = [], EXTRACTED_EXTRAS = null, AI_SENT_TEXT = '';   // files uploaded while creating a contract + values read from them
@@ -3653,7 +3668,7 @@ async function extLoadSources(contractId){
 async function extractFromDoc(){
   const ids = Array.from($('ext_src').selectedOptions).map(o=>o.value).filter(Boolean);
   if(!ids.length){ notice('ext_msg','err','Select at least one attached document (hold Ctrl/Cmd to pick the agreement and its SOW).'); return; }
-  const b=$('ext_btn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('ext_btn'); const __done = busy(b);
   notice('ext_msg','info','Reading '+ids.length+' document(s) — this can take a minute…');
   try{
     const r = await api('extract_contract',{attachmentIds:ids});
@@ -3667,7 +3682,7 @@ async function extractFromDoc(){
     const eng = (r.engine==='AI') ? 'AI reading' : 'rule-based reading';
     notice('ext_msg','ok',eng+' — recognised: '+got.join(', ')+(dcFilled.length?'; document settings filled: '+dcFilled.join(', '):'')+'. Check everything, then press <b>Save contract</b> and <b>Save document settings</b>. Anything not recognised is left empty.'+(notes?'<div class="muted" style="font-size:12px;margin-top:6px">'+notes+'</div>':''));
   }catch(e){ notice('ext_msg','err', esc(e.message)+' — you can still type the details in by hand.'); }
-  finally{ b.disabled=false; b.textContent='Read data from document'; }
+  finally{ __done(); }
 }
 function mergeFieldsClient(parts){
   const main = parts.filter(p=>p.docType!=='annex' && p.docType!=='amendment').map(p=>p.fields||{});
@@ -3698,7 +3713,7 @@ async function extractFromUpload(){
   const files = Array.from($('ext_file').files||[]);
   if(!files.length){ notice('ext_msg','err','Choose at least one file.'); return; }
   if(files.some(f=>f.size > 20*1024*1024)){ notice('ext_msg','err','Each file must be under ~20 MB.'); return; }
-  const b=$('ext_upbtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('ext_upbtn'); const __done = busy(b);
   notice('ext_msg','info','Uploading and reading '+files.length+' file(s) — this can take a minute…');
   PENDING_DOCS = [];
   const parts = [], notes = [];
@@ -3719,7 +3734,7 @@ async function extractFromUpload(){
     if(got.length) notice('ext_msg','ok',(parts[0]&&parts[0].engine==='AI'?'AI reading':'rule-based reading')+' — recognised: '+got.join(', ')+'. Check the values, then press <b>Create contract</b> — the files will be attached automatically.'+nHtml);
     else notice('ext_msg','info','Nothing recognised. Fill the fields by hand — the files are uploaded and will be attached on save.'+nHtml);
   }catch(e){ notice('ext_msg','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent='Upload & read data'; }
+  finally{ __done(); }
 }
 
 // ── What each setting does to the generated document ──
@@ -3837,14 +3852,14 @@ async function openSettings(){
   }catch(e){ notice('gen_msg','err', esc(e.message)); }
 }
 async function saveSettings(btn){
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   const payload = {};
   ['tpl_b2b_agreement','tpl_b2b_sow','tpl_ica','tpl_ica_sow','tpl_uplift'].forEach(k=>{ payload[k] = $('set_'+k).value.trim(); });
   try{
     await api('save_settings', payload);
     notice('set_err','ok','Saved.');
   }catch(e){ notice('set_err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Save'; }
+  finally{ __done(); }
 }
 let GEN_PART = 'agreement';
 async function askSigning(part){
@@ -3867,7 +3882,7 @@ async function askSigning(part){
 }
 async function generateNow(btn){
   if(!$('sign_name').value.trim()){ notice('sign_err','err','Enter who signs on behalf of the company.'); return; }
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const r = await api('generate_contract',{ id:EDIT_CT, part:GEN_PART,
       signatoryName:$('sign_name').value.trim(), signatoryTitle:$('sign_role').value.trim(),
@@ -3881,11 +3896,11 @@ async function generateNow(btn){
       + ' · attached to the contract as a draft. Check it before sending.');
     renderAttachments('ctm_attach','contract',EDIT_CT);
   }catch(e){ notice('sign_err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Generate'; }
+  finally{ __done(); }
 }
 async function generateDoc(part, btn){
   if(!EDIT_CT){ notice('gen_msg','err','Save the contract first.'); return; }
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   notice('gen_msg','info','Building the document from the template…');
   try{
     const r = await api('generate_contract',{ id:EDIT_CT, part });
@@ -3897,7 +3912,7 @@ async function generateDoc(part, btn){
       + ' · attached to the contract as a draft. Check it before sending.');
     renderAttachments('ctm_attach','contract',EDIT_CT);
   }catch(e){ notice('gen_msg','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent = (part==='sow'?'Generate SOW':'Generate agreement'); }
+  finally{ __done(); }
 }
 
 // The rate is frozen when the report is created, but until it is submitted the choice can
@@ -3948,7 +3963,7 @@ function rateSrcChange(){
 }
 async function applyReportRate(btn){
   if(!REP) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{
     const r = await api('set_report_rate',{ assignmentId:REP.AssignmentID,
       contractId:$('rm_rateSrc').value, rate:$('rm_rateOver').value });
@@ -3957,7 +3972,7 @@ async function applyReportRate(btn){
     viewReport(REP.AssignmentID);
     notice('rm_err','ok',`Rate applied: ${r.rate?`${cur(r.currency)}${money(r.rate)}`:'lump sum'} · amount ${cur(r.currency)}${money(r.amount)}`);
   }catch(e){ notice('rm_err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Apply rate'; }
+  finally{ __done(); }
 }
 // ── Performance uplift ──
 const UPLIFT_DEF = { base:5, k1Min:1, k1Max:1.5, k2Min:1, k2Max:1.6, k3Min:1, k3Max:1.25 };
@@ -4269,9 +4284,9 @@ function renderProjectModal(){
         <button class="btn ghost sm" onclick="pdfFromList('${a.AssignmentID}')">PDF</button>
         ${a.PerformerType === 'contractor'
           ? (a.ReportPdfUrl
-              ? `<a class="btn ghost sm" href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener">their report ↗</a>
-                 <button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="Replace it with another file">replace the file</button>`
-              : `<button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="The contractor signs its own form — upload the signed PDF">attach their report</button>`)
+              ? `<a class="btn ghost sm" href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener">ext report ↗</a>
+                 <button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="Replace the contractor's signed report with another file">replace ext report</button>`
+              : `<button class="btn ghost sm" onclick="reportPdfPick('${a.AssignmentID}')" title="The contractor signs its own form — upload their signed PDF">attach ext report</button>`)
           : (a.ReportPdfUrl
               ? `<a class="btn ghost sm" href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener" title="Built ${esc(fmtDate(a.ReportPdfAt)||'')}">PDF file ↗</a>
                  <button class="btn ghost sm" onclick="reportPdfFile('${a.AssignmentID}',this,true)" title="Build it again from the current data">rebuild</button>
@@ -4296,7 +4311,7 @@ async function saveProject(){
   notice('pm_err','',''); const name=$('pm_name').value.trim();
   if(!name){ notice('pm_err','err','Project name is required.'); return; }
   if(!$('pm_cp').value){ notice('pm_err','err','Select a counterparty.'); return; }
-  const b=$('pm_save'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('pm_save'); const __done = busy(b);
   const payload = { name, counterpartyId:$('pm_cp').value, contractId:$('pm_contract').value, description:$('pm_desc').value.trim() };
   try{
     if(CURRENT && CURRENT.project){
@@ -4309,7 +4324,7 @@ async function saveProject(){
       notice('pm_err','ok','Project created — add team members below.');
     }
   }catch(e){ notice('pm_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.textContent = (CURRENT&&CURRENT.project)?'Save project':'Create project'; }
+  finally{ __done(); }
 }
 async function deleteProject(){
   if(!confirm('Delete the whole project with all its reports and data? This cannot be undone.')) return;
@@ -4360,7 +4375,7 @@ function pmContractsFor(){
 async function addAssignment(){
   notice('pm_err','',''); const email=$('pm_addEmp').value;
   if(!email){ notice('pm_err','err','Select a team member.'); return; }
-  const b=$('pm_addBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>';
+  const b=$('pm_addBtn'); const __done = busy(b);
   const contractor = $('pm_addContractor') && $('pm_addContractor').checked;
   try{ await api('add_assignment',{projectId:CURRENT.project.ProjectID, email, title:$('pm_addTitle').value.trim(),
       contractId:($('pm_addContract')?$('pm_addContract').value:''), comment:$('pm_addComment').value.trim(),
@@ -4370,13 +4385,13 @@ async function addAssignment(){
       secondaryRole: contractor ? $('pm_addRole2').value.trim() : '',
       rateSecondary: contractor ? $('pm_addRate2').value : '' }); await refreshModal(); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
-  finally{ b.disabled=false; b.innerHTML='Add &amp; notify'; }
+  finally{ __done(); }
 }
 async function saveComment(aid, btn){
   const comment = $('cmt_'+aid).value.trim();
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{ const r = await api('update_assignment',{assignmentId:aid, comment}); await refreshModal(); }
-  catch(e){ alert(e.message); btn.disabled=false; btn.textContent='Save comment'; }
+  catch(e){ alert(e.message); __done(); }
 }
 async function setStatus(aid, op, btn){
   let payload = {assignmentId:aid};
@@ -4388,15 +4403,17 @@ async function setStatus(aid, op, btn){
     payload.comment = c.trim();
   }
   const action = {recall:'recall_assignment', release:'release_assignment', reopen:'reopen_assignment'}[op];
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{ await api(action, payload); await refreshModal(); }
   catch(e){ alert(e.message); }
+  finally{ __done(); }
 }
 async function deleteAssignment(aid, btn){
   if(!confirm('Delete this team member\'s report from the project?')) return;
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{ await api('delete_assignment',{assignmentId:aid}); await refreshModal(); }
   catch(e){ alert(e.message); }
+  finally{ __done(); }
 }
 let UP_ST = null;
 // Load the ranges from the contract and whatever was stored for this report before.
@@ -4484,7 +4501,7 @@ function pdfCheckFilter(){
 // Files on Drive nothing points at any more — sources of test parses, mostly.
 async function pdfTidyCheck(btn){
   const box = $('pdfTidy'); if(!box) return;
-  if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
+  if(btn){ const __done = busy(btn); }
   try{
     const r = await api('drive_tidy',{});
     box.innerHTML = r.count
@@ -4496,13 +4513,13 @@ async function pdfTidyCheck(btn){
 }
 async function pdfTidyRun(btn){
   if(!confirm('Move these files to the Drive bin? Nothing in the system refers to them.')) return;
-  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const r = await api('drive_tidy',{remove:true});
     notice('pdfCheckErr','ok',`${r.removed} file(s) moved to the bin.`);
     await pdfTidyCheck(); await pdfCheckInit();
   }catch(e){ notice('pdfCheckErr','err', esc(e.message)); }
-  finally{ btn.disabled = false; btn.textContent = t; }
+  finally{ __done(); }
 }
 
 async function pdfCheckInit(){
@@ -4534,19 +4551,19 @@ function pdfDateToInput(x){
 async function pdfFillFromSystem(btn){
   const id = $('pdfCheckPick').value;
   if(!id){ notice('pdfSetErr','err','Choose a document first.'); return; }
-  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const r = await api('pdf_system_dates',{fileId:id});
     pdfSetFill({ created:r.created, modified:r.modified, title:r.title, producer:r.producer,
                  source:'the system — '+esc(r.source||'') });
     notice('pdfSetErr','','');
   }catch(e){ notice('pdfSetErr','err', esc(e.message)); }
-  finally{ btn.disabled = false; btn.textContent = t; }
+  finally{ __done(); }
 }
 async function pdfFillFromFile(btn){
   const id = $('pdfCheckPick').value;
   if(!id){ notice('pdfSetErr','err','Choose a document first.'); return; }
-  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const i = await api('pdf_inspect',{fileId:id});
     pdfCheckShow(i);
@@ -4555,21 +4572,21 @@ async function pdfFillFromFile(btn){
                  source:'the document itself' });
     notice('pdfSetErr','','');
   }catch(e){ notice('pdfSetErr','err', esc(e.message)); }
-  finally{ btn.disabled = false; btn.textContent = t; }
+  finally{ __done(); }
 }
 async function pdfApplyProps(btn){
   const id = $('pdfCheckPick').value;
   if(!id){ notice('pdfSetErr','err','Choose a document first.'); return; }
   if(!$('pdfSetCreated').value){ notice('pdfSetErr','err','A creation date is required.'); return; }
   if(!confirm('Rewrite the properties of this document? The file keeps its place and its links.')) return;
-  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     await api('pdf_apply',{ fileId:id, created:$('pdfSetCreated').value, modified:$('pdfSetModified').value,
                             title:$('pdfSetTitle').value.trim(), producer:$('pdfSetProducer').value.trim() });
     notice('pdfSetErr','ok','Written. Below is what the file says now.');
     pdfCheckShow(await api('pdf_inspect',{fileId:id}));
   }catch(e){ notice('pdfSetErr','err', esc(e.message)); }
-  finally{ btn.disabled = false; btn.textContent = t; }
+  finally{ __done(); }
 }
 
 function pdfCheckShow(i){
@@ -4606,10 +4623,10 @@ function pdfCheckOpen(){
 async function pdfCheckPicked(btn){
   const id = $('pdfCheckPick').value;
   if(!id){ notice('pdfCheckErr','err','Nothing to check.'); return; }
-  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  const __done = busy(btn);
   try{ pdfCheckShow(await api('pdf_inspect',{fileId:id})); }
   catch(e){ notice('pdfCheckErr','err', esc(e.message)); }
-  finally{ btn.disabled = false; btn.textContent = t; }
+  finally{ __done(); }
 }
 async function pdfCheckUpload(input){
   const f = input.files && input.files[0]; if(!f) return;
@@ -4742,7 +4759,7 @@ async function sigAdminSave(btn){
   const cv = $('sigAdminPad');
   if(!cv || cv.__isEmpty()){ notice('sigAdminErr','err','Draw the signature first.'); return; }
   const sel = $('sigOwner'), who = (sel.__people||[])[+sel.value] || {};
-  const old = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     await api('signature_save',{ image: cv.__trimmed(), label: $('sigAdminLabel').value.trim(),
       ownerEmail: who.email || '', ownerName: who.name || '' });
@@ -4750,7 +4767,7 @@ async function sigAdminSave(btn){
     notice('sigAdminErr','ok','Signature saved.');
     sigAdminList();
   }catch(e){ notice('sigAdminErr','err', esc(e.message)); }
-  finally{ btn.disabled = false; btn.textContent = old; }
+  finally{ __done(); }
 }
 
 async function sigAdminDelete(id){
@@ -4827,7 +4844,7 @@ async function askAccept(aid){
 }
 async function acceptNow(btn){
   if(!$('acc_name').value.trim()){ notice('acc_err','err','Pick who accepts the report.'); return; }
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const payload = { assignmentId:ACC_ID, acceptedBy:$('acc_name').value.trim(),
       acceptedTitle:$('acc_role').value.trim(), acceptedAt:$('acc_date').value,
@@ -4877,28 +4894,28 @@ async function acceptNow(btn){
     notice('pm_err','ok','Report accepted — this is the basis for payment.'
       + (res.payout ? ` Indicative: ${cur(res.payout.currency)}${money(res.payout.estimate)} at ${res.payout.rate} on ${fmtDate(res.payout.asOf)}.` : ''));
   }catch(e){ notice('acc_err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Accept report'; }
+  finally{ __done(); }
 }
 async function acceptReport(aid, btn, revoke){
   if(revoke){
     if(!confirm('Revoke acceptance of this report?')) return;
-    btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+    const __done = busy(btn);
     try{ await api('accept_assignment',{assignmentId:aid, revoke:true}); await refreshModal(); }
-    catch(e){ notice('pm_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Revoke acceptance'; }
+    catch(e){ notice('pm_err','err', esc(e.message)); __done(); }
     return;
   }
   const who = prompt('Accepting the report on behalf of ' + COMPANY + '.\nName / title of the authorised representative:', 'Konstantin Maiorov, Director');
   if(who===null) return;
   if(!who.trim()){ notice('pm_err','err','Enter the name of the person accepting the report.'); return; }
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{ await api('accept_assignment',{assignmentId:aid, acceptedBy:who.trim(), acceptedAt:todayISO()}); await refreshModal(); notice('pm_err','ok','Report accepted — this is the basis for payment.'); }
-  catch(e){ notice('pm_err','err', esc(e.message)); btn.disabled=false; btn.textContent='Accept'; }
+  catch(e){ notice('pm_err','err', esc(e.message)); __done(); }
 }
 async function remindAssignment(aid, btn){
-  btn.disabled=true; btn.innerHTML='<span class="spin dark"></span>';
+  const __done = busy(btn);
   try{ await api('remind_assignment',{assignmentId:aid}); notice('pm_err','ok','Reminder sent.'); }
   catch(e){ notice('pm_err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Remind'; }
+  finally{ __done(); }
 }
 
 let REP = null;
@@ -4928,13 +4945,55 @@ async function viewReport(aid){
       ? 'The contractor may choose this in their own report.'
       : '<span style="color:var(--warn)">Their ICA does not allow choosing a currency — set it here only if it was agreed separately.</span>';
     loadReportRate(a.AssignmentID, r.rateOptions);
+    // A lump-sum contract has no hours — the field goes, but silently disappearing looked
+    // like a fault, so its place says why.
     const lump = a.PricingType==='lump';
     const hw = $('rm_hours') ? $('rm_hours').closest('div') : null;
-    if(hw) hw.style.display = lump ? 'none' : '';
+    if(hw){
+      hw.style.display = '';
+      const note = hw.querySelector('.lumpnote') || (()=>{ const d=document.createElement('div');
+        d.className='lumpnote muted'; d.style.fontSize='12px'; hw.appendChild(d); return d; })();
+      $('rm_hours').style.display = lump ? 'none' : '';
+      note.textContent = lump ? 'Lump sum — this report carries the contract amount, not hours.' : '';
+    }
+    rmExtShow(a);
     rmRecalc();
     $('repModal').classList.remove('hidden');
   }catch(e){ alert(e.message); }
 }
+// The contractor's own signed form, uploaded from the report itself rather than only from
+// the card behind it.
+function rmExtShow(a){
+  const wrap = $('rm_extWrap'); if(!wrap) return;
+  const isExt = a && a.PerformerType === 'contractor';
+  wrap.style.display = isExt ? '' : 'none';
+  if(!isExt) return;
+  $('rm_extState').innerHTML = a.ReportPdfUrl
+    ? `Attached · <a href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener">ext report ↗</a>`
+    : 'Nothing attached yet — this report is theirs to sign, so ours is not generated.';
+}
+function rmExtPick(btn){
+  if(!REP) return;
+  let input = $('rmExtInput');
+  if(!input){
+    input = document.createElement('input');
+    input.type='file'; input.accept='application/pdf'; input.id='rmExtInput'; input.style.display='none';
+    document.body.appendChild(input);
+  }
+  input.onchange = async () => {
+    const f = input.files && input.files[0]; if(!f) return;
+    const done = busy(btn);
+    try{
+      const r = await api('report_pdf_upload',{ assignmentId:REP.AssignmentID, fileName:f.name,
+        dataBase64: await fileToBase64(f) });
+      REP.ReportPdfUrl = r.url; rmExtShow(REP);
+      notice('rm_err','ok', r.replaced ? 'Attached, replacing the previous file.' : 'Attached to the report.');
+    }catch(e){ notice('rm_err','err', esc(e.message)); }
+    finally{ done(); input.value=''; }
+  };
+  input.value=''; input.click();
+}
+
 function rmAddItem(desc=''){
   const div=document.createElement('div'); div.className='ritem';
   div.innerHTML = `<textarea placeholder="Activity description">${esc(desc)}</textarea>
@@ -4949,7 +5008,14 @@ function rmRecalc(){
 async function saveAdminReport(markSubmitted){
   const activities=[...document.querySelectorAll('#rm_items textarea')].map(t=>t.value.trim()).filter(Boolean);
   const hours=parseFloat(($('rm_hours').value||'').replace(',','.'))||0;
-  if(markSubmitted && (!activities.length || hours<=0)){ notice('rm_err','err','Add at least one activity and total hours before submitting.'); return; }
+  // Hours are asked for only where they exist. A lump-sum contract carries its amount, and a
+  // contractor's report is billed by their own roles — demanding hours there made the form
+  // impossible to submit.
+  const noHours = (REP && REP.PricingType === 'lump') || (REP && REP.PerformerType === 'contractor');
+  if(markSubmitted && !activities.length){
+    notice('rm_err','err','Add at least one activity before submitting.'); return; }
+  if(markSubmitted && !noHours && hours<=0){
+    notice('rm_err','err','Enter the total hours before submitting.'); return; }
   const b = markSubmitted ? $('rm_submit') : $('rm_save'); const other = markSubmitted ? $('rm_save') : $('rm_submit');
   b.disabled=true; other.disabled=true; b.innerHTML='<span class="spin"></span>';
   try{
@@ -4988,7 +5054,7 @@ async function generatePdf(){
   await printReportPdf();
 }
 async function saveUpliftThenPrint(btn){
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     await api('set_uplift',{ assignmentId:ACC_ID, setBy:(REP&&REP.AcceptedBy)||'',
       upliftGranted:$('acc_upGrant').checked, upliftBase:$('acc_upBase').value,
@@ -4999,7 +5065,7 @@ async function saveUpliftThenPrint(btn){
     if(!$('acceptModal').classList.contains('hidden')) await upLoad(ACC_ID);
     await refreshModal();
   }catch(e){ notice('up_err','err', esc(e.message)); }
-  finally{ btn.disabled=false; btn.textContent='Save and print'; }
+  finally{ __done(); }
 }
 async function printReportPdf(){
   if(!REP) return;
@@ -5050,7 +5116,7 @@ async function reportPdfUpload(aid, input){
 
 async function reportPdfFile(aid, btn, rebuild){
   const withSign = confirm('Add a signature field at the bottom of the PDF?');
-  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  const __done = busy(btn);
   try{
     const r = await api('report_pdf',{assignmentId:aid, withSignature:withSign, rebuild:!!rebuild});
     if(!r.normalised){
@@ -5067,13 +5133,13 @@ async function reportPdfFile(aid, btn, rebuild){
     window.open(r.downloadUrl || r.url, '_blank');
     if(typeof refreshModal==='function'){ try{ await refreshModal(); }catch(_){} }
   }catch(e){ alert(e.message); }
-  finally{ btn.disabled = false; btn.textContent = t; }
+  finally{ __done(); }
 }
 
 // Check any PDF we hold: what its own metadata says, not what the file manager shows.
 async function pdfInspectFile(fileId, btn){
   const t = btn ? btn.textContent : '';
-  if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
+  if(btn){ const __done = busy(btn); }
   try{
     const i = await api('pdf_inspect',{fileId});
     alert(`Inside the file:\n  created  ${i.creation_date||'—'}\n  modified ${i.mod_date||'—'}`
