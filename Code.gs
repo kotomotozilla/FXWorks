@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.155';
+const BUILD = '2026-08-08.156';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -148,6 +148,7 @@ function route_(action, d) {
     case 'pdf_files':          return pdfFiles_(d);
     case 'pdf_system_dates':   return pdfSystemDates_(d);
     case 'pdf_apply':          return pdfApply_(d);
+    case 'drive_tidy':         return driveTidy_(d);
     case 'signature_list':     return signatureList_(d);
     case 'signature_save':     return signatureSave_(d);
     case 'signature_delete':   return signatureDelete_(d);
@@ -307,6 +308,15 @@ function adminDeleteCounterparty_(d) {
 // Attachments — stored privately in the owner's Google Drive (folder "FXWorks Attachments").
 // Files are NOT shared: only the Drive owner (you) can open them.
 // ─────────────────────────────────────────────────────────────────────────────
+// Files uploaded only to be parsed live apart from real documents. They used to pile up in
+// the attachments folder — eighteen copies of one agreement after eighteen test runs — and
+// then showed up wherever attachments are listed.
+function parseSourcesFolder_() {
+  var name = 'FXWorks Parse Sources';
+  var it = DriveApp.getFoldersByName(name);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(name);
+}
+
 function attachmentsFolder_() {
   var name = 'FXWorks Attachments';
   var it = DriveApp.getFoldersByName(name);
@@ -767,7 +777,7 @@ function v2ParseUpload_(d) {
   var file;
   try {
     var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), trim_(d.mimeType) || 'application/pdf', fileName);
-    file = attachmentsFolder_().createFile(blob);
+    file = parseSourcesFolder_().createFile(blob);
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
   return v2ParseFile_('__sandbox', file.getId(), fileName, '', 'agreement',
                       trim_(d.counterpartyName), trim_(d.profile), d.textLayer, d.textSource);
@@ -905,7 +915,7 @@ function v2QueueAdd_(d) {
   if (d.dataBase64) {
     try {
       var blob = Utilities.newBlob(Utilities.base64Decode(d.dataBase64), trim_(d.mimeType) || 'application/pdf', fileName);
-      file = attachmentsFolder_().createFile(blob);
+      file = parseSourcesFolder_().createFile(blob);
     } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
   }
 
@@ -961,7 +971,7 @@ function v2QueueFileAdd_(d) {
   var b64 = parts.map(function (r) { return String(r.Chunk || ''); }).join('');
   try {
     var blob = Utilities.newBlob(Utilities.base64Decode(b64), trim_(d.mimeType) || 'application/pdf', String(row.FileName));
-    var file = attachmentsFolder_().createFile(blob);
+    var file = parseSourcesFolder_().createFile(blob);
     updateRow_(SHEETS.queue, 'QueueID', id, { DriveFileID: file.getId() });
   } catch (e) {
     return { ok: false, error: 'Could not assemble the file: ' + e };
@@ -2248,17 +2258,17 @@ function pdfFiles_(d) {
                current: truthy_(r.IsCurrent), parentType: String(r.ParentType || ''),
                about: describe(r.FileName), createdAt: String(r.CreatedAt || '') });
   });
-  try {
-    var files = attachmentsFolder_().getFilesByType('application/pdf');
-    var seen = {};
-    out.forEach(function (x) { seen[x.fileId] = 1; });
-    while (files.hasNext()) {
-      var f = files.next();
-      if (seen[f.getId()]) continue;
-      out.push({ fileId: f.getId(), name: f.getName(), where: 'generated',
-                 about: describe(f.getName()), createdAt: f.getDateCreated().toISOString() });
-    }
-  } catch (e) {}
+  // Generated reports, by the link stored on the report itself — not by sweeping the folder,
+  // which also picked up every file ever uploaded for a test parse.
+  readAll_(SHEETS.assignments).forEach(function (a) {
+    var id = trim_(a.ReportPdfID);
+    if (!id) return;
+    out.push({ fileId: id, name: 'RPT · ' + trim_(a.ProjectName) + ' · '
+                 + (trim_(a.EmployeeName) || trim_(a.EmployeeEmail)),
+               where: 'report', current: false, parentType: 'report',
+               about: 'submitted ' + trim_(a.SubmittedAt) + (trim_(a.AcceptedAt) ? ', accepted ' + trim_(a.AcceptedAt) : ''),
+               createdAt: String(a.ReportPdfAt || a.SubmittedAt || '') });
+  });
   out.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
   return { ok: true, files: out.slice(0, 200) };
 }
@@ -2266,6 +2276,43 @@ function pdfFiles_(d) {
 // What the system believes about a file: a report knows when it was submitted and accepted,
 // a contract document when it was signed and last amended. Offered as a starting point, so
 // nobody types dates by hand that we already hold.
+// What is left over on Drive: files in the attachments folder that no attachment, no report
+// and no parsed document points at. Mostly sources of test parses from before they had a
+// folder of their own.
+function driveOrphans_() {
+  var known = {};
+  readAll_(SHEETS.attachments).forEach(function (r) { if (trim_(r.DriveFileID)) known[trim_(r.DriveFileID)] = 1; });
+  readAll_(SHEETS.assignments).forEach(function (r) { if (trim_(r.ReportPdfID)) known[trim_(r.ReportPdfID)] = 1; });
+  readAll_(SHEETS.documents).forEach(function (r) { if (trim_(r.SentTextID)) known[trim_(r.SentTextID)] = 1; });
+  readAll_(SHEETS.queue).forEach(function (r) { if (trim_(r.DriveFileID)) known[trim_(r.DriveFileID)] = 1; });
+
+  var out = [], files = attachmentsFolder_().getFiles();
+  while (files.hasNext()) {
+    var f = files.next();
+    if (known[f.getId()]) continue;
+    out.push({ fileId: f.getId(), name: f.getName(), size: f.getSize(),
+               createdAt: f.getDateCreated().toISOString() });
+  }
+  out.sort(function (a, b) { return String(a.createdAt).localeCompare(String(b.createdAt)); });
+  return out;
+}
+
+function driveTidy_(d) {
+  requireAdmin_(d);
+  var list = driveOrphans_();
+  if (!truthy_(d.remove)) {
+    var bytes = 0;
+    list.forEach(function (x) { bytes += x.size || 0; });
+    return { ok: true, count: list.length, bytes: bytes,
+             sample: list.slice(0, 12).map(function (x) { return x.name; }) };
+  }
+  var gone = 0;
+  list.forEach(function (x) {
+    try { DriveApp.getFileById(x.fileId).setTrashed(true); gone++; } catch (e) {}
+  });
+  return { ok: true, removed: gone };
+}
+
 function pdfSystemDates_(d) {
   requireAdmin_(d);
   var fileId = trim_(d.fileId);

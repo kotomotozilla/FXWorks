@@ -347,6 +347,8 @@
             <input id="pdfCheckFile" type="file" accept="application/pdf" onchange="pdfCheckUpload(this)"></div>
         </div>
         <div id="pdfCheckOut" style="margin-top:14px"></div>
+        <div style="height:12px"></div>
+        <div id="pdfTidy" class="muted" style="font-size:13px"></div>
       </div>
 
       <div class="panel">
@@ -960,7 +962,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.155';
+const BUILD = '2026-08-08.156';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1041,7 +1043,7 @@ function enterApp(){
 function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){
   ['projects','contracts','invoices','counterparties','perf','pay','costs','v2','data','pdf'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data'){ loadData(); sigAdminInit(); } if(t==='pdf') pdfCheckInit(); if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
+  if(t==='data'){ loadData(); sigAdminInit(); } if(t==='pdf'){ pdfCheckInit(); pdfTidyCheck(); } if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
   document.querySelector('.wrap').classList.toggle('wide', t==='costs' || t==='perf' || t==='pay');
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
@@ -4298,6 +4300,29 @@ function pdfCheckFilter(){
     ? `${keep.length} of ${PDF_FILES.length} document(s)`
     : `${PDF_FILES.length} document(s)`;
 }
+// Files on Drive nothing points at any more — sources of test parses, mostly.
+async function pdfTidyCheck(){
+  const box = $('pdfTidy'); if(!box) return;
+  try{
+    const r = await api('drive_tidy',{});
+    box.innerHTML = r.count
+      ? `${r.count} file(s) on Drive belong to nothing — about ${Math.round((r.bytes||0)/1048576)} MB`
+        + ` <span class="muted">(${r.sample.map(esc).join(', ')}${r.count>r.sample.length?'…':''})</span>`
+        + ` <button class="btn ghost sm" onclick="pdfTidyRun(this)">Move them to the bin</button>`
+      : 'Nothing to tidy up on Drive.';
+  }catch(e){ box.textContent = ''; }
+}
+async function pdfTidyRun(btn){
+  if(!confirm('Move these files to the Drive bin? Nothing in the system refers to them.')) return;
+  const t = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try{
+    const r = await api('drive_tidy',{remove:true});
+    notice('pdfCheckErr','ok',`${r.removed} file(s) moved to the bin.`);
+    await pdfTidyCheck(); await pdfCheckInit();
+  }catch(e){ notice('pdfCheckErr','err', esc(e.message)); }
+  finally{ btn.disabled = false; btn.textContent = t; }
+}
+
 async function pdfCheckInit(){
   const sel = $('pdfCheckPick'); if(!sel) return;
   sel.innerHTML = '<option>Loading…</option>';
