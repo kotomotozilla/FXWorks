@@ -1017,7 +1017,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.170';
+const BUILD = '2026-08-08.171';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4988,8 +4988,11 @@ function rmExtPick(btn){
     try{
       const r = await api('ext_pdf_upload',{ assignmentId:REP.AssignmentID, fileName:f.name,
         dataBase64: await fileToBase64(f) });
-      REP.ExtPdfUrl = r.url; rmExtShow(REP);
-      notice('rm_err','ok', r.replaced ? 'Attached, replacing the previous file.' : 'Their report is attached.');
+      REP.ExtPdfUrl = r.url;
+      $('rm_extState').innerHTML = `Their report attached · <a href="${esc(r.url)}" target="_blank" rel="noopener">ext report ↗</a>`;
+      notice('rm_err','ok', r.replaced
+        ? 'Attached, replacing the previous file. Remember to save the report.'
+        : 'Their report is attached. Remember to save the report.');
     }catch(e){ notice('rm_err','err', esc(e.message)); }
     finally{ done(); input.value=''; }
   };

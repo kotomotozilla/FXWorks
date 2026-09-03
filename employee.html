@@ -239,7 +239,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-08-08.170';
+const BUILD='2026-08-08.171';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -430,7 +430,8 @@ function extPick(btn){
     try{
       const r = await api('ext_pdf_upload', auth({ assignmentId:a.AssignmentID, fileName:f.name,
         dataBase64: await fileToBase64(f) }));
-      a.ExtPdfUrl = r.url; extShow(a);
+      a.ExtPdfUrl = r.url;
+      $('extState').innerHTML = `Their report attached · <a href="${esc(r.url)}" target="_blank" rel="noopener">open it</a>`;
       notice('submitMsg','ok', r.replaced ? 'Attached, replacing the previous file.' : 'Attached to the report.');
     }catch(e){ notice('submitMsg','err', esc(e.message)); }
     finally{ btn.disabled=false; btn.textContent=old; input.value=''; }

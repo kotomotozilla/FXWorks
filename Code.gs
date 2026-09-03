@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.170';
+const BUILD = '2026-08-08.171';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -4287,6 +4287,11 @@ function adminSaveReport_(d) {
   if (!a) return { ok: false, error: 'Report not found' };
   var activities = (Array.isArray(d.activities) ? d.activities : []).map(function (x) { return trim_(x); }).filter(function (x) { return x; });
   var lump = (trim_(a.PricingType) === 'lump');
+  var hours = lump ? '' : num_(d.hours);
+  var rate = num_(a.Rate);
+  var amount = lump ? ((a.ReportedAmount === '' || a.ReportedAmount == null) ? '' : num_(a.ReportedAmount))
+                    : round2_(num_(d.hours) * rate);
+
   // The acceptance of external work: the person's hours stay their own, the contractor's
   // charge is recorded next to them and never mixed in.
   var extra = {};
