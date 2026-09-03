@@ -163,10 +163,13 @@
       <input id="submitDate" type="date"></div>
 
     <div style="height:18px"></div>
-    <div class="hoursbox" id="extWrap" style="display:none">
-      <label>External report <span style="font-weight:400;color:#667">— the contractor's own signed form</span></label>
+    <div id="extWrap" style="display:none;border-left:3px solid #DDE3EA;padding-left:12px">
+      <label>External work accepted in this report</label>
+      <p style="font-size:13px;color:#667;margin:4px 0 8px">Your hours above are yours. What the contractor
+        charges goes here — it is a cost of the project, not part of your fee.</p>
+      <div id="extSummary" style="font-size:14px;margin-bottom:8px"></div>
       <div id="extState" style="font-size:14px;color:#667;margin:6px 0"></div>
-      <button class="btn ghost" onclick="extPick(this)">Upload the signed PDF</button>
+      <button class="btn ghost" onclick="extPick(this)">Upload their signed report</button>
     </div>
 
     <div style="height:18px"></div>
@@ -236,7 +239,7 @@ function show(id){['screen-login','screen-projects','screen-reports','screen-rep
 function notice(host,type,msg){$(host).innerHTML = msg ? `<div class="notice ${type}">${msg}</div>` : '';}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 const COMPANY='Fraktalex Limited';
-const BUILD='2026-08-08.167';
+const BUILD='2026-08-08.169';
 function fmtDate(iso){ if(!iso) return ''; try{ const d=new Date(iso); return isNaN(d)?String(iso):d.toISOString().slice(0,10); }catch(e){ return String(iso); } }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function toDate(iso){ try{ const d=new Date(iso); return isNaN(d)?'':d.toISOString().slice(0,10); }catch(e){ return ''; } }
@@ -341,18 +344,19 @@ async function openReport(aid){
     }
     $('submitDate').value = a.SubmittedAt ? toDate(a.SubmittedAt) : todayStr();
     // Where there are no hours to give, the box explains itself instead of vanishing.
-    const lump = a.PricingType==='lump', ext = a.PerformerType==='contractor';
+    // Hours still matter on a third-party report — they are the contractor's, and they are
+    // what the amount is built from.
+    const lump = a.PricingType==='lump';
     if($('hoursWrap')){
       const w = $('hoursWrap');
       w.style.display = '';
-      $('totalHours').style.display = (lump||ext) ? 'none' : '';
+      $('totalHours').style.display = lump ? 'none' : '';
       let note = w.querySelector('.nohours');
       if(!note){ note = document.createElement('div'); note.className='nohours';
                  note.style.cssText='font-size:14px;color:#667'; w.appendChild(note); }
-      note.textContent = lump ? 'Lump sum — this report carries the contract amount, not hours.'
-                       : ext  ? 'The contractor bills their own hours in their report.' : '';
+      note.textContent = lump ? 'Lump sum — this report carries the contract amount, not hours.' : '';
       const lab = w.querySelector('label');
-      if(lab) lab.textContent = (lump||ext) ? 'Hours' : 'Total hours spent (all activities) *';
+      if(lab) lab.textContent = lump ? 'Hours' : 'Total hours spent (all activities) *';
     }
     const allowCur = String(a.AllowPayoutCurrency||'').toLowerCase()==='yes';
     $('curWrap').style.display = allowCur ? '' : 'none';
@@ -400,12 +404,18 @@ function fileToBase64(file){
 // the signed file is simply attached.
 function extShow(a){
   const wrap = $('extWrap'); if(!wrap) return;
-  const isExt = a && a.PerformerType === 'contractor';
+  const isExt = a && a.ReportKind === 'ext_acceptance';
   wrap.style.display = isExt ? '' : 'none';
   if(!isExt) return;
-  $('extState').innerHTML = a.ReportPdfUrl
-    ? `Attached · <a href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener">open it</a>`
-    : 'Nothing attached yet.';
+  const cost = (+a.ExtAmount) || Math.round((((+a.ExtHours1||0)*(+a.ExtRate1||0))
+                                           + ((+a.ExtHours2||0)*(+a.ExtRate2||0)))*100)/100;
+  $('extSummary').innerHTML = cost
+    ? `<b>${esc(a.ExtSupplier||'The contractor')}</b> charged ${esc(a.ExtCurrency||a.Currency||'')} ${cost.toFixed(2)}`
+      + ' <span style="color:#667">— set by the administrator</span>'
+    : '<span style="color:#667">The cost has not been entered yet.</span>';
+  $('extState').innerHTML = a.ExtPdfUrl
+    ? `Their report attached · <a href="${esc(a.ExtPdfUrl)}" target="_blank" rel="noopener">open it</a>`
+    : 'Their signed report is not attached yet.';
 }
 function extPick(btn){
   const a = STATE.current; if(!a) return;
@@ -419,9 +429,9 @@ function extPick(btn){
     const f = input.files && input.files[0]; if(!f) return;
     const old = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
     try{
-      const r = await api('report_pdf_upload', auth({ assignmentId:a.AssignmentID, fileName:f.name,
+      const r = await api('ext_pdf_upload', auth({ assignmentId:a.AssignmentID, fileName:f.name,
         dataBase64: await fileToBase64(f) }));
-      a.ReportPdfUrl = r.url; extShow(a);
+      a.ExtPdfUrl = r.url; extShow(a);
       notice('submitMsg','ok', r.replaced ? 'Attached, replacing the previous file.' : 'Attached to the report.');
     }catch(e){ notice('submitMsg','err', esc(e.message)); }
     finally{ btn.disabled=false; btn.textContent=old; input.value=''; }
@@ -601,7 +611,7 @@ async function saveReport(finalize){
   // A lump-sum contract carries its amount instead of hours, and a contractor's report is
   // billed by their own roles — neither has hours to enter here.
   const a0 = STATE.current || {};
-  const noHours = a0.PricingType === 'lump' || a0.PerformerType === 'contractor';
+  const noHours = a0.PricingType === 'lump';
   if(finalize && !activities.length){
     notice('submitMsg','err','Add at least one activity before submitting.'); return; }
   if(finalize && !noHours && hours<=0){

@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.167';
+const BUILD = '2026-08-08.169';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -86,8 +86,13 @@ const HEADERS = {
                 // A report can come from a contractor company instead of one of our own people:
                 // same acceptance, same invoicing, but two roles at two rates and a request it
                 // answers, with a budget ceiling of its own.
-                'PerformerType', 'RequestContractID', 'SecondaryRole', 'HoursSecondary', 'RateSecondary',
-                'SupervisedBy', 'OverrunApprovedBy', 'OverrunApprovedAt', 'OverrunPdfID', 'OverrunPdfUrl',
+                // A report may cover the acceptance of work done by a contractor. The person's
+                // own hours are their fee; what the contractor charges is a cost of the project
+                // and is kept apart — adding the two would pay our person the contractor's money.
+                'ReportKind', 'RequestContractID', 'ExtSupplier', 'ExtAmount', 'ExtCurrency',
+                'ExtRole1', 'ExtHours1', 'ExtRate1', 'ExtRole2', 'ExtHours2', 'ExtRate2',
+                'ExtPdfID', 'ExtPdfUrl', 'ExtPdfAt',
+                'OverrunApprovedBy', 'OverrunApprovedAt', 'OverrunPdfID', 'OverrunPdfUrl',
                 'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
 };
@@ -154,6 +159,7 @@ function route_(action, d) {
     case 'pdf_service_check':  return pdfServiceCheck_(d);
     case 'report_pdf':         return reportPdf_(d);
     case 'report_pdf_upload':  return reportPdfUpload_(d);
+    case 'ext_pdf_upload':     return extPdfUpload_(d);
     case 'report_html':        return reportHtmlRoute_(d);
     case 'pdf_inspect':        return pdfInspect_(d);
     case 'pdf_files':          return pdfFiles_(d);
@@ -2063,6 +2069,37 @@ function reportHtmlRoute_(d) {
 
 // A report that was signed on paper, or built long ago outside the system: the admin uploads
 // the file and it becomes the report's document, in place of anything generated before.
+// The contractor's own signed form, attached to the acceptance report. Kept apart from the
+// report we generate, so neither replaces the other.
+function extPdfUpload_(d) {
+  var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
+  if (!a) return { ok: false, error: 'Report not found' };
+  if (trim_(d.passcode) !== CONFIG.ADMIN_PASSCODE) {
+    var emp = verifyEmployee_(d);
+    if (!emp || normEmail_(d.email) !== normEmail_(a.EmployeeEmail)) {
+      return { ok: false, error: 'Invalid email or password' };
+    }
+    if (trim_(a.AcceptedBy)) {
+      return { ok: false, error: 'The report has been accepted — ask the administrator to replace the file' };
+    }
+  }
+  if (!d.dataBase64) return { ok: false, error: 'No file' };
+
+  var name = trim_(d.fileName) || 'external report.pdf';
+  var file;
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(String(d.dataBase64)), 'application/pdf', name);
+    file = attachmentsFolder_().createFile(blob);
+  } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
+
+  var prev = trim_(a.ExtPdfID);
+  if (prev && prev !== file.getId()) { try { DriveApp.getFileById(prev).setTrashed(true); } catch (e) {} }
+  updateRow_(SHEETS.assignments, 'AssignmentID', a.AssignmentID, {
+    ExtPdfID: file.getId(), ExtPdfUrl: file.getUrl(), ExtPdfAt: new Date().toISOString()
+  });
+  return { ok: true, fileId: file.getId(), url: file.getUrl(), name: name, replaced: !!prev };
+}
+
 function reportPdfUpload_(d) {
   var a = findRow_(SHEETS.assignments, 'AssignmentID', trim_(d.assignmentId));
   if (!a) return { ok: false, error: 'Report not found' };
@@ -2214,6 +2251,15 @@ function reportHtml_(a, items, withSign, forPrint, sigs) {
     + '<tr><td colspan="2">' + list + '</td></tr>'
     + (String(a.PricingType) === 'lump' ? '' : '<tr><td class="label">The total number of hours spent:</td><td>' + hours + '</td></tr>')
     + '<tr><td class="label">Amount due:</td><td>' + cur(a.Currency) + money_(amount) + '</td></tr>'
+    // Work bought from a contractor and accepted under this report: stated, but not added to
+    // the fee — it is owed to them, not to the person reporting.
+    + (externalCost_(a)
+        ? '<tr><td class="label">External work accepted under this report:</td><td>'
+          + esc(trim_(a.ExtSupplier) || 'Contractor') + ' &mdash; '
+          + cur(trim_(a.ExtCurrency) || a.Currency) + money_(externalCost_(a))
+          + '<br><span style="color:#555;font-size:10pt">Payable to the contractor under their own report; '
+          + 'not included in the amount due above.</span></td></tr>'
+        : '')
     + (uplift
         ? '<tr><td class="label">Performance uplift:</td><td>' + esc(a.UpliftPercent) + '% &mdash; ' + cur(a.Currency) + money_(uplift) + '</td></tr>'
           + '<tr><td class="label">Total payable:</td><td><b>' + cur(a.Currency) + money_(round2_(amount + uplift)) + '</b></td></tr>'
@@ -4091,9 +4137,9 @@ function adminAddAssignment_(d) {
     EmployeeEmail: email, EmployeeName: cp.Name || '', Title: title, Currency: currency, Rate: (pricing === 'lump' ? '' : rate),
     Comment: comment, LastNotifiedComment: comment, Status: 'released',
     // A contractor's report: booked against a request or order, and billed at two rates.
-    PerformerType: (trim_(d.performerType) === 'contractor' ? 'contractor' : 'employee'),
-    RequestContractID: trim_(d.requestContractId), SupervisedBy: trim_(d.supervisedBy),
-    SecondaryRole: trim_(d.secondaryRole), RateSecondary: num_(d.rateSecondary), HoursSecondary: '',
+    // A report can be marked as covering the acceptance of external work at any time, from
+    // the report form — so nothing about it is decided here.
+    ReportKind: '', RequestContractID: '',
     ReportedHours: '', ReportedAmount: (pricing === 'lump' ? rate : ''),
     ReleasedAt: now, SubmittedAt: '', UpdatedAt: now, CreatedAt: now,
     ContractID: contractId, RateSource: rateSource, PricingType: pricing
@@ -4242,9 +4288,24 @@ function adminSaveReport_(d) {
   if (!a) return { ok: false, error: 'Report not found' };
   var activities = (Array.isArray(d.activities) ? d.activities : []).map(function (x) { return trim_(x); }).filter(function (x) { return x; });
   var lump = (trim_(a.PricingType) === 'lump');
-  var hours = lump ? '' : num_(d.hours);
-  var rate = num_(a.Rate);
-  var amount = lump ? ((a.ReportedAmount === '' || a.ReportedAmount == null) ? '' : num_(a.ReportedAmount)) : round2_(num_(d.hours) * rate);
+  // The acceptance of external work: the person's hours stay their own, the contractor's
+  // charge is recorded next to them and never mixed in.
+  var extra = {};
+  if (d.reportKind !== undefined) {
+    var isExt = (trim_(d.reportKind) === 'ext_acceptance');
+    extra.ReportKind = isExt ? 'ext_acceptance' : '';
+    if (isExt) {
+      extra.RequestContractID = trim_(d.requestContractId);
+      extra.ExtSupplier = trim_(d.extSupplier);
+      extra.ExtCurrency = trim_(d.extCurrency) || trim_(a.Currency);
+      extra.ExtRole1 = trim_(d.extRole1); extra.ExtHours1 = num_(d.extHours1); extra.ExtRate1 = num_(d.extRate1);
+      extra.ExtRole2 = trim_(d.extRole2); extra.ExtHours2 = num_(d.extHours2); extra.ExtRate2 = num_(d.extRate2);
+      extra.ExtAmount = num_(d.extAmount);
+    } else {
+      extra.RequestContractID = ''; extra.ExtAmount = '';
+    }
+  }
+
   var now = new Date().toISOString();
   deleteRowsWhere_(SHEETS.entries, 'AssignmentID', a.AssignmentID);
   activities.forEach(function (desc) {
@@ -4257,6 +4318,7 @@ function adminSaveReport_(d) {
   // Admin can always set/clear the submission date.
   var sub = trim_(d.submittedDate);
   var upd = { ReportedHours: hours, ReportedAmount: amount, SubmittedAt: sub, UpdatedAt: now };
+  for (var k in extra) upd[k] = extra[k];
   // The signature is chosen at submission and belongs to the person submitting.
   if (d.signatureId !== undefined) {
     var sig = findRow_(SHEETS.signatures, 'SignatureID', trim_(d.signatureId));
@@ -4543,15 +4605,23 @@ function adminUnmatchPayment_(d) {
 // reported so far. Reports count separately, split into accepted (already owed) and
 // submitted-but-not-yet-accepted (likely to be owed). Drafts and recalled ones count
 // for nothing. Currencies are kept apart and also converted to USD for comparison.
+// What the contractor charges under this report: their own total where they stated one,
+// otherwise their roles times their rates.
+function externalCost_(a) {
+  if (trim_(a.ReportKind) !== 'ext_acceptance') return 0;
+  var stated = num_(a.ExtAmount);
+  if (stated) return stated;
+  return round2_(num_(a.ExtHours1) * num_(a.ExtRate1) + num_(a.ExtHours2) * num_(a.ExtRate2));
+}
+
 function reportDateOf_(a) {
   return String(trim_(a.AcceptedAt) || trim_(a.SubmittedAt) || trim_(a.ReleasedAt) || '').slice(0, 10);
 }
+// What we owe the person for this report. The contractor's charge, where there is one, is
+// a separate figure — see externalCost_.
 function reportTotal_(a) {
   var fee = num_(a.ReportedAmount);
-  // A contractor's report bills two roles at two rates — a developer and a project manager
-  // in the Wasat form. Ours bills one.
-  if (!fee) fee = round2_(num_(a.ReportedHours) * num_(a.Rate)
-                          + num_(a.HoursSecondary) * num_(a.RateSecondary));
+  if (!fee) fee = round2_(num_(a.ReportedHours) * num_(a.Rate));
   var up = truthy_(a.UpliftGranted) ? num_(a.UpliftAmount) : 0;
   return round2_(fee + up);
 }
@@ -4641,7 +4711,19 @@ function costReport_(d) {
     if (jobTop) {
       var j = bucketFor(byJob, jobTop);
       if (!j.people[who]) j.people[who] = emptyBucket_();
-      if (accepted) { addTo_(j.cost, a.Currency, amount, dt); addTo_(j.people[who], a.Currency, amount, dt); j.reports++; }
+      if (accepted) {
+        addTo_(j.cost, a.Currency, amount, dt); addTo_(j.people[who], a.Currency, amount, dt); j.reports++;
+        // Work bought from a contractor under this report costs the job too, and it is not
+        // anybody's fee — it goes to the supplier named on it.
+        var ext = externalCost_(a);
+        if (ext) {
+          var supplier = trim_(a.ExtSupplier) || 'contractor';
+          var extCur = trim_(a.ExtCurrency) || a.Currency;
+          addTo_(j.cost, extCur, ext, dt);
+          if (!j.people[supplier]) j.people[supplier] = emptyBucket_();
+          addTo_(j.people[supplier], extCur, ext, dt);
+        }
+      }
       else if (st === 'submitted') { addTo_(j.pending, a.Currency, amount, dt); j.reportsPending++; }
     }
   });
@@ -4676,19 +4758,18 @@ function costReport_(d) {
     var orderIds = {};
     orders.forEach(function (x) { orderIds[String(x.ContractID)] = 1; });
     var confirmed = emptyBucket_(), confirmedReports = 0, ceilingBreach = [];
-    (acceptedByTarget[id] || []).forEach(function (a) {
+    // Confirmed against a framework means what its contractors have charged and we accepted.
+    var countConfirmed = function (a) {
       var dt = reportDateOf_(a);
       if (!inRange(dt)) return;
-      addTo_(confirmed, a.Currency, reportTotal_(a), dt);
+      var ext = externalCost_(a);
+      if (!ext) return;
+      addTo_(confirmed, trim_(a.ExtCurrency) || a.Currency, ext, dt);
       confirmedReports++;
-    });
+    };
+    (acceptedByTarget[id] || []).forEach(countConfirmed);
     orders.forEach(function (x) {
-      (acceptedByTarget[String(x.ContractID)] || []).forEach(function (a) {
-        var dt = reportDateOf_(a);
-        if (!inRange(dt)) return;
-        addTo_(confirmed, a.Currency, reportTotal_(a), dt);
-        confirmedReports++;
-      });
+      (acceptedByTarget[String(x.ContractID)] || []).forEach(countConfirmed);
     });
     // A ceiling that has been passed is worth saying out loud: clause 3.4 of the Wasat
     // agreement forbids exceeding it without written approval.
@@ -4699,7 +4780,7 @@ function costReport_(d) {
       var used = 0;
       (acceptedByTarget[String(x.ContractID)] || []).forEach(function (a) {
         if (trim_(a.RequestContractID) !== String(x.ContractID)) return;
-        used += reportTotal_(a);
+        used += externalCost_(a);
       });
       if (used > limit) {
         ceilingBreach.push({ number: trim_(x.Number), ceiling: limit, used: round2_(used),
@@ -5024,9 +5105,9 @@ function ceilingCheck_(a) {
     if (String(x.AssignmentID) === String(a.AssignmentID)) return;
     if (trim_(x.RequestContractID) !== reqId) return;
     if (!trim_(x.AcceptedBy)) return;
-    used += reportTotal_(x);
+    used += externalCost_(x);
   });
-  var wouldBe = round2_(used + reportTotal_(a));
+  var wouldBe = round2_(used + externalCost_(a));
   return { over: wouldBe > limit, request: trim_(req.Number), ceiling: limit,
            approved: num_(req.CeilingApproved) > 0, used: round2_(used), wouldBe: wouldBe,
            currency: trim_(req.Currency), requestId: reqId };
