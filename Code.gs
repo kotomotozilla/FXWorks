@@ -27,12 +27,12 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.178';
+const BUILD = '2026-08-08.179';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
                  queue: 'ParseQueue', queueText: 'ParseQueueText', queueFile: 'ParseQueueFile',
-                 signatures: 'Signatures', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+                 signatures: 'Signatures', invoiceQueue: 'InvoiceQueue', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt', 'OrgID'],
@@ -46,6 +46,11 @@ const HEADERS = {
                 'Status', 'Message', 'DocumentID', 'Blocks', 'CreatedAt', 'StartedAt', 'FinishedAt', 'OrgID', 'OrgID'],
   queueText:   ['QueueID', 'Seq', 'Chunk'],
   queueFile:   ['QueueID', 'Seq', 'Chunk'],
+  // Invoices arrive as files and have to be read before they mean anything. Each upload waits
+  // here until the background pass has read it and looked for the contract it belongs to.
+  invoiceQueue: ['QueueID', 'FileName', 'DriveFileID', 'Status', 'Number', 'InvoiceDate', 'DueDate',
+                 'Amount', 'Currency', 'Supplier', 'ContractRef', 'MatchContractID', 'MatchWhy',
+                 'InvoiceID', 'Error', 'CreatedAt', 'OrgID'],
   blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'SecondaryKeys', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt', 'OrgID'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
@@ -72,7 +77,7 @@ const HEADERS = {
                 // approval itself is recorded, not just the new number.
                 'CeilingApproved', 'CeilingApprovedBy', 'CeilingApprovedAt', 'OrgID', 'OrgID'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
-                'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt', 'OrgID', 'OrgID'],
+                'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt', 'OrgID'],
   attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt', 'OrgID'],
   projects:    ['ProjectID', 'Name', 'Customer', 'CounterpartyID', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt', 'OrgID'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
@@ -169,6 +174,11 @@ function route_(action, d) {
     case 'pdf_system_dates':   return pdfSystemDates_(d);
     case 'pdf_apply':          return pdfApply_(d);
     case 'drive_tidy':         return driveTidy_(d);
+    case 'inv_queue_add':      return invQueueAdd_(d);
+    case 'inv_queue_list':     return invQueueList_(d);
+    case 'inv_queue_run':      requireAdmin_(d); return invQueueTick(d);
+    case 'inv_queue_clear':    return invQueueClear_(d);
+    case 'inv_queue_accept':   return invQueueAccept_(d);
     case 'signature_list':     return signatureList_(d);
     case 'signature_save':     return signatureSave_(d);
     case 'signature_delete':   return signatureDelete_(d);
@@ -1053,6 +1063,14 @@ function v2QueueText_(queueId) {
 }
 
 // One document per run. Called by the trigger, and by the page while it stays open.
+// One trigger serves both queues: contracts first, invoices after — a single timed job is
+// easier to reason about than two racing each other.
+function fxQueueTick() {
+  var a = v2QueueTick();
+  var b = invQueueTick({});
+  return { contracts: a, invoices: b };
+}
+
 function v2QueueTick() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(2000)) return { ok: true, busy: true };
@@ -1133,17 +1151,21 @@ function v2QueueList_(d) {
 }
 
 function v2QueueTriggerOn_() {
-  return ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'v2QueueTick'; });
+  return ScriptApp.getProjectTriggers().some(function (t) {
+    var fn = t.getHandlerFunction();
+    return fn === 'fxQueueTick' || fn === 'v2QueueTick';   // the older name still counts
+  });
 }
 
 function v2QueueBackground_(d) {
   requireAdmin_(d);
   var on = v2QueueTriggerOn_();
   if (d.enable && !on) {
-    ScriptApp.newTrigger('v2QueueTick').timeBased().everyMinutes(1).create();
+    ScriptApp.newTrigger('fxQueueTick').timeBased().everyMinutes(1).create();
   } else if (!d.enable && on) {
     ScriptApp.getProjectTriggers().forEach(function (t) {
-      if (t.getHandlerFunction() === 'v2QueueTick') ScriptApp.deleteTrigger(t);
+      var fn = t.getHandlerFunction();
+      if (fn === 'fxQueueTick' || fn === 'v2QueueTick') ScriptApp.deleteTrigger(t);
     });
   }
   return { ok: true, background: v2QueueTriggerOn_() };
@@ -2569,6 +2591,217 @@ function pdfInspect_(d) {
   } catch (e) {
     return { ok: false, error: 'PDF service unreachable: ' + String(e).slice(0, 150) };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Invoices that arrive as files.
+//
+// A supplier sends a PDF; somebody has to read it and work out which contract it belongs to.
+// The reading happens in the background — one file per pass, like the contract parser — so a
+// batch of twenty can be dropped in and left alone.
+// ─────────────────────────────────────────────────────────────────────────────
+function invQueueAdd_(d) {
+  requireAdmin_(d);
+  var fileName = trim_(d.fileName) || 'invoice.pdf';
+  if (!d.dataBase64) return { ok: false, error: 'No file' };
+  var file;
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(String(d.dataBase64)), 'application/pdf', fileName);
+    file = attachmentsFolder_().createFile(blob);
+  } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
+
+  var id = Utilities.getUuid();
+  appendRow_(SHEETS.invoiceQueue, {
+    QueueID: id, FileName: fileName, DriveFileID: file.getId(), Status: 'queued',
+    CreatedAt: new Date().toISOString()
+  });
+  return { ok: true, queueId: id };
+}
+
+function invQueueList_(d) {
+  requireAdmin_(d);
+  var rows = readAll_(SHEETS.invoiceQueue).map(function (r) {
+    var match = trim_(r.MatchContractID)
+      ? (findRow_(SHEETS.contracts, 'ContractID', trim_(r.MatchContractID)) || null) : null;
+    return { queueId: String(r.QueueID), fileName: String(r.FileName), status: String(r.Status),
+             number: String(r.Number || ''), date: String(r.InvoiceDate || ''), due: String(r.DueDate || ''),
+             amount: num_(r.Amount), currency: String(r.Currency || ''),
+             supplier: String(r.Supplier || ''), contractRef: String(r.ContractRef || ''),
+             matchContractId: trim_(r.MatchContractID), matchNumber: match ? trim_(match.Number) : '',
+             matchWhy: String(r.MatchWhy || ''), invoiceId: trim_(r.InvoiceID),
+             error: String(r.Error || ''), createdAt: String(r.CreatedAt || ''),
+             url: trim_(r.DriveFileID) ? 'https://drive.google.com/file/d/' + trim_(r.DriveFileID) + '/view' : '' };
+  }).sort(function (a, b) { return String(a.createdAt).localeCompare(String(b.createdAt)); });
+  var waiting = rows.filter(function (r) { return r.status === 'queued'; }).length;
+  var running = rows.filter(function (r) { return r.status === 'running'; }).length;
+  return { ok: true, queue: rows, waiting: waiting, running: running };
+}
+
+function invQueueClear_(d) {
+  requireAdmin_(d);
+  var gone = 0;
+  readAll_(SHEETS.invoiceQueue).forEach(function (r) {
+    if (String(r.Status) === 'running') return;
+    if (truthy_(d.doneOnly) && String(r.Status) !== 'done') return;
+    if (trim_(r.DriveFileID) && !trim_(r.InvoiceID)) {
+      try { DriveApp.getFileById(trim_(r.DriveFileID)).setTrashed(true); } catch (e) {}
+    }
+    deleteRowsWhere_(SHEETS.invoiceQueue, 'QueueID', String(r.QueueID));
+    gone++;
+  });
+  return { ok: true, removed: gone };
+}
+
+// One file per pass. Called by the page while it is open and by the timed trigger.
+function invQueueTick(d) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return { ok: true, busy: true };
+  try {
+    var next = readAll_(SHEETS.invoiceQueue).filter(function (r) { return String(r.Status) === 'queued'; })[0];
+    if (!next) return { ok: true, idle: true };
+    updateRow_(SHEETS.invoiceQueue, 'QueueID', String(next.QueueID), { Status: 'running' });
+    lock.releaseLock();
+
+    var read = invRead_(next);
+    updateRow_(SHEETS.invoiceQueue, 'QueueID', String(next.QueueID), read);
+    return { ok: true, done: String(next.QueueID) };
+  } finally {
+    try { lock.releaseLock(); } catch (e) {}
+  }
+}
+
+// Read the file, pull the invoice details out of it, then look for the contract it answers.
+function invRead_(row) {
+  var key = geminiKey_();
+  if (!key) return { Status: 'failed', Error: 'AI key is not configured (Script Properties → gemini_key)' };
+
+  var text;
+  try { text = ocrText_(trim_(row.DriveFileID)); }
+  catch (e) { return { Status: 'failed', Error: 'Could not read the file: ' + String(e).slice(0, 150) }; }
+  if (String(text || '').replace(/\s/g, '').length < 40) {
+    return { Status: 'failed', Error: 'No readable text in this file' };
+  }
+
+  var got = invExtract_(key, text);
+  if (!got) return { Status: 'failed', Error: 'The invoice details could not be read' };
+
+  var match = invMatch_(got, text);
+  return { Status: 'done', Error: '',
+           Number: got.number, InvoiceDate: got.date, DueDate: got.due,
+           Amount: got.amount, Currency: got.currency, Supplier: got.supplier,
+           ContractRef: got.contractRef,
+           MatchContractID: match.contractId, MatchWhy: match.why };
+}
+
+function invExtract_(key, text) {
+  var prompt =
+    'Read this invoice and reply with ONE JSON object, nothing else:\n' +
+    '{"number":"","date":"YYYY-MM-DD","due":"YYYY-MM-DD","amount":0,"currency":"",' +
+    '"supplier":"","contractRef":""}\n' +
+    '- number: the invoice number as written\n' +
+    '- date: the invoice date; due: the payment due date, "" when not stated\n' +
+    '- amount: the total payable, as a number, no thousands separators. Take the grand total,\n' +
+    '  including tax where the invoice shows one\n' +
+    '- currency: three-letter code (USD, EUR, AED, SGD…)\n' +
+    '- supplier: the company issuing the invoice, as written\n' +
+    '- contractRef: the agreement or order number the invoice refers to ("under Agreement\n' +
+    '  #04/2026/01-09" -> "04/2026/01-09"), "" when none is mentioned\n\n' +
+    'INVOICE:\n' + String(text).slice(0, 12000);
+  var call = geminiCall_(key, JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+  }));
+  if (!call.ok) return null;
+  try {
+    var data = JSON.parse(call.body);
+    var o = JSON.parse(String(data.candidates[0].content.parts[0].text).replace(/```json|```/g, '').trim());
+    return { number: trim_(o.number), date: /^\d{4}-\d{2}-\d{2}$/.test(trim_(o.date)) ? trim_(o.date) : '',
+             due: /^\d{4}-\d{2}-\d{2}$/.test(trim_(o.due)) ? trim_(o.due) : '',
+             amount: num_(o.amount), currency: trim_(o.currency).toUpperCase(),
+             supplier: trim_(o.supplier), contractRef: trim_(o.contractRef) };
+  } catch (e) { return null; }
+}
+
+// Which contract this invoice belongs to. A number written on the invoice settles it; failing
+// that, the supplier's name and the currency narrow it down, and the reason is recorded so a
+// guess is never mistaken for a fact.
+function invMatch_(got, text) {
+  var contracts = readAll_(SHEETS.contracts);
+  var norm = function (x) { return String(x || '').toLowerCase().replace(/[^a-z0-9]/g, ''); };
+
+  if (got.contractRef) {
+    var want = norm(got.contractRef);
+    var byRef = contracts.filter(function (c) { return want && norm(c.Number) === want; })[0];
+    if (byRef) return { contractId: String(byRef.ContractID), why: 'the invoice names contract ' + trim_(byRef.Number) };
+  }
+  // The number may be in the text without the model calling it a reference.
+  var haystack = norm(text);
+  var mentioned = contracts.filter(function (c) {
+    var n = norm(c.Number);
+    return n.length >= 5 && haystack.indexOf(n) >= 0;
+  });
+  if (mentioned.length === 1) {
+    return { contractId: String(mentioned[0].ContractID),
+             why: 'contract ' + trim_(mentioned[0].Number) + ' is quoted in the text' };
+  }
+
+  if (got.supplier) {
+    var supplier = norm(got.supplier);
+    var cps = readAll_(SHEETS.counterparties).filter(function (cp) {
+      var n = norm(cp.Name);
+      return n && (n === supplier || (n.length > 6 && supplier.indexOf(n) >= 0) || (supplier.length > 6 && n.indexOf(supplier) >= 0));
+    });
+    if (cps.length === 1) {
+      var theirs = contracts.filter(function (c) {
+        return String(c.CounterpartyID) === String(cps[0].CounterpartyID)
+            && (!got.currency || !trim_(c.Currency) || trim_(c.Currency) === got.currency);
+      });
+      if (theirs.length === 1) {
+        return { contractId: String(theirs[0].ContractID),
+                 why: 'the only contract with ' + trim_(cps[0].Name)
+                    + (got.currency ? ' in ' + got.currency : '') };
+      }
+      if (theirs.length > 1) {
+        return { contractId: '', why: cps[0].Name + ' has ' + theirs.length + ' contracts — pick one' };
+      }
+      return { contractId: '', why: 'no contract with ' + trim_(cps[0].Name) };
+    }
+  }
+  return { contractId: '', why: 'nothing to match on' };
+}
+
+// Turn a read invoice into a record of the system.
+function invQueueAccept_(d) {
+  requireAdmin_(d);
+  var row = findRow_(SHEETS.invoiceQueue, 'QueueID', trim_(d.queueId));
+  if (!row) return { ok: false, error: 'Not found' };
+  var contractId = trim_(d.contractId) || trim_(row.MatchContractID);
+  if (!contractId) return { ok: false, error: 'Choose the contract this invoice belongs to' };
+  var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
+  if (!c) return { ok: false, error: 'Contract not found' };
+
+  var id = Utilities.getUuid();
+  var date = trim_(d.invoiceDate) || trim_(row.InvoiceDate) || new Date().toISOString().slice(0, 10);
+  var amount = num_(d.amount) || num_(row.Amount);
+  var currency = trim_(d.currency) || trim_(row.Currency) || trim_(c.Currency);
+  var fx = computeFx_(currency, amount, date);
+  appendRow_(SHEETS.invoices, {
+    InvoiceID: id, Number: trim_(d.number) || trim_(row.Number), ContractID: contractId,
+    CounterpartyID: trim_(c.CounterpartyID), InvoiceDate: date, DueDate: trim_(row.DueDate),
+    Amount: amount, Currency: currency,
+    AmountUSD: fx.AmountUSD, FxRate: fx.FxRate, FxAsOf: fx.FxAsOf,
+    CreatedAt: new Date().toISOString()
+  });
+  // The file becomes an attachment of the contract, so it is where documents are looked for.
+  appendRow_(SHEETS.attachments, {
+    AttachmentID: Utilities.getUuid(), ParentType: 'contract', ParentID: contractId,
+    FileName: trim_(row.FileName), Description: 'Invoice ' + trim_(row.Number), DocType: 'invoice',
+    DocDate: date, IsCurrent: 'no', DriveFileID: trim_(row.DriveFileID),
+    Url: 'https://drive.google.com/file/d/' + trim_(row.DriveFileID) + '/view',
+    CreatedAt: new Date().toISOString()
+  });
+  updateRow_(SHEETS.invoiceQueue, 'QueueID', String(row.QueueID), { InvoiceID: id, MatchContractID: contractId });
+  return { ok: true, invoiceId: id };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

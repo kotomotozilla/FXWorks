@@ -151,12 +151,21 @@
 
     <!-- INVOICES -->
     <section id="view-invoices" class="hidden">
+      <div class="panel" id="invQueuePanel" style="display:none">
+        <h2>Uploaded invoices</h2>
+        <p class="muted">Each file is read in the background and matched to the contract it belongs to.
+          Nothing is recorded until you accept it.</p>
+        <div id="invQueueErr"></div>
+        <div id="invQueue"></div>
+      </div>
+
       <div class="panel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Invoices</h2>
           <div class="acts">
             <span id="invTools"></span>
             <button class="btn sm" onclick="newInvoice()">+ New invoice</button>
+            <button class="btn ghost sm" onclick="invUploadPick(this)">Upload invoices</button>
             <button class="btn ghost sm" onclick="recalcAllFx(this)">↻ Recalculate missing USD</button>
           </div>
         </div>
@@ -1017,7 +1026,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.178';
+const BUILD = '2026-08-08.179';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1153,7 +1162,8 @@ function switchTab(t){
   if(t==='counterparties'){ if(COUNTERPARTIES.length) renderCounterpartiesList();
                             if(stale('counterparties')) loadCounterparties(); }
   if(t==='contracts'){ if(CONTRACTS.length) renderContractsList(); if(stale('contracts')) loadContracts(); }
-  if(t==='invoices'){ if(INVOICES.length) renderInvoicesList(); if(stale('invoices')) loadInvoices(); }
+  if(t==='invoices'){ if(INVOICES.length) renderInvoicesList(); if(stale('invoices')) loadInvoices();
+                      invQueueRefresh(); }
   if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
   document.querySelector('.wrap').classList.toggle('wide', t==='costs' || t==='perf' || t==='pay');
 }
@@ -1466,6 +1476,108 @@ function invContractChange(){
   $('inv_dir').value = c ? dirEn(c.Direction) : '';
   if(c && c.CounterpartyID){ $('inv_cp').innerHTML = ctCpOptions(c.CounterpartyID); }
 }
+// ── Invoices that arrive as files ──
+// Upload as many as you like; each is read in the background and matched to a contract. The
+// match is a suggestion with its reasoning shown — nothing is recorded until it is accepted.
+let INV_QUEUE_TIMER = null;
+function invUploadPick(btn){
+  let input = $('invUploadInput');
+  if(!input){
+    input = document.createElement('input');
+    input.type='file'; input.accept='application/pdf'; input.multiple = true;
+    input.id='invUploadInput'; input.style.display='none';
+    document.body.appendChild(input);
+  }
+  input.onchange = async () => {
+    const files = [...(input.files||[])]; if(!files.length) return;
+    const done = busy(btn);
+    try{
+      for(let i=0;i<files.length;i++){
+        notice('invQueueErr','info',`Uploading ${i+1} of ${files.length} — ${esc(files[i].name)}…`);
+        await api('inv_queue_add',{ fileName:files[i].name, dataBase64: await fileToBase64(files[i]) });
+      }
+      notice('invQueueErr','ok',`${files.length} file(s) uploaded. Reading them now — this takes a few seconds each.`);
+      invQueueWatch();
+    }catch(e){ notice('invQueueErr','err', esc(e.message)); }
+    finally{ done(); input.value=''; }
+  };
+  input.value=''; input.click();
+}
+function invQueueWatch(){
+  invQueueRefresh();
+  if(INV_QUEUE_TIMER) clearInterval(INV_QUEUE_TIMER);
+  INV_QUEUE_TIMER = setInterval(invQueueRefresh, 6000);
+}
+async function invQueueRefresh(){
+  const box = $('invQueue'); if(!box) return;
+  let r;
+  try{ r = await api('inv_queue_list',{}); }
+  catch(e){ notice('invQueueErr','err','Could not read the queue: '+esc(e.message));
+            if(INV_QUEUE_TIMER) clearInterval(INV_QUEUE_TIMER); return; }
+  const rows = r.queue||[];
+  $('invQueuePanel').style.display = rows.length ? '' : 'none';
+  if(!rows.length){ if(INV_QUEUE_TIMER) clearInterval(INV_QUEUE_TIMER); return; }
+
+  box.innerHTML = `<div class="acts" style="margin-bottom:10px">
+      <span class="muted" style="font-size:13px">${r.waiting} waiting · ${r.running} being read</span>
+      <button class="btn ghost sm" onclick="invQueueClear(false,this)">Clear the list</button>
+      <button class="btn ghost sm" onclick="invQueueClear(true,this)">Clear the finished</button>
+    </div>` + rows.map(q=>invQueueRow(q)).join('');
+
+  // Nudge it along while the page is open; the trigger does the same when it is not.
+  if(r.waiting && !r.running){ try{ await api('inv_queue_run',{}); }catch(e){} }
+  if(!r.waiting && !r.running && INV_QUEUE_TIMER) clearInterval(INV_QUEUE_TIMER);
+}
+function invQueueRow(q){
+  const st = q.status==='done' ? (q.invoiceId ? 'recorded' : 'read')
+           : q.status==='failed' ? 'could not read' : q.status;
+  const tag = q.status==='failed' ? 'warn' : (q.invoiceId ? 'submitted' : 'draft');
+  const money = q.amount ? `${esc(q.currency||'')} ${(+q.amount).toLocaleString('en-US',{minimumFractionDigits:2})}` : '';
+  return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <b>${esc(q.fileName)}</b><span class="tag ${tag}">${esc(st)}</span>
+    </div>
+    ${q.status==='done' ? `<div style="margin-top:6px;font-size:14px">
+        ${q.number?`Invoice <b>${esc(q.number)}</b>`:'No number found'}
+        ${q.date?` · ${esc(q.date)}`:''}${money?` · <b>${money}</b>`:''}
+        ${q.supplier?` · from ${esc(q.supplier)}`:''}
+        ${q.due?` · due ${esc(q.due)}`:''}
+      </div>
+      <div style="margin-top:4px;font-size:13px" class="muted">
+        ${q.matchContractId
+          ? `Matched to <b>${esc(q.matchNumber)}</b> — ${esc(q.matchWhy)}`
+          : `Not matched${q.matchWhy?' — '+esc(q.matchWhy):''}`}
+      </div>` : ''}
+    ${q.error?`<div style="margin-top:6px;font-size:13px;color:var(--warn)">${esc(q.error)}</div>`:''}
+    <div class="acts" style="margin-top:8px">
+      ${q.url?`<a class="btn ghost sm" href="${esc(q.url)}" target="_blank" rel="noopener">open the file</a>`:''}
+      ${q.status==='done' && !q.invoiceId
+        ? `<select id="invq_${esc(q.queueId)}" style="max-width:260px">${contractOptions(q.matchContractId)}</select>
+           <button class="btn sm" onclick="invQueueAccept('${esc(q.queueId)}',this)">Record the invoice</button>`
+        : ''}
+      ${q.invoiceId?`<span class="muted" style="font-size:13px">Recorded · the file is attached to the contract</span>`:''}
+    </div>
+  </div>`;
+}
+async function invQueueAccept(queueId, btn){
+  const sel = $('invq_'+queueId);
+  const done = busy(btn);
+  try{
+    await api('inv_queue_accept',{ queueId, contractId: sel ? sel.value : '' });
+    notice('invQueueErr','ok','Recorded.');
+    await loadInvoices(); await invQueueRefresh();
+  }catch(e){ notice('invQueueErr','err', esc(e.message)); }
+  finally{ done(); }
+}
+async function invQueueClear(doneOnly, btn){
+  if(!confirm(doneOnly ? 'Remove the finished entries from the list?'
+                       : 'Clear the whole list? Files not yet recorded go to the Drive bin.')) return;
+  const done = busy(btn);
+  try{ await api('inv_queue_clear',{ doneOnly }); await invQueueRefresh(); }
+  catch(e){ notice('invQueueErr','err', esc(e.message)); }
+  finally{ done(); }
+}
+
 async function loadInvoices(){
   LOADED['invoices'] = Date.now();
   try{
