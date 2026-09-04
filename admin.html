@@ -1017,7 +1017,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.177';
+const BUILD = '2026-08-08.178';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1139,7 +1139,10 @@ async function bootstrap(){
     if($('p_cp')) $('p_cp').innerHTML = ctCpOptions($('p_cp').value);
     if($('p_contract')) $('p_contract').innerHTML = contractOptions($('p_contract').value);
     if($('inv_contract')) $('inv_contract').innerHTML = contractOptions($('inv_contract').value);
-  }catch(e){ notice('projErr','err', esc(e.message)); }
+  }catch(e){
+    notice('projErr','err','Could not load: ' + esc(e.message)
+      + ' <button class="btn ghost sm" onclick="bootstrap()">Try again</button>');
+  }
 }
 function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){

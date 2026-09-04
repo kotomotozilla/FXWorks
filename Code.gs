@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.177';
+const BUILD = '2026-08-08.178';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -5413,6 +5413,19 @@ function ss_() {
   return SS_HANDLE;
 }
 function migrateSheet_(sh, oldHead, want) {
+  // Columns appended to the end need nothing but a longer header row. Rewriting the whole
+  // sheet for that is not just wasteful — on a sheet of thousands of rows it runs past the
+  // execution limit, and then every request retries it and fails again.
+  var appendOnly = true;
+  for (var q = 0; q < oldHead.length; q++) {
+    if (String(oldHead[q]).trim() !== '' && String(oldHead[q]).trim() !== want[q]) { appendOnly = false; break; }
+  }
+  if (appendOnly && want.length >= oldHead.length) {
+    sh.getRange(1, 1, 1, want.length).setValues([want]);
+    sh.setFrozenRows(1);
+    return;
+  }
+
   var data = sh.getDataRange().getValues(), rows = data.slice(1);
   // Keep any old-only columns by appending them after the wanted ones (no data is lost).
   var extra = [];
