@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.173';
+const BUILD = '2026-08-08.174';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -2371,13 +2371,30 @@ function pdfFiles_(d) {
   // Generated reports, by the link stored on the report itself — not by sweeping the folder,
   // which also picked up every file ever uploaded for a test parse.
   readAll_(SHEETS.assignments).forEach(function (a) {
-    var id = trim_(a.ReportPdfID);
-    if (!id) return;
-    out.push({ fileId: id, name: 'RPT · ' + trim_(a.ProjectName) + ' · '
-                 + (trim_(a.EmployeeName) || trim_(a.EmployeeEmail)),
-               where: 'report', current: false, parentType: 'report',
-               about: 'submitted ' + trim_(a.SubmittedAt) + (trim_(a.AcceptedAt) ? ', accepted ' + trim_(a.AcceptedAt) : ''),
-               createdAt: String(a.ReportPdfAt || a.SubmittedAt || '') });
+    var who = trim_(a.EmployeeName) || trim_(a.EmployeeEmail);
+    var about = 'submitted ' + trim_(a.SubmittedAt)
+              + (trim_(a.AcceptedAt) ? ', accepted ' + trim_(a.AcceptedAt) : '');
+    // Three different documents can hang off one report: ours, the contractor's, and the
+    // approval of an overrun. All of them are ours to check.
+    if (trim_(a.ReportPdfID)) {
+      out.push({ fileId: trim_(a.ReportPdfID), name: 'RPT · ' + trim_(a.ProjectName) + ' · ' + who,
+                 where: 'report', current: false, parentType: 'report', about: about,
+                 createdAt: String(a.ReportPdfAt || a.SubmittedAt || '') });
+    }
+    if (trim_(a.ExtPdfID)) {
+      out.push({ fileId: trim_(a.ExtPdfID),
+                 name: 'EXT · ' + (trim_(a.ExtSupplier) || 'contractor') + ' · ' + trim_(a.ProjectName),
+                 where: "contractor's report", current: false, parentType: 'report',
+                 about: 'accepted by ' + who + (trim_(a.ExtAmount) ? ' · ' + trim_(a.ExtCurrency) + ' ' + money_(num_(a.ExtAmount)) : ''),
+                 createdAt: String(a.ExtPdfAt || a.SubmittedAt || '') });
+    }
+    if (trim_(a.OverrunPdfID)) {
+      out.push({ fileId: trim_(a.OverrunPdfID),
+                 name: 'OVR · budget overrun · ' + trim_(a.ProjectName),
+                 where: 'overrun approval', current: false, parentType: 'report',
+                 about: 'approved by ' + trim_(a.OverrunApprovedBy) + ' on ' + trim_(a.OverrunApprovedAt),
+                 createdAt: String(a.OverrunApprovedAt || '') });
+    }
   });
   out.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
   return { ok: true, files: out.slice(0, 200) };
@@ -5172,7 +5189,11 @@ function adminAcceptAssignment_(d) {
     upd.OverrunApprovedBy = by;
     upd.OverrunApprovedAt = date;
     var note = overrunNote_(a, ceiling, by, title, date);
-    if (note.ok) { upd.OverrunPdfID = note.fileId; upd.OverrunPdfUrl = note.url; res.overrunNote = note.url; }
+    if (note.ok) {
+      var prevNote = trim_(a.OverrunPdfID);
+      if (prevNote && prevNote !== note.fileId) { try { DriveApp.getFileById(prevNote).setTrashed(true); } catch (e) {} }
+      upd.OverrunPdfID = note.fileId; upd.OverrunPdfUrl = note.url; res.overrunNote = note.url;
+    }
     else { res.overrunNoteError = note.error; }
   }
   var up = applyUpliftFields_(a, d, by);
