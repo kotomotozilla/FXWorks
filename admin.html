@@ -1026,7 +1026,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.181';
+const BUILD = '2026-08-08.182';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3456,7 +3456,8 @@ let FLT_LIST = '';
 
 const SORT_VALS = {
   contracts: { Number:c=>String(c.Number||''), Counterparty:c=>cpName(c.CounterpartyID),
-               Amount:c=>+c.Amount||0, SignDate:c=>String(c.SignDate||'') },
+               Amount:c=>+c.Amount||0, SignDate:c=>String(c.SignDate||''),
+               Invoiced:c=>{ const k=ctCoverage(c); return k.pct===null?-1:k.pct; } },
   invoices:  { Number:v=>String(v.Number||''), Counterparty:v=>cpName(v.CounterpartyID),
                Amount:v=>+v.Amount||0, InvoiceDate:v=>String(v.InvoiceDate||'') },
   projects:  { Name:p=>String(p.Name||''), Counterparty:p=>p.CounterpartyID?cpName(p.CounterpartyID):(p.Customer||''),
@@ -3691,18 +3692,77 @@ async function loadContracts(){
     renderContractsList();
   }catch(e){ notice('ctErr','err', esc(e.message)); }
 }
+// How much of a contract has been invoiced. Contracts and invoices are both already in
+// memory, so this costs nothing and needs no route.
+//
+// An invoice in a currency other than the contract's is counted apart and never folded in.
+// A rate we chose ourselves would sit in the figure indistinguishable from one we were
+// given, and the difference is the whole point of keeping FxRate and FxAsOf on the record.
+function ctCoverage(c){
+  const own = String(c.ContractID), ccy = String(c.Currency||'');
+  // A framework has no figure of its own — what it is worth is what has been ordered under
+  // it: a fixed price for a work order, a ceiling for a work request. Invoices sent against
+  // either the framework or one of its orders count towards it.
+  const kids = String(c.ContractKind||'')==='framework'
+    ? CONTRACTS.filter(x=>String(x.ParentContractID)===own) : [];
+  const ids = [own].concat(kids.map(x=>String(x.ContractID)));
+
+  let invoiced = 0, count = 0; const other = {};
+  INVOICES.forEach(v=>{
+    if(ids.indexOf(String(v.ContractID))<0) return;
+    const a = +v.Amount||0; if(!a) return;
+    const vc = String(v.Currency||'');
+    if(!ccy || !vc || vc===ccy){ invoiced += a; count++; }
+    else { other[vc] = (other[vc]||0) + a; }
+  });
+
+  let amount = null, rolled = false;
+  if(kids.length){
+    const sum = kids.filter(x=>!ccy || !String(x.Currency||'') || String(x.Currency)===ccy)
+                    .reduce((t,x)=>t + (+x.Amount||0), 0);
+    amount = sum > 0 ? sum : null; rolled = true;
+  } else if(c.Amount!=='' && c.Amount!=null && +c.Amount > 0){
+    amount = +c.Amount;
+  }
+
+  const pct = amount ? Math.round(invoiced/amount*1000)/10 : null;
+  return { amount, invoiced, count, ccy, pct, rolled, orders: kids.length,
+           other: Object.keys(other).map(k=>({ccy:k, sum:other[k]})) };
+}
+function ctBar(pct, over){
+  const w = Math.max(2, Math.min(100, pct));
+  return `<div style="height:5px;border-radius:3px;background:var(--line);margin:4px 0;max-width:150px;overflow:hidden">`
+       + `<div style="height:100%;width:${w}%;background:${over?'var(--warn)':'var(--pos)'}"></div></div>`;
+}
+function ctCoverageCell(c){
+  const k = ctCoverage(c), s = cur(k.ccy);
+  const extra = k.other.map(o=>`<div class="muted" style="font-size:11px">+ ${cur(o.ccy)}${money(o.sum)} in ${esc(o.ccy)}</div>`).join('');
+  if(!k.count && !k.other.length) return `<span class="muted">${k.amount?'nothing yet':'—'}</span>`;
+  const head = `${s}${money(k.invoiced)}`;
+  if(k.pct===null){
+    return `${head}<div class="muted" style="font-size:11px">${k.count} invoice(s) · nothing to measure against</div>${extra}`;
+  }
+  const over = k.pct > 100.05;
+  return head + ctBar(k.pct, over)
+       + `<div class="muted" style="font-size:11px">${k.pct}% of ${s}${money(k.amount)}`
+       + `${k.rolled?` · ${k.orders} order(s)`:''}</div>`
+       + (over?`<div style="color:var(--warn);font-size:11px">over by ${s}${money(k.invoiced-k.amount)}</div>`:'')
+       + extra;
+}
 function renderContractsList(){
   $('ctTools').innerHTML = filterBtn('contracts');
   const tb = $('ctTable').querySelector('tbody');
   const rows = rowsFor('contracts', CONTRACTS);
   if(!CONTRACTS.length){ tb.innerHTML='<tr><td class="empty">No contracts yet.</td></tr>'; return; }
   const head = '<tr>'+thSort('contracts','Number','Number')+thSort('contracts','Counterparty','Counterparty')+
-    thSort('contracts','Amount','Amount','num')+thSort('contracts','SignDate','Signed')+'<th></th></tr>';
-  if(!rows.length){ tb.innerHTML = head+'<tr><td class="empty" colspan="5">Nothing matches the filter.</td></tr>'; return; }
+    thSort('contracts','Amount','Amount','num')+thSort('contracts','Invoiced','Invoiced','num')+
+    thSort('contracts','SignDate','Signed')+'<th></th></tr>';
+  if(!rows.length){ tb.innerHTML = head+'<tr><td class="empty" colspan="6">Nothing matches the filter.</td></tr>'; return; }
   tb.innerHTML = head + rows.map(c=>{const s=cur(c.Currency);return `<tr>
       <td>${esc(c.Number)}${c.ParentContractID?` <span class="muted">· sub of ${esc(ctNumber(c.ParentContractID))}</span>`:''}</td>
       <td>${esc(cpName(c.CounterpartyID))}</td>
       <td class="num">${(c.Amount!==''&&c.Amount!=null)?s+money(c.Amount):'—'}</td>
+      <td class="num">${ctCoverageCell(c)}</td>
       <td class="muted">${esc(c.SignDate?fmtDate(c.SignDate):'—')}</td>
       <td><button class="btn ghost sm" onclick="openContract('${esc(c.ContractID)}')">Open</button></td></tr>`;}).join('');
 }
@@ -4338,6 +4398,22 @@ const s=cur(c.Currency);
   if(c.Description) html += `<div class="comment">${esc(c.Description)}</div>`;
 
   html += '<div class="sep"></div><h2 style="font-size:15px">Invoices ('+invs.length+')</h2>';
+  const cov = ctCoverage(c);
+  if(cov.count || cov.other.length || cov.amount){
+    const cs = cur(cov.ccy);
+    const over = cov.pct!==null && cov.pct > 100.05;
+    html += `<div style="margin-bottom:10px">`
+      + (cov.pct===null
+          ? `<b>${cs}${money(cov.invoiced)}</b> <span class="muted">invoiced${cov.amount?'':' · the contract carries no figure to measure against'}</span>`
+          : `<b>${cs}${money(cov.invoiced)}</b> <span class="muted">of ${cs}${money(cov.amount)}`
+            + `${cov.rolled?` committed under ${cov.orders} order(s)`:''} · ${cov.pct}%</span>`
+            + ctBar(cov.pct, over)
+            + (over
+                ? `<span style="color:var(--warn);font-size:13px">over by ${cs}${money(cov.invoiced-cov.amount)}</span>`
+                : `<span class="muted" style="font-size:13px">${cs}${money(Math.max(0,cov.amount-cov.invoiced))} not invoiced yet</span>`))
+      + cov.other.map(o=>`<div class="muted" style="font-size:13px">and ${cur(o.ccy)}${money(o.sum)} invoiced in ${esc(o.ccy)}, kept apart</div>`).join('')
+      + `</div>`;
+  }
   html += invs.length ? invs.map(v=>{const vs=cur(v.Currency);return `<div class="asg"><div class="top2">
       <div><div class="nm">${esc(v.Number)}</div><div class="em">${v.InvoiceDate?esc(fmtDate(v.InvoiceDate)):''}${v.DueDate?' · due '+esc(fmtDate(v.DueDate)):''}</div></div>
       <div style="text-align:right">${(v.Amount!==''&&v.Amount!=null)?vs+money(v.Amount):'—'}<div><button class="btn ghost sm" onclick="openInvoiceFromContract('${esc(v.InvoiceID)}')">Open</button></div></div>
