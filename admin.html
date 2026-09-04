@@ -1026,7 +1026,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.179';
+const BUILD = '2026-08-08.180';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1493,8 +1493,18 @@ function invUploadPick(btn){
     const done = busy(btn);
     try{
       for(let i=0;i<files.length;i++){
+        notice('invQueueErr','info',`Reading ${i+1} of ${files.length} — ${esc(files[i].name)}…`);
+        // An invoice written by an accounting system carries its text. Reading it here is
+        // exact and instant; Drive's OCR recognises a picture of the page and turns "ti"
+        // into "h", which on a number or an IBAN is not something one notices in time.
+        let layer = '';
+        try{
+          const t = await pdfTextLayer(await fileToBytes(files[i]));
+          if(t && !invLayerLooksBroken(t.text)) layer = t.text;
+        }catch(_){}
         notice('invQueueErr','info',`Uploading ${i+1} of ${files.length} — ${esc(files[i].name)}…`);
-        await api('inv_queue_add',{ fileName:files[i].name, dataBase64: await fileToBase64(files[i]) });
+        await api('inv_queue_add',{ fileName:files[i].name, dataBase64: await fileToBase64(files[i]),
+                                    textLayer: layer, textSource: layer ? 'text layer' : '' });
       }
       notice('invQueueErr','ok',`${files.length} file(s) uploaded. Reading them now — this takes a few seconds each.`);
       invQueueWatch();
@@ -1502,6 +1512,15 @@ function invUploadPick(btn){
     finally{ done(); input.value=''; }
   };
   input.value=''; input.click();
+}
+// textLayerLooksBroken() treats anything under 400 characters as a scan — true of a
+// contract, wrong for an invoice, which is a dozen lines. Only the ligature damage matters.
+function invLayerLooksBroken(t){
+  const s = String(t||'');
+  if(s.replace(/\s/g,'').length < 40) return true;
+  const hits = (s.match(/[a-z](?:hon|hng|hve|hca|hfic|hzed|hcal)[a-z]?/gi)||[]).length
+             + (s.match(/[A-Za-z]#[A-Za-z]/g)||[]).length;
+  return hits > s.length/1500;
 }
 function invQueueWatch(){
   invQueueRefresh();
@@ -1547,10 +1566,14 @@ function invQueueRow(q){
         ${q.matchContractId
           ? `Matched to <b>${esc(q.matchNumber)}</b> — ${esc(q.matchWhy)}`
           : `Not matched${q.matchWhy?' — '+esc(q.matchWhy):''}`}
+        ${q.textSource?` · read from the ${esc(q.textSource)}`:''}
       </div>` : ''}
     ${q.error?`<div style="margin-top:6px;font-size:13px;color:var(--warn)">${esc(q.error)}</div>`:''}
     <div class="acts" style="margin-top:8px">
       ${q.url?`<a class="btn ghost sm" href="${esc(q.url)}" target="_blank" rel="noopener">open the file</a>`:''}
+      ${q.status==='failed'
+        ? `<button class="btn ghost sm" onclick="invQueueRetry('${esc(q.queueId)}',this)">read it again</button>`
+        : ''}
       ${q.status==='done' && !q.invoiceId
         ? `<select id="invq_${esc(q.queueId)}" style="max-width:260px">${contractOptions(q.matchContractId)}</select>
            <button class="btn sm" onclick="invQueueAccept('${esc(q.queueId)}',this)">Record the invoice</button>`
@@ -1558,6 +1581,12 @@ function invQueueRow(q){
       ${q.invoiceId?`<span class="muted" style="font-size:13px">Recorded · the file is attached to the contract</span>`:''}
     </div>
   </div>`;
+}
+async function invQueueRetry(queueId, btn){
+  const done = busy(btn);
+  try{ await api('inv_queue_retry',{ queueId }); notice('invQueueErr','info','Back in the queue.'); invQueueWatch(); }
+  catch(e){ notice('invQueueErr','err', esc(e.message)); }
+  finally{ done(); }
 }
 async function invQueueAccept(queueId, btn){
   const sel = $('invq_'+queueId);

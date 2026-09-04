@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.179';
+const BUILD = '2026-08-08.180';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -50,7 +50,7 @@ const HEADERS = {
   // here until the background pass has read it and looked for the contract it belongs to.
   invoiceQueue: ['QueueID', 'FileName', 'DriveFileID', 'Status', 'Number', 'InvoiceDate', 'DueDate',
                  'Amount', 'Currency', 'Supplier', 'ContractRef', 'MatchContractID', 'MatchWhy',
-                 'InvoiceID', 'Error', 'CreatedAt', 'OrgID'],
+                 'InvoiceID', 'Error', 'CreatedAt', 'OrgID', 'TextLayer', 'TextSource'],
   blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'SecondaryKeys', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt', 'OrgID'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
@@ -178,6 +178,7 @@ function route_(action, d) {
     case 'inv_queue_list':     return invQueueList_(d);
     case 'inv_queue_run':      requireAdmin_(d); return invQueueTick(d);
     case 'inv_queue_clear':    return invQueueClear_(d);
+    case 'inv_queue_retry':    return invQueueRetry_(d);
     case 'inv_queue_accept':   return invQueueAccept_(d);
     case 'signature_list':     return signatureList_(d);
     case 'signature_save':     return signatureSave_(d);
@@ -2610,9 +2611,17 @@ function invQueueAdd_(d) {
     file = attachmentsFolder_().createFile(blob);
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
 
+  // The page reads the text layer with pdf.js before uploading, because Drive's OCR
+  // recognises a picture of the page and mangles ligatures. An invoice is short, so the
+  // whole of it fits in a cell; anything longer than an invoice plausibly is, is dropped
+  // and the file goes to OCR instead.
+  var layer = String(d.textLayer || '');
+  if (layer.length > 20000) layer = '';
+
   var id = Utilities.getUuid();
   appendRow_(SHEETS.invoiceQueue, {
     QueueID: id, FileName: fileName, DriveFileID: file.getId(), Status: 'queued',
+    TextLayer: layer, TextSource: layer ? (trim_(d.textSource) || 'text layer') : '',
     CreatedAt: new Date().toISOString()
   });
   return { ok: true, queueId: id };
@@ -2629,6 +2638,7 @@ function invQueueList_(d) {
              supplier: String(r.Supplier || ''), contractRef: String(r.ContractRef || ''),
              matchContractId: trim_(r.MatchContractID), matchNumber: match ? trim_(match.Number) : '',
              matchWhy: String(r.MatchWhy || ''), invoiceId: trim_(r.InvoiceID),
+             textSource: String(r.TextSource || ''),
              error: String(r.Error || ''), createdAt: String(r.CreatedAt || ''),
              url: trim_(r.DriveFileID) ? 'https://drive.google.com/file/d/' + trim_(r.DriveFileID) + '/view' : '' };
   }).sort(function (a, b) { return String(a.createdAt).localeCompare(String(b.createdAt)); });
@@ -2650,6 +2660,18 @@ function invQueueClear_(d) {
     gone++;
   });
   return { ok: true, removed: gone };
+}
+
+// A file that failed can be read again — the file is already on Drive, and a failure is
+// usually the model or a transient fetch rather than the file itself.
+function invQueueRetry_(d) {
+  requireAdmin_(d);
+  var row = findRow_(SHEETS.invoiceQueue, 'QueueID', trim_(d.queueId));
+  if (!row) return { ok: false, error: 'Not in the queue' };
+  if (trim_(row.InvoiceID)) return { ok: false, error: 'This one is already recorded' };
+  if (String(row.Status) === 'running') return { ok: false, error: 'It is being read right now' };
+  updateRow_(SHEETS.invoiceQueue, 'QueueID', String(row.QueueID), { Status: 'queued', Error: '' });
+  return { ok: true };
 }
 
 // One file per pass. Called by the page while it is open and by the timed trigger.
@@ -2675,18 +2697,29 @@ function invRead_(row) {
   var key = geminiKey_();
   if (!key) return { Status: 'failed', Error: 'AI key is not configured (Script Properties → gemini_key)' };
 
-  var text;
-  try { text = ocrText_(trim_(row.DriveFileID)); }
-  catch (e) { return { Status: 'failed', Error: 'Could not read the file: ' + String(e).slice(0, 150) }; }
-  if (String(text || '').replace(/\s/g, '').length < 40) {
-    return { Status: 'failed', Error: 'No readable text in this file' };
+  // The text layer the page read is exact. OCR is the fallback for real scans, and its
+  // output goes through the ligature repairs, which a clean text layer must never see.
+  var text = String(row.TextLayer || ''), source = trim_(row.TextSource) || 'text layer';
+  if (text.replace(/\s/g, '').length < 40) {
+    var got0;
+    try { got0 = ocrText_(trim_(row.DriveFileID)); }
+    catch (e) { return { Status: 'failed', Error: 'Could not read the file: ' + String(e).slice(0, 150) }; }
+    if (!got0 || !got0.ok) {
+      return { Status: 'failed', Error: String((got0 && got0.error) || 'Could not read the file').slice(0, 200) };
+    }
+    text = fixOcrText_(String(got0.text || ''));
+    source = 'OCR';
+  }
+  if (text.replace(/\s/g, '').length < 40) {
+    return { Status: 'failed', TextSource: source,
+             Error: 'No readable text in this file — is it a scan of a photograph?' };
   }
 
   var got = invExtract_(key, text);
-  if (!got) return { Status: 'failed', Error: 'The invoice details could not be read' };
+  if (!got) return { Status: 'failed', TextSource: source, Error: 'The invoice details could not be read' };
 
   var match = invMatch_(got, text);
-  return { Status: 'done', Error: '',
+  return { Status: 'done', Error: '', TextSource: source,
            Number: got.number, InvoiceDate: got.date, DueDate: got.due,
            Amount: got.amount, Currency: got.currency, Supplier: got.supplier,
            ContractRef: got.contractRef,
