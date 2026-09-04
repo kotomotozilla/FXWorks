@@ -1026,7 +1026,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.180';
+const BUILD = '2026-08-08.181';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1480,6 +1480,7 @@ function invContractChange(){
 // Upload as many as you like; each is read in the background and matched to a contract. The
 // match is a suggestion with its reasoning shown — nothing is recorded until it is accepted.
 let INV_QUEUE_TIMER = null;
+let INV_QUEUE_ROWS = [];
 function invUploadPick(btn){
   let input = $('invUploadInput');
   if(!input){
@@ -1522,6 +1523,35 @@ function invLayerLooksBroken(t){
              + (s.match(/[A-Za-z]#[A-Za-z]/g)||[]).length;
   return hits > s.length/1500;
 }
+// What the contract the invoice was matched to is worth. The point of showing it is the
+// comparison: an invoice larger than the contract it names, or in another currency, is the
+// kind of thing to catch before it is recorded, not after it is paid.
+function invContractNote(q){
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(q.matchContractId));
+  if(!c) return '';
+  const kind = String(c.ContractKind||'');
+  if(kind==='framework') return ' · <span class="muted">a framework, no total of its own</span>';
+  const amt = (c.Amount!==''&&c.Amount!=null) ? +c.Amount : null;
+  if(amt===null) return ' · <span class="muted">no amount on the contract</span>';
+  const worth = `${cur(c.Currency)}${money(amt)}`;
+  const ccy = String(c.Currency||''), inv = String(q.currency||''), paid = +q.amount||0;
+  if(inv && ccy && inv!==ccy){
+    return ` · contract ${worth} · <b style="color:var(--warn)">the invoice is in ${esc(inv)}</b>`;
+  }
+  if(paid && amt && paid > amt + 0.005){
+    return ` · contract ${worth} · <b style="color:var(--warn)">over it by ${cur(ccy)}${money(paid-amt)}</b>`;
+  }
+  return ` · contract ${worth}`;
+}
+// The same figures in the list, so choosing a different contract by hand is an informed choice.
+function invContractOptions(sel){
+  return '<option value="">— none —</option>'+CONTRACTS.map(c=>{
+    const kind = String(c.ContractKind||'');
+    const worth = kind==='framework' ? 'framework'
+                : (c.Amount!==''&&c.Amount!=null) ? `${cur(c.Currency)}${money(c.Amount)}` : 'no amount';
+    return `<option value="${esc(c.ContractID)}" ${String(sel)===String(c.ContractID)?'selected':''}>${esc(c.Number)} — ${esc(cpName(c.CounterpartyID))} — ${esc(worth)}</option>`;
+  }).join('');
+}
 function invQueueWatch(){
   invQueueRefresh();
   if(INV_QUEUE_TIMER) clearInterval(INV_QUEUE_TIMER);
@@ -1534,6 +1564,7 @@ async function invQueueRefresh(){
   catch(e){ notice('invQueueErr','err','Could not read the queue: '+esc(e.message));
             if(INV_QUEUE_TIMER) clearInterval(INV_QUEUE_TIMER); return; }
   const rows = r.queue||[];
+  INV_QUEUE_ROWS = rows;
   $('invQueuePanel').style.display = rows.length ? '' : 'none';
   if(!rows.length){ if(INV_QUEUE_TIMER) clearInterval(INV_QUEUE_TIMER); return; }
 
@@ -1542,6 +1573,8 @@ async function invQueueRefresh(){
       <button class="btn ghost sm" onclick="invQueueClear(false,this)">Clear the list</button>
       <button class="btn ghost sm" onclick="invQueueClear(true,this)">Clear the finished</button>
     </div>` + rows.map(q=>invQueueRow(q)).join('');
+
+  rows.forEach(q=>{ if(q.status==='done' && !q.invoiceId) invQueueRefreshNote(q.queueId); });
 
   // Nudge it along while the page is open; the trigger does the same when it is not.
   if(r.waiting && !r.running){ try{ await api('inv_queue_run',{}); }catch(e){} }
@@ -1564,7 +1597,7 @@ function invQueueRow(q){
       </div>
       <div style="margin-top:4px;font-size:13px" class="muted">
         ${q.matchContractId
-          ? `Matched to <b>${esc(q.matchNumber)}</b> — ${esc(q.matchWhy)}`
+          ? `Matched to <b>${esc(q.matchNumber)}</b> — ${esc(q.matchWhy)}${invContractNote(q)}`
           : `Not matched${q.matchWhy?' — '+esc(q.matchWhy):''}`}
         ${q.textSource?` · read from the ${esc(q.textSource)}`:''}
       </div>` : ''}
@@ -1575,12 +1608,22 @@ function invQueueRow(q){
         ? `<button class="btn ghost sm" onclick="invQueueRetry('${esc(q.queueId)}',this)">read it again</button>`
         : ''}
       ${q.status==='done' && !q.invoiceId
-        ? `<select id="invq_${esc(q.queueId)}" style="max-width:260px">${contractOptions(q.matchContractId)}</select>
-           <button class="btn sm" onclick="invQueueAccept('${esc(q.queueId)}',this)">Record the invoice</button>`
+        ? `<select id="invq_${esc(q.queueId)}" style="max-width:300px" onchange="invQueueRefreshNote('${esc(q.queueId)}')">${invContractOptions(q.matchContractId)}</select>
+           <button class="btn sm" onclick="invQueueAccept('${esc(q.queueId)}',this)">Record the invoice</button>
+           <div id="invqnote_${esc(q.queueId)}" style="flex-basis:100%;font-size:13px;margin-top:4px"></div>`
         : ''}
       ${q.invoiceId?`<span class="muted" style="font-size:13px">Recorded · the file is attached to the contract</span>`:''}
     </div>
   </div>`;
+}
+function invQueueRefreshNote(queueId){
+  const sel = $('invq_'+queueId), note = $('invqnote_'+queueId);
+  if(!sel || !note) return;
+  const c = CONTRACTS.find(x=>String(x.ContractID)===String(sel.value));
+  const q = (INV_QUEUE_ROWS||[]).find(x=>String(x.queueId)===String(queueId)) || {};
+  note.innerHTML = c
+    ? `Recording against <b>${esc(c.Number)}</b>${invContractNote({ ...q, matchContractId: sel.value })}`
+    : '<span class="muted">No contract chosen — the invoice will be recorded on its own.</span>';
 }
 async function invQueueRetry(queueId, btn){
   const done = busy(btn);
