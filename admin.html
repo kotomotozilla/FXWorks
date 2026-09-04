@@ -1017,7 +1017,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.175';
+const BUILD = '2026-08-08.176';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -4500,10 +4500,12 @@ let PDF_FILES = [];
 // A document attached to a contract is either the version in force or one that a later
 // file replaced — worth knowing before rewriting its properties.
 function pdfFileLabel(f){
+  // The date at the end is the file's own — when it was built or attached. Next to business
+  // dates like "accepted 2026-06-11" an unlabelled "2026-09-04" reads as a contradiction.
   const when = f.createdAt ? fmtDate(f.createdAt) : '';
   const what = f.about || f.where || '';
   const mark = f.current ? '✓ current · ' : (f.versioned ? '· superseded · ' : '');
-  return mark + f.name.replace(/\.pdf$/i,'') + (what ? ' — ' + what : '') + (when ? ' · ' + when : '');
+  return mark + f.name.replace(/\.pdf$/i,'') + (what ? ' — ' + what : '') + (when ? ' · file of ' + when : '');
 }
 function pdfCheckFilter(){
   const sel = $('pdfCheckPick'), q = ($('pdfCheckSearch').value||'').trim().toLowerCase();
