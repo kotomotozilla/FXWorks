@@ -1017,7 +1017,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.171';
+const BUILD = '2026-08-08.173';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1031,7 +1031,12 @@ let PIN = sessionStorage.getItem('fx_pin') || '';
 let COUNTERPARTIES = [], CONTRACTS = [], INVOICES = [], PROJECTS = [], ASSIGNMENTS = [], CURRENT = null, EDIT_CP = '', EDIT_CT = '', EDIT_INV = '', WR = null;
 // Server time comes back with every answer; keeping the slowest few turns "it feels slow"
 // into a number.
-let API_SLOW = [];
+let API_SLOW = [], ORG = '';
+// When each list was last read. Switching tabs used to re-fetch lists that were already in
+// memory, and every fetch waits its turn on the server.
+let LOADED = {};
+const FRESH_MS = 90000;
+function stale(what){ return !LOADED[what] || (Date.now() - LOADED[what]) > FRESH_MS; }
 // Every button that waits looks the same: it keeps its width, spins in place and comes back
 // with the label it had. Setting innerHTML by hand shrank buttons to the size of the spinner
 // and lost their text.
@@ -1108,23 +1113,45 @@ function logout(){ sessionStorage.removeItem('fx_pin'); location.reload(); }
 function renderWho(){
   const be = BE_BUILD ? `server v${esc(BE_BUILD)}` : 'server v…';
   const warn = (BE_BUILD && BE_BUILD!==BUILD) ? ' style="color:var(--warn)"' : '';
-  $('who').innerHTML = `Administrator · <span title="page build">v${BUILD}</span> · <span${warn} title="backend build">${be}</span> <button onclick="logout()">Sign out</button>`;
+  $('who').innerHTML = `Administrator · <span title="page build">v${BUILD}</span> · <span${warn} title="backend build">${be}</span>`
+    + (ORG && ORG !== 'fraktalex' ? ` · <span title="organisation">${esc(ORG)}</span>` : '')
+    + ` <button onclick="logout()">Sign out</button>`;
 }
 function enterApp(){
   $('gate').classList.add('hidden'); $('app').classList.remove('hidden');
   renderWho();
-  if(!BE_BUILD){ api('admin_login').then(r=>{ BE_BUILD=r.build||''; renderWho(); }).catch(()=>{}); }
-  // Load in parallel and render the visible Projects tab as soon as possible.
-  // Projects render immediately; the Contract/Counterparty names fill in once those lists arrive.
-  loadProjects();
-  loadCounterparties().then(afterRefLoaded);
-  loadContracts().then(afterRefLoaded);
-  loadInvoices();
+
+  bootstrap();
+}
+// One request instead of five. Apps Script serialises a user's requests, so the old start —
+// projects, counterparties, contracts, invoices, login — waited through all of them in turn.
+async function bootstrap(){
+  try{
+    const r = await api('bootstrap',{});
+    BE_BUILD = r.build || BE_BUILD;
+    ORG = r.org || '';
+    COUNTERPARTIES = r.counterparties||[]; CONTRACTS = r.contracts||[];
+    INVOICES = r.invoices||[]; PROJECTS = r.projects||[]; ASSIGNMENTS = r.assignments||[];
+    LOADED = { projects:Date.now(), counterparties:Date.now(), contracts:Date.now(), invoices:Date.now() };
+    renderWho(); renderProjectsList(); renderCounterpartiesList(); renderContractsList(); renderInvoicesList();
+    if($('ct_cp')) $('ct_cp').innerHTML = ctCpOptions($('ct_cp').value);
+    if($('ct_parent')) $('ct_parent').innerHTML = ctParentOptions($('ct_parent').value, EDIT_CT);
+    if($('p_cp')) $('p_cp').innerHTML = ctCpOptions($('p_cp').value);
+    if($('p_contract')) $('p_contract').innerHTML = contractOptions($('p_contract').value);
+    if($('inv_contract')) $('inv_contract').innerHTML = contractOptions($('inv_contract').value);
+  }catch(e){ notice('projErr','err', esc(e.message)); }
 }
 function afterRefLoaded(){ if(PROJECTS && PROJECTS.length) renderProjectsList(); }
 function switchTab(t){
   ['projects','contracts','invoices','counterparties','perf','pay','costs','v2','data','pdf'].forEach(x=>{ $('tab-'+x).classList.toggle('active', x===t); $('view-'+x).classList.toggle('hidden', x!==t); });
-  if(t==='data'){ loadData(); sigAdminInit(); } if(t==='pdf'){ pdfCheckInit(); pdfTidyCheck(); } if(t==='projects') loadProjects(); if(t==='counterparties') loadCounterparties(); if(t==='contracts') loadContracts(); if(t==='invoices') loadInvoices(); if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
+  if(t==='data'){ loadData(); sigAdminInit(); }
+  if(t==='pdf') pdfCheckInit();
+  if(t==='projects'){ renderProjectsList(); if(stale('projects')) loadProjects(); }
+  if(t==='counterparties'){ if(COUNTERPARTIES.length) renderCounterpartiesList();
+                            if(stale('counterparties')) loadCounterparties(); }
+  if(t==='contracts'){ if(CONTRACTS.length) renderContractsList(); if(stale('contracts')) loadContracts(); }
+  if(t==='invoices'){ if(INVOICES.length) renderInvoicesList(); if(stale('invoices')) loadInvoices(); }
+  if(t==='v2') v2Init(); if(t==='costs') costsInit(); if(t==='perf') perfInit(); if(t==='pay') payInit();
   document.querySelector('.wrap').classList.toggle('wide', t==='costs' || t==='perf' || t==='pay');
 }
 function cpName(id){ const c=COUNTERPARTIES.find(x=>String(x.CounterpartyID)===String(id)); return c?(c.Name||c.Email||'—'):'—'; }
@@ -1207,6 +1234,7 @@ function printWorkReport(){
 
 // ── Counterparties ──
 async function loadCounterparties(){
+  LOADED['counterparties'] = Date.now();
   try{
     const r = await api('list_counterparties'); COUNTERPARTIES = r.counterparties||[];
     renderCounterpartiesList();
@@ -1436,6 +1464,7 @@ function invContractChange(){
   if(c && c.CounterpartyID){ $('inv_cp').innerHTML = ctCpOptions(c.CounterpartyID); }
 }
 async function loadInvoices(){
+  LOADED['invoices'] = Date.now();
   try{
     const r = await api('list_invoices'); INVOICES = r.invoices||[];
     renderInvoicesList();
@@ -3465,6 +3494,7 @@ async function deleteContractFromCard(){
   catch(e){ notice('ctm_err','err', esc(e.message)); }
 }
 async function loadContracts(){
+  LOADED['contracts'] = Date.now();
   try{
     const r = await api('list_contracts'); CONTRACTS = r.contracts||[];
     $('ct_cp').innerHTML = ctCpOptions($('ct_cp').value);
@@ -4156,6 +4186,7 @@ function openProjectFromContract(pid){ closeModal('ctModal'); openProject(pid); 
 
 // ── Projects list ──
 async function loadProjects(){
+  LOADED['projects'] = Date.now();
   try{
     const r = await api('list_projects'); PROJECTS = r.projects||[]; ASSIGNMENTS = r.assignments||[];
     renderProjectsList();
@@ -4300,7 +4331,17 @@ function renderProjectModal(){
   $('pm_addComment').value=''; if($('pm_addTitle')) $('pm_addTitle').value='';
   pmContractsFor();
 }
-async function refreshModal(){ const r = await api('get_project',{projectId:CURRENT.project.ProjectID}); CURRENT=r; renderProjectModal(); loadProjects(); }
+// Refreshing the open project used to re-read every project as well — a second round trip
+// for a list that only needed one row changed.
+async function refreshModal(){
+  const r = await api('get_project',{projectId:CURRENT.project.ProjectID});
+  CURRENT = r;
+  const i = PROJECTS.findIndex(p=>String(p.ProjectID)===String(r.project.ProjectID));
+  if(i>=0) PROJECTS[i] = r.project;
+  ASSIGNMENTS = ASSIGNMENTS.filter(a=>String(a.ProjectID)!==String(r.project.ProjectID))
+                           .concat(r.assignments||[]);
+  renderProjectModal(); renderProjectsList();
+}
 
 async function saveProject(){
   notice('pm_err','',''); const name=$('pm_name').value.trim();
@@ -5177,14 +5218,11 @@ function closeModal(id){
   if(id==='projModal' && PROJ_OVERLAY){
     PROJ_OVERLAY = false;
     $(id).classList.add('hidden');
-    // the list under it may now be stale — refresh quietly, without leaving this screen
-    loadProjects();
-    api('list_projects').then(r=>{
-      PROJECTS=r.projects||[]; ASSIGNMENTS=r.assignments||[];
-      // redraw whichever list is on screen, so a change made inside shows up at once
-      if(!$('view-perf').classList.contains('hidden')) perfRender();
-      if(!$('view-pay').classList.contains('hidden')) payLoadExisting();
-    }).catch(()=>{});
+    // The lists were already updated in place while the overlay was open — just redraw
+    // whichever one is on screen. Two more round trips here were pure waiting.
+    renderProjectsList();
+    if(!$('view-perf').classList.contains('hidden')) perfRender();
+    if(!$('view-pay').classList.contains('hidden')) payLoadExisting();
     return;
   }
   if(id==='ctModal'){ EXTRACTED_EXTRAS=null; if($('ext_extra')) $('ext_extra').innerHTML=''; const p=$('ext_preview'); if(p){ p.classList.add('hidden'); $('ext_frame').src=''; } const b=document.querySelector('#ctModal .box'); if(b) b.classList.remove('wide'); } $(id).classList.add('hidden'); }
@@ -5192,7 +5230,8 @@ function closeModal(id){
 // ── Data ──
 async function loadData(){
   try{
-    const r = await api('list_projects'); const rows=(r.assignments||[]).filter(a=>a.Status==='submitted'||a.Status==='draft');
+    if(stale('projects')) await loadProjects();
+    const rows = ASSIGNMENTS.filter(a=>a.Status==='submitted'||a.Status==='draft');
     const tb=$('dataTable').querySelector('tbody');
     if(!rows.length){ tb.innerHTML='<tr><td class="empty">No data yet.</td></tr>'; return; }
     let H=0; rows.forEach(a=>{H+=+a.ReportedHours||0;});

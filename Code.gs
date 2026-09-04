@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.171';
+const BUILD = '2026-08-08.173';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -35,23 +35,23 @@ const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText
                  signatures: 'Signatures', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
 
 const HEADERS = {
-  counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt'],
+  counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt', 'OrgID'],
   documents:   ['DocumentID', 'ContractID', 'Kind', 'Number', 'SignDate', 'EffectiveFrom', 'Status', 'Source',
-                'AttachmentID', 'FileName', 'Profile', 'Notes', 'Snapshot', 'SentTextID', 'GroupKey', 'CreatedAt'],
+                'AttachmentID', 'FileName', 'Profile', 'Notes', 'Snapshot', 'SentTextID', 'GroupKey', 'CreatedAt', 'OrgID', 'OrgID'],
   payments:    ['PaymentID', 'CounterpartyID', 'PaidAt', 'Amount', 'Currency', 'Reference', 'Note',
-                'AssignmentID', 'MatchedBy', 'MatchedAt', 'CreatedAt'],
-  terms:       ['TermID', 'ContractID', 'Field', 'Value', 'ValidFrom', 'FromClause', 'DocumentID', 'Note', 'CreatedAt'],
+                'AssignmentID', 'MatchedBy', 'MatchedAt', 'CreatedAt', 'OrgID', 'OrgID'],
+  terms:       ['TermID', 'ContractID', 'Field', 'Value', 'ValidFrom', 'FromClause', 'DocumentID', 'Note', 'CreatedAt', 'OrgID'],
   sentText:    ['DocumentID', 'Seq', 'Chunk'],
   queue:       ['QueueID', 'BatchID', 'ContractID', 'FileName', 'DriveFileID', 'TextSource', 'Profile',
-                'Status', 'Message', 'DocumentID', 'Blocks', 'CreatedAt', 'StartedAt', 'FinishedAt'],
+                'Status', 'Message', 'DocumentID', 'Blocks', 'CreatedAt', 'StartedAt', 'FinishedAt', 'OrgID', 'OrgID'],
   queueText:   ['QueueID', 'Seq', 'Chunk'],
   queueFile:   ['QueueID', 'Seq', 'Chunk'],
-  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'SecondaryKeys', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt'],
+  blocks:      ['BlockID', 'DocumentID', 'ContractID', 'SemanticKey', 'SecondaryKeys', 'Path', 'ReplacesPath', 'ReplacesKey', 'ReplacesIn', 'ReplacementText', 'Level', 'Title', 'Text', 'Params', 'Origin', 'SortOrder', 'CreatedAt', 'OrgID'],
   requisites:  ['RequisiteID', 'CounterpartyID', 'Label', 'LegalName', 'Jurisdiction', 'RegNumber', 'Address',
                 'BankName', 'BankAddress', 'BeneficiaryName', 'AccountNumber', 'Swift', 'CorrBank', 'CorrSwift',
-                'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt'],
-  employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt'],
-  signatures:  ['SignatureID', 'OwnerEmail', 'OwnerName', 'Label', 'DriveFileID', 'CreatedAt'],
+                'SignatoryName', 'SignatoryTitle', 'IsDefault', 'CreatedAt', 'OrgID', 'OrgID'],
+  employees:   ['Email', 'FullName', 'Rate', 'Currency', 'Password', 'CreatedAt', 'OrgID'],
+  signatures:  ['SignatureID', 'OwnerEmail', 'OwnerName', 'Label', 'DriveFileID', 'CreatedAt', 'OrgID'],
   contracts:   ['ContractID', 'Number', 'Description', 'CounterpartyID', 'Direction', 'SignDate', 'StartDate', 'EndDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'ParentContractID', 'CreatedAt',
                 'TemplateType', 'OurRole', 'OurRequisiteID', 'TheirRequisiteID', 'Subject',
@@ -70,11 +70,11 @@ const HEADERS = {
                 'ContractKind', 'RfpReference', 'TargetAcceptance', 'PricingModel', 'Deviations',
                 // A ceiling may be raised, but only in writing (Wasat clause 3.4) — so the
                 // approval itself is recorded, not just the new number.
-                'CeilingApproved', 'CeilingApprovedBy', 'CeilingApprovedAt'],
+                'CeilingApproved', 'CeilingApprovedBy', 'CeilingApprovedAt', 'OrgID', 'OrgID'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
-                'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt'],
-  attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt'],
-  projects:    ['ProjectID', 'Name', 'Customer', 'CounterpartyID', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt'],
+                'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt', 'OrgID', 'OrgID'],
+  attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt', 'OrgID'],
+  projects:    ['ProjectID', 'Name', 'Customer', 'CounterpartyID', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt', 'OrgID'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
                 'ReleasedAt', 'SubmittedAt', 'UpdatedAt', 'CreatedAt', 'PayoutCurrency', 'AcceptedBy', 'AcceptedTitle', 'AcceptedAt',
@@ -92,8 +92,8 @@ const HEADERS = {
                 'ReportKind', 'RequestContractID', 'ExtSupplier', 'ExtAmount', 'ExtCurrency',
                 'ExtPdfID', 'ExtPdfUrl', 'ExtPdfAt',
                 'OverrunApprovedBy', 'OverrunApprovedAt', 'OverrunPdfID', 'OverrunPdfUrl',
-                'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate'],
-  entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt']
+                'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate', 'OrgID', 'OrgID'],
+  entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt', 'OrgID']
 };
 
 const CURRENCIES = ['USD', 'EUR', 'AED', 'SGD'];
@@ -121,6 +121,16 @@ function doPost(e) {
 function route_(action, d) {
   switch (action) {
     case 'admin_login':        requireAdmin_(d); return { ok: true, build: BUILD };
+    // Everything the admin page needs to start, in one request. Apps Script runs a user's
+    // requests one after another, so five separate calls cost five times the wait — and the
+    // sheets are read once here instead of five times over.
+    case 'bootstrap':          requireAdmin_(d); ensureCounterparties_();
+                               return { ok: true, build: BUILD, org: currentOrg_(),
+                                        counterparties: readAll_(SHEETS.counterparties),
+                                        contracts: readAll_(SHEETS.contracts),
+                                        invoices: readAll_(SHEETS.invoices),
+                                        projects: readAll_(SHEETS.projects),
+                                        assignments: readAll_(SHEETS.assignments) };
     // Employees
     case 'save_counterparty':  return adminSaveCounterparty_(d);
     case 'list_counterparties': requireAdmin_(d); ensureCounterparties_(); return { ok: true, counterparties: readAll_(SHEETS.counterparties) };
@@ -1216,7 +1226,7 @@ function v2ParseMore_(d) {
       ReplacementText: unmaskAI_(String(b.replacementText || ''), cpName),
       Level: num_(b.level) || 2, Title: unmaskAI_(trim_(b.title), cpName),
       Text: unmaskAI_(String(b.text || ''), cpName), Params: '', Origin: 'external',
-      SortOrder: start + n + 1, CreatedAt: now
+      SortOrder: start + n + 1, CreatedAt: now, OrgID: currentOrg_()
     };
     return head.map(function (h) { return rec[h] != null ? rec[h] : ''; });
   });
@@ -1328,7 +1338,7 @@ function v2ParseOne_(contractId, driveFileId, fileName, attachmentId, kind, cpNa
       ReplacementText: unmaskAI_(String(b.replacementText || ''), cpName || ''),
       Level: num_(b.level) || 2, Title: unmaskAI_(trim_(b.title), cpName || ''),
       Text: unmaskAI_(String(b.text || ''), cpName || ''), Params: '', Origin: 'external',
-      SortOrder: i + 1, CreatedAt: now
+      SortOrder: i + 1, CreatedAt: now, OrgID: currentOrg_()
     };
     return head.map(function (h) { return rec[h] != null ? rec[h] : ''; });
   });
@@ -1618,7 +1628,7 @@ function v2SaveTemplate_(d) {
         BlockID: Utilities.getUuid(), DocumentID: tplId, ContractID: TPL_CONTRACT,
         SemanticKey: b.SemanticKey, Path: b.Path, ReplacesPath: '', ReplacesIn: '', ReplacementText: '',
         Level: b.Level, Title: b.Title, Text: trim_(b.ReplacementText) || trim_(b.Text),
-        Params: '', Origin: 'template', SortOrder: i + 1, CreatedAt: now
+        Params: '', Origin: 'template', SortOrder: i + 1, CreatedAt: now, OrgID: currentOrg_()
       };
       return head.map(function (h) { return rec[h] != null ? rec[h] : ''; });
     });
@@ -1657,7 +1667,7 @@ function v2FromTemplate_(d) {
         BlockID: Utilities.getUuid(), DocumentID: docId, ContractID: contractId,
         SemanticKey: b.SemanticKey, Path: b.Path, ReplacesPath: '', ReplacesIn: '', ReplacementText: '',
         Level: b.Level, Title: b.Title, Text: b.Text, Params: '', Origin: 'template',
-        SortOrder: i + 1, CreatedAt: now
+        SortOrder: i + 1, CreatedAt: now, OrgID: currentOrg_()
       };
       return head.map(function (h) { return rec[h] != null ? rec[h] : ''; });
     });
@@ -5355,12 +5365,27 @@ var SHEET_CACHE = {};
 function invalidateCache_(name) {
   if (name) delete SHEET_CACHE[name]; else SHEET_CACHE = {};
 }
+// The organisation this installation works for. One today; the column is there so that data
+// for several never has to be told apart after the fact — retrofitting that is a rewrite of
+// every query, adding it now costs nothing.
+function currentOrg_() {
+  if (ORG_CACHE !== null) return ORG_CACHE;
+  ORG_CACHE = trim_(PropertiesService.getScriptProperties().getProperty('org_id')) || 'fraktalex';
+  return ORG_CACHE;
+}
+var ORG_CACHE = null;
+
 function readAll_(name) {
   if (SHEET_CACHE[name]) return SHEET_CACHE[name];
   var sh = getSheet_(name), values = sh.getDataRange().getValues();
   if (values.length < 2) { SHEET_CACHE[name] = []; return SHEET_CACHE[name]; }
   var head = values[0], out = [];
   for (var i = 1; i < values.length; i++) { var o = {}; for (var j = 0; j < head.length; j++) o[head[j]] = values[i][j]; out.push(o); }
+  // Rows written before the column existed belong to whoever is asking — there was only one.
+  if (head.indexOf('OrgID') >= 0) {
+    var org = currentOrg_();
+    out = out.filter(function (r) { var v = trim_(r.OrgID); return !v || v === org; });
+  }
   SHEET_CACHE[name] = out;
   return out;
 }
@@ -5372,6 +5397,8 @@ var TEXT_COLS = ['Number', 'GroupKey', 'RegNumber', 'AccountNumber', 'Swift', 'C
 function appendRow_(name, obj) {
   invalidateCache_(name);
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
+  // Stamped on the way in, so nothing has to remember to set it.
+  if (head.indexOf('OrgID') >= 0 && !trim_(obj.OrgID)) obj.OrgID = currentOrg_();
   var arr = head.map(function (h) { return obj[h] != null ? obj[h] : ''; });
   var formats = head.map(function (h, i) {
     var v = arr[i];
