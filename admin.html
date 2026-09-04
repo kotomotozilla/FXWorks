@@ -1017,7 +1017,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.176';
+const BUILD = '2026-08-08.177';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1093,7 +1093,7 @@ async function api(action, payload={}){
                  networkMs: data.serverMs != null ? tookMs - data.serverMs : null });
   if(API_LOG.length > 200) API_LOG.shift();
   if(typeof data.serverMs === 'number'){
-    API_SLOW.push({ action, ms:data.serverMs });
+    API_SLOW.push({ action: action + (data.cached ? ' (cached)' : ''), ms:data.serverMs });
     API_SLOW.sort((a,b)=>b.ms-a.ms);
     if(API_SLOW.length > 8) API_SLOW.length = 8;
   }

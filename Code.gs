@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.176';
+const BUILD = '2026-08-08.177';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -124,13 +124,7 @@ function route_(action, d) {
     // Everything the admin page needs to start, in one request. Apps Script runs a user's
     // requests one after another, so five separate calls cost five times the wait — and the
     // sheets are read once here instead of five times over.
-    case 'bootstrap':          requireAdmin_(d); ensureCounterparties_();
-                               return { ok: true, build: BUILD, org: currentOrg_(),
-                                        counterparties: readAll_(SHEETS.counterparties),
-                                        contracts: readAll_(SHEETS.contracts),
-                                        invoices: readAll_(SHEETS.invoices),
-                                        projects: readAll_(SHEETS.projects),
-                                        assignments: readAll_(SHEETS.assignments) };
+    case 'bootstrap':          requireAdmin_(d); return bootstrap_();
     // Employees
     case 'save_counterparty':  return adminSaveCounterparty_(d);
     case 'list_counterparties': requireAdmin_(d); ensureCounterparties_(); return { ok: true, counterparties: readAll_(SHEETS.counterparties) };
@@ -256,6 +250,51 @@ function route_(action, d) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Employees
 // ─────────────────────────────────────────────────────────────────────────────
+// The opening screen, cached. Reading six sheets costs seconds, and between two page loads
+// nothing has usually changed — any write clears this, so a stale answer cannot outlive the
+// change that made it stale.
+function bootstrap_() {
+  var cache = CacheService.getScriptCache();
+  var key = 'boot_' + currentOrg_() + '_' + BUILD;
+  try {
+    var parts = cache.get(key + '_n');
+    if (parts) {
+      var buf = '';
+      for (var i = 0; i < +parts; i++) buf += (cache.get(key + '_' + i) || '');
+      var hit = JSON.parse(buf);
+      hit.cached = true;
+      return hit;
+    }
+  } catch (e) {}
+
+  ensureCounterparties_();
+  var out = { ok: true, build: BUILD, org: currentOrg_(),
+              counterparties: readAll_(SHEETS.counterparties),
+              contracts: readAll_(SHEETS.contracts),
+              invoices: readAll_(SHEETS.invoices),
+              projects: readAll_(SHEETS.projects),
+              assignments: readAll_(SHEETS.assignments) };
+  try {
+    var text = JSON.stringify(out), chunk = 90000, n = Math.ceil(text.length / chunk), map = {};
+    if (n <= 20) {                       // beyond that the cache is the wrong tool
+      for (var j = 0; j < n; j++) map[key + '_' + j] = text.substr(j * chunk, chunk);
+      map[key + '_n'] = String(n);
+      cache.putAll(map, 300);
+    }
+  } catch (e) {}
+  return out;
+}
+
+// Any write invalidates it: the next screen must not show what was true a moment ago.
+function dropBootstrapCache_() {
+  try {
+    var cache = CacheService.getScriptCache(), key = 'boot_' + currentOrg_() + '_' + BUILD;
+    var n = +(cache.get(key + '_n') || 0), keys = [key + '_n'];
+    for (var i = 0; i < n; i++) keys.push(key + '_' + i);
+    cache.removeAll(keys);
+  } catch (e) {}
+}
+
 function ensureCounterparties_() {
   getSheet_(SHEETS.counterparties);
   var props = PropertiesService.getScriptProperties();
@@ -5328,6 +5367,11 @@ function requireAdmin_(d) {
 // call — and with dozens of lookups per request that alone cost seconds. Check each sheet
 // once per request instead; a write invalidates the cached rows, not this handle.
 var SHEET_HANDLES = {};
+// Reading the header row to check the schema, then reading the data, meant two calls to
+// Sheets for every sheet — and calls to Sheets are what the time is spent on. The check now
+// rides along with the data, which readAll_ has to fetch anyway.
+var SHEET_CHECKED = {};
+
 function getSheet_(name) {
   if (SHEET_HANDLES[name]) return SHEET_HANDLES[name];
   var ss = ss_(), sh = ss.getSheetByName(name), want = HEADERS[keyByName_(name)];
@@ -5336,19 +5380,30 @@ function getSheet_(name) {
     sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setNumberFormat('@');
     sh.appendRow(want); sh.setFrozenRows(1);
     SHEET_HANDLES[name] = sh;
+    SHEET_CHECKED[name] = true;
     return sh;
-  }
-  var lastCol = sh.getLastColumn();
-  var have = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getValues()[0] : [];
-  if (!headersMatch_(have, want)) {
-    if (sh.getLastRow() <= 1) {
-      sh.clear(); sh.getRange(1, 1, 1, want.length).setValues([want]); sh.setFrozenRows(1);
-    } else {
-      migrateSheet_(sh, have, want);   // preserve data: remap by column name
-    }
   }
   SHEET_HANDLES[name] = sh;
   return sh;
+}
+
+// Bring a sheet's columns up to date. Called with the header already in hand where the data
+// has just been read, and only reading it when there is no other reason to.
+function checkSchema_(name, have) {
+  if (SHEET_CHECKED[name]) return false;
+  SHEET_CHECKED[name] = true;
+  var sh = getSheet_(name), want = HEADERS[keyByName_(name)];
+  if (have === undefined) {
+    var lastCol = sh.getLastColumn();
+    have = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  }
+  if (headersMatch_(have, want)) return false;
+  if (sh.getLastRow() <= 1) {
+    sh.clear(); sh.getRange(1, 1, 1, want.length).setValues([want]); sh.setFrozenRows(1);
+  } else {
+    migrateSheet_(sh, have, want);   // preserve data: remap by column name
+  }
+  return true;                        // the sheet changed — whatever was read is stale
 }
 
 var SS_HANDLE = null;
@@ -5384,6 +5439,7 @@ function keyByName_(name) { for (var k in SHEETS) if (SHEETS[k] === name) return
 // times. The cache is dropped as soon as anything is written, so nothing goes stale.
 var SHEET_CACHE = {};
 function invalidateCache_(name) {
+  dropBootstrapCache_();
   if (name) delete SHEET_CACHE[name]; else SHEET_CACHE = {};
 }
 // The organisation this installation works for. One today; the column is there so that data
@@ -5399,6 +5455,9 @@ var ORG_CACHE = null;
 function readAll_(name) {
   if (SHEET_CACHE[name]) return SHEET_CACHE[name];
   var sh = getSheet_(name), values = sh.getDataRange().getValues();
+  // The header is the first row of what we just read — check the schema against it instead
+  // of asking Sheets for it separately.
+  if (checkSchema_(name, values.length ? values[0] : [])) values = sh.getDataRange().getValues();
   if (values.length < 2) { SHEET_CACHE[name] = []; return SHEET_CACHE[name]; }
   var head = values[0], out = [];
   for (var i = 1; i < values.length; i++) { var o = {}; for (var j = 0; j < head.length; j++) o[head[j]] = values[i][j]; out.push(o); }
@@ -5417,6 +5476,7 @@ var TEXT_COLS = ['Number', 'GroupKey', 'RegNumber', 'AccountNumber', 'Swift', 'C
 // and with a widening list of text columns that became the slowest thing in the system.
 function appendRow_(name, obj) {
   invalidateCache_(name);
+  checkSchema_(name);
   var sh = getSheet_(name), head = HEADERS[keyByName_(name)];
   // Stamped on the way in, so nothing has to remember to set it.
   if (head.indexOf('OrgID') >= 0 && !trim_(obj.OrgID)) obj.OrgID = currentOrg_();
@@ -5444,7 +5504,9 @@ function findRow_(name, idField, idValue) {
 }
 function updateRow_(name, idField, idValue, updates) {
   invalidateCache_(name);
-  var sh = getSheet_(name), values = sh.getDataRange().getValues(), head = values[0];
+  var sh = getSheet_(name), values = sh.getDataRange().getValues();
+  if (checkSchema_(name, values.length ? values[0] : [])) values = sh.getDataRange().getValues();
+  var head = values[0];
   var idCol = head.indexOf(idField), norm = (idField === 'Email');
   var target = norm ? normEmail_(idValue) : String(idValue);
   for (var i = 1; i < values.length; i++) {
