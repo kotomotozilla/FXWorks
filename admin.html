@@ -235,9 +235,17 @@
         <h2>Costs</h2>
         <p class="muted">What each contract costs: the agreed price of its sub-contracts plus what has been reported against it. Sub-contracts count at their price — the commitment — not at what has been reported so far. Reports count once accepted; those submitted and not yet accepted are shown separately.</p>
         <div id="costErr"></div>
+        <div id="costScope" style="font-size:13px;margin-bottom:8px"></div>
         <div class="row" style="align-items:end">
           <div style="flex:0 0 180px"><label>From</label><input id="cost_from" type="date"></div>
           <div style="flex:0 0 180px"><label>To</label><input id="cost_to" type="date"></div>
+          <div style="flex:0 0 230px"><label>Applied to</label>
+            <select id="cost_dateField" onchange="loadCosts()">
+              <option value="report">the date work was reported</option>
+              <option value="sign">the date the contract was signed</option>
+              <option value="start">the date the contract started</option>
+              <option value="end">the date the contract ends</option>
+            </select></div>
           <div style="flex:0 0 auto"><button class="btn sm" id="cost_btn" onclick="loadCosts()">Show</button></div>
           <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsPeriod('month')">This month</button></div>
           <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="costsPeriod('quarter')">This quarter</button></div>
@@ -1026,7 +1034,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.184';
+const BUILD = '2026-08-08.188';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3357,7 +3365,8 @@ async function loadCosts(){
   const b=$('cost_btn'); const __done = busy(b);
   notice('costErr','info','Calculating…');
   try{
-    const r = await api('cost_report',{ from:$('cost_from').value, to:$('cost_to').value });
+    const r = await api('cost_report',{ from:$('cost_from').value, to:$('cost_to').value,
+                                        dateField:$('cost_dateField').value });
     COST_DATA = r;
     renderCosts(r);
     notice('costErr','','');
@@ -3385,9 +3394,19 @@ function costGroup(rows, title, outgoing){
     // so outright. Its value is the work orders issued under it, and the margin is measured
     // against that.
     const framework = (c.kind === 'framework');
-    const headUsd = framework ? (c.workOrderValue ? c.workOrderValue.usd : 0) : c.amountUsd;
-    const left = (headUsd ? Math.round((headUsd - totalUsd)*100)/100 : null);
-    tPrice += headUsd||0; tSub += c.subCost.usd; tJob += c.jobCost.usd; tOwn += c.ownCost.usd;
+    const priceUsd = framework ? (c.workOrderValue ? c.workOrderValue.usd : 0) : c.amountUsd;
+    // An hourly contract carries a rate where the others carry a sum. There is no budget to
+    // run down — a performer's ICA is open-ended, and what it has cost is answered by the
+    // reports, not by subtracting from their rate. It is left out of the price total too,
+    // where adding rates to contract values would produce a number meaning nothing.
+    const hourly = (c.pricingType === 'hourly') && !framework;
+    const budgetUsd = hourly ? 0 : priceUsd;
+    // What has been drawn against a framework is not in its own columns: the work bought
+    // under it is a cost of the contract it was bought for, and sits there. What it has
+    // used up is what its orders have confirmed.
+    const spentUsd = framework ? (c.confirmed ? c.confirmed.usd : 0) : totalUsd;
+    const left = (budgetUsd ? Math.round((budgetUsd - spentUsd)*100)/100 : null);
+    tPrice += budgetUsd||0; tSub += c.subCost.usd; tJob += c.jobCost.usd; tOwn += c.ownCost.usd;
     if(left!==null){ tLeft += left; anyLeft = true; }
 
     const people = (c.people||[]).length
@@ -3414,15 +3433,17 @@ function costGroup(rows, title, outgoing){
                     + `${esc(b.number)}: ${cur(b.currency)}${money(b.used)} against a ceiling of `
                     + `${cur(b.currency)}${money(b.ceiling)}</span>`).join('')
               : '<span class="muted">no orders yet</span>')
-          : (c.amount?`${cur(c.currency)}${money(c.amount)}`:'—')
-            + `<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span>`}</td>
+          : (c.amount?`${cur(c.currency)}${money(c.amount)}${hourly?' <span class="muted">per hour</span>':''}`:'—')
+            + `<br><span class="muted">${(c.amountUsd&&!hourly)?'$'+money(c.amountUsd):''}</span>`}</td>
       <td class="num">${bucketText(c.subCost)}${c.subCost.usd?`<br><span class="muted">$${money(c.subCost.usd)}</span>`:''}
         ${(c.subs||[]).length?`<br><span class="muted" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}${x.purchased?' <i>bought</i>':''}`).join('<br>')}</span>`:''}</td>
       <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}</span>`:''}${people}
         ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
       <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}</span>`:''}
         ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
-      <td class="num">${left===null?'—':`<span style="color:${left<0?'var(--warn)':'inherit'}">${left<0?'−':''}$${money(Math.abs(left))}</span>`}</td>
+      <td class="num">${left===null
+          ? `<span class="muted">—${hourly?'<br><span style="font-size:11px">no budget · by the hour</span>':''}</span>`
+          : `<span style="color:${left<0?'var(--warn)':'inherit'}">${left<0?'−':''}$${money(Math.abs(left))}</span>`}</td>
     </tr>`;
   }).join('');
 
@@ -3446,6 +3467,15 @@ function renderCosts(r){
   // revenue and cost added together, which is not a figure anybody wants.
   tb.innerHTML = costGroup(all.filter(c=>c.direction!=='outgoing'), 'We are paid under these', false)
                + costGroup(all.filter(c=>c.direction==='outgoing'), 'We pay under these', true);
+
+  // Which of the four dates the period was read against changes what the table means, so it
+  // is said plainly rather than left to be worked out from the numbers.
+  const what = { report:'Every contract is shown; only work reported in the period is counted.',
+                 sign:'Only contracts signed in the period, with everything reported under them.',
+                 start:'Only contracts that started in the period, with everything reported under them.',
+                 end:'Only contracts ending in the period, with everything reported under them. Contracts with no end date are left out.' };
+  $('costScope').innerHTML = (r.from||r.to)
+    ? `<span class="muted">${esc(what[r.dateField]||what.report)}</span>` : '';
 
   const ob=$('costOffTable').querySelector('tbody');
   const off=(r.offContract||[]).slice().sort((a,b)=>b.cost.usd-a.cost.usd);

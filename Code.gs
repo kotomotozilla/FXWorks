@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.184';
+const BUILD = '2026-08-08.188';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -5001,6 +5001,24 @@ function costReport_(d) {
     return true;
   };
 
+  // Which date the period is measured against. Reports carry one date and contracts carry
+  // three, and they answer different questions: what was worked on in a quarter is not the
+  // same list as what was signed in it. Only one of them is filtered at a time — filtering
+  // contracts by their term AND reports by theirs would silently drop work that belongs to
+  // a contract in the period but was done outside it.
+  var dateField = trim_(d.dateField) || 'report';
+  var byReportDate = dateField === 'report';
+  var reportInRange = byReportDate ? inRange : function () { return true; };
+  var contractDateOf = function (c) {
+    if (dateField === 'sign') return String(trim_(c.SignDate)).slice(0, 10);
+    // A contract that never had a start date recorded started when it was signed.
+    if (dateField === 'start') return String(trim_(c.StartDate) || trim_(c.SignDate)).slice(0, 10);
+    if (dateField === 'end') return String(trim_(c.EndDate)).slice(0, 10);
+    return '';
+  };
+  var contractInRange = byReportDate ? function () { return true; }
+                                     : function (c) { return inRange(contractDateOf(c)); };
+
   var contracts = readAll_(SHEETS.contracts);
   var projects = readAll_(SHEETS.projects);
   var assignments = readAll_(SHEETS.assignments);
@@ -5044,27 +5062,32 @@ function costReport_(d) {
     return store[id];
   }
 
-  // Which contract the work was done for. A report either names the order it answers, or it
-  // belongs to a project that runs under a contract. Reading only the project left work that
-  // named its order attached to nothing at all — it showed up under "projects without a
-  // contract" while the order it was issued against sat there showing no work done.
+  // Which contract the work was done FOR. That is the project's contract: the delivery the
+  // work serves. RequestContractID answers a different question — whom the work was bought
+  // from, which order of which framework it draws down — and it is used for that below.
+  // Reading the supplier's order here moved the cost off the contract it belongs to and
+  // parked it on the framework, which is not a job and pays for nothing itself.
+  //
+  // Only where a project carries no contract at all does the order stand in as the job, so
+  // that work naming its order is not filed as work belonging to nothing.
   var jobTopOf = function (a) {
-    var byRequest = topOf(trim_(a.RequestContractID));
-    if (byRequest) return byRequest;
     var pr = projById[a.ProjectID];
-    return pr ? topOf(trim_(pr.ContractID)) : '';
+    var byProject = pr ? topOf(trim_(pr.ContractID)) : '';
+    return byProject || topOf(trim_(a.RequestContractID));
   };
 
   assignments.forEach(function (a) {
     var st = trim_(a.Status), dt = reportDateOf_(a);
     if (st === 'recalled' || st === 'draft' || st === 'released') return;
-    if (!inRange(dt)) return;
+    if (!reportInRange(dt)) return;
     var amount = reportTotal_(a);
     var who = trim_(a.EmployeeName) || trim_(a.EmployeeEmail);
     var accepted = !!trim_(a.AcceptedBy);
 
     var perfTop = topOf(trim_(a.ContractID));
-    if (perfTop) {
+    if (perfTop && amount) {
+      // A report accepting work bought from a contractor carries no fee of its own. Counting
+      // it here put an empty line and a phantom report against the performer who signed it.
       var b = bucketFor(byPerformer, perfTop);
       if (accepted) { addTo_(b.cost, a.Currency, amount, dt); b.reports++; }
       else if (st === 'submitted') { addTo_(b.pending, a.Currency, amount, dt); b.reportsPending++; }
@@ -5101,6 +5124,7 @@ function costReport_(d) {
   var rows = [];
   contracts.forEach(function (c) {
     if (trim_(c.ParentContractID)) return;
+    if (!contractInRange(c)) return;
     var id = String(c.ContractID);
     var subs = contracts.filter(function (x) { return String(x.ParentContractID) === id; });
     // A framework agreement has no total of its own: what it is worth is the sum of the work
@@ -5118,7 +5142,10 @@ function costReport_(d) {
       // framework we are paid under came out short by exactly the work done for it.
       if (isFramework && isOrder(x)) return;
       plainSubs++;
-      if (!inRange(String(trim_(x.SignDate)).slice(0, 10))) return;
+      // A sub-contract is a commitment made on a date of its own. When the period is being
+      // read against the parent's dates, the parent is already in or out and its whole
+      // contents count with it.
+      if (byReportDate && !inRange(String(trim_(x.SignDate)).slice(0, 10))) return;
       addTo_(subCost, x.Currency, x.Amount, trim_(x.SignDate));
       subList.push({ number: trim_(x.Number), who: cpName_(x.CounterpartyID),
                      amount: num_(x.Amount), currency: trim_(x.Currency) });
@@ -5151,17 +5178,22 @@ function costReport_(d) {
       var aid = String(a.AssignmentID || '');
       if (aid && seenConfirmed[aid]) return;
       var dt = reportDateOf_(a);
-      if (!inRange(dt)) return;
+      if (!reportInRange(dt)) return;
       var got = confirmedOf(a);
       if (!got.amount) return;
       if (aid) seenConfirmed[aid] = 1;
       addTo_(confirmed, got.currency, got.amount, dt);
       confirmedReports++;
     };
-    (acceptedByTarget[id] || []).forEach(countConfirmed);
-    orders.forEach(function (x) {
-      (acceptedByTarget[String(x.ContractID)] || []).forEach(countConfirmed);
-    });
+    // Only a framework has commitments to draw against. Every other contract was picking up
+    // a figure here from reports indexed under it — a number nothing displays, and the sort
+    // of thing that becomes wrong the day something does.
+    if (isFramework) {
+      (acceptedByTarget[id] || []).forEach(countConfirmed);
+      orders.forEach(function (x) {
+        (acceptedByTarget[String(x.ContractID)] || []).forEach(countConfirmed);
+      });
+    }
     // A ceiling that has been passed is worth saying out loud: clause 3.4 of the Wasat
     // agreement forbids exceeding it without written approval.
     orders.forEach(function (x) {
@@ -5198,6 +5230,9 @@ function costReport_(d) {
     rows.push({
       id: id, number: trim_(c.Number), counterparty: cpName_(c.CounterpartyID),
       direction: trim_(c.Direction), currency: trim_(c.Currency), amount: num_(c.Amount),
+      // 'hourly' means the figure on the contract is a rate, not a sum — the page must not
+      // read it as a budget.
+      pricingType: trim_(c.PricingType),
       startDate: trim_(c.StartDate) || trim_(c.SignDate), endDate: trim_(c.EndDate),
       amountUsd: num_(c.AmountUSD) || toUsd_(c.Currency, c.Amount, c.SignDate),
       kind: kind, workOrders: orders.length, workOrderValue: woValue,
@@ -5219,6 +5254,8 @@ function costReport_(d) {
   // Work that is not tied to any job contract: the project has none, so nothing was billed
   // on to a client. The performer may still be on their own contract — that is a different
   // question, answered by "Earned under it" above.
+  // Work with no contract has no contract date to be read against, so this table is always
+  // measured by when the work was reported. The page says so.
   var offRows = {};
   assignments.forEach(function (a) {
     var st = trim_(a.Status), dt = reportDateOf_(a);
@@ -5258,7 +5295,8 @@ function costReport_(d) {
     });
   });
 
-  return { ok: true, from: from, to: to, contracts: rows, projectsNoContract: noContract, trace: trace,
+  return { ok: true, from: from, to: to, dateField: dateField,
+           contracts: rows, projectsNoContract: noContract, trace: trace,
            offContract: Object.keys(offRows).map(function (k) { return offRows[k]; }) };
 }
 
