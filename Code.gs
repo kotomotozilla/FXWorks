@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.183';
+const BUILD = '2026-08-08.184';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -4970,6 +4970,11 @@ function addTo_(bucket, currency, amount, dateStr) {
   return bucket;
 }
 function emptyBucket_() { return { by: {}, usd: 0 }; }
+function mergeBucket_(dst, src) {
+  Object.keys(src.by).forEach(function (c) { dst.by[c] = round2_((dst.by[c] || 0) + src.by[c]); });
+  dst.usd = round2_(dst.usd + src.usd);
+  return dst;
+}
 
 // Convert without hitting the rates API for every row: contracts already store their own
 // USD value, and for the rest one rate per currency is enough for a comparison figure.
@@ -5034,9 +5039,21 @@ function costReport_(d) {
   var byPerformer = {}, byJob = {};
   function bucketFor(store, id) {
     if (!store[id]) store[id] = { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0,
-                                  reportsPending: 0, people: {} };
+                                  reportsPending: 0, people: {}, ext: emptyBucket_(), extBy: {},
+                                  extReports: 0 };
     return store[id];
   }
+
+  // Which contract the work was done for. A report either names the order it answers, or it
+  // belongs to a project that runs under a contract. Reading only the project left work that
+  // named its order attached to nothing at all — it showed up under "projects without a
+  // contract" while the order it was issued against sat there showing no work done.
+  var jobTopOf = function (a) {
+    var byRequest = topOf(trim_(a.RequestContractID));
+    if (byRequest) return byRequest;
+    var pr = projById[a.ProjectID];
+    return pr ? topOf(trim_(pr.ContractID)) : '';
+  };
 
   assignments.forEach(function (a) {
     var st = trim_(a.Status), dt = reportDateOf_(a);
@@ -5053,22 +5070,28 @@ function costReport_(d) {
       else if (st === 'submitted') { addTo_(b.pending, a.Currency, amount, dt); b.reportsPending++; }
     }
 
-    var pr = projById[a.ProjectID];
-    var jobTop = pr ? topOf(trim_(pr.ContractID)) : '';
+    var jobTop = jobTopOf(a);
     if (jobTop) {
       var j = bucketFor(byJob, jobTop);
-      if (!j.people[who]) j.people[who] = emptyBucket_();
       if (accepted) {
-        addTo_(j.cost, a.Currency, amount, dt); addTo_(j.people[who], a.Currency, amount, dt); j.reports++;
-        // Work bought from a contractor under this report costs the job too, and it is not
-        // anybody's fee — it goes to the supplier named on it.
+        // Work bought from a contractor is not anybody's fee: it is work sub-contracted out,
+        // and it belongs with the sub-contracts rather than with what our own people did.
+        // A framework is that same purchase with no sub-contract signed for it.
         var ext = externalCost_(a);
         if (ext) {
           var supplier = trim_(a.ExtSupplier) || 'contractor';
           var extCur = trim_(a.ExtCurrency) || a.Currency;
-          addTo_(j.cost, extCur, ext, dt);
-          if (!j.people[supplier]) j.people[supplier] = emptyBucket_();
-          addTo_(j.people[supplier], extCur, ext, dt);
+          addTo_(j.ext, extCur, ext, dt);
+          var ek = supplier + '|' + extCur;
+          j.extBy[ek] = { who: supplier, currency: extCur,
+                          amount: round2_(((j.extBy[ek] || {}).amount || 0) + ext) };
+          j.extReports++;
+        }
+        if (amount) {
+          if (!j.people[who]) j.people[who] = emptyBucket_();
+          addTo_(j.cost, a.Currency, amount, dt);
+          addTo_(j.people[who], a.Currency, amount, dt);
+          j.reports++;
         }
       }
       else if (st === 'submitted') { addTo_(j.pending, a.Currency, amount, dt); j.reportsPending++; }
@@ -5159,7 +5182,17 @@ function costReport_(d) {
     });
 
     var perf = byPerformer[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0 };
-    var job = byJob[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0, people: {} };
+    var job = byJob[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0,
+                             people: {}, ext: emptyBucket_(), extBy: {}, extReports: 0 };
+    // What was bought from contractors under this contract sits with the sub-contracts: both
+    // are work done by someone else. A signed sub-contract is counted at the price agreed;
+    // a purchase under a framework at what was actually accepted.
+    mergeBucket_(subCost, job.ext);
+    Object.keys(job.extBy).forEach(function (k) {
+      var e = job.extBy[k];
+      subList.push({ number: '', who: e.who, amount: e.amount, currency: e.currency, purchased: true });
+    });
+    subList.sort(function (a, b) { return num_(b.amount) - num_(a.amount); });
     var people = Object.keys(job.people).map(function (n) { return { who: n, cost: job.people[n] }; })
                        .sort(function (x, y) { return y.cost.usd - x.cost.usd; });
     rows.push({
@@ -5175,7 +5208,7 @@ function costReport_(d) {
                  start: trim_(x.StartDate), end: trim_(x.EndDate),
                  acceptance: trim_(x.TargetAcceptance), pricing: trim_(x.PricingModel) };
       }).sort(function (a, b) { return String(a.number).localeCompare(String(b.number)); }),
-      subCount: plainSubs, subCost: subCost, subs: subList,
+      subCount: plainSubs, subCost: subCost, subs: subList, extReports: job.extReports,
       // what the counterparty of this contract has earned under it
       ownCost: perf.cost, ownPending: perf.pending, ownReports: perf.reports, ownPending_n: perf.reportsPending,
       // what the work under this contract has cost, across every performer
@@ -5191,8 +5224,7 @@ function costReport_(d) {
     var st = trim_(a.Status), dt = reportDateOf_(a);
     if (st === 'recalled' || st === 'draft' || st === 'released') return;
     if (!inRange(dt)) return;
-    var pr = projById[a.ProjectID];
-    if (pr && trim_(pr.ContractID)) return;
+    if (jobTopOf(a)) return;
     var key = String(a.ProjectID || 'none');
     if (!offRows[key]) offRows[key] = { project: trim_(a.ProjectName) || (pr ? trim_(pr.Name) : ''),
                                         customer: trim_(a.Customer), people: {}, cost: emptyBucket_(),
@@ -5221,7 +5253,7 @@ function costReport_(d) {
       directContract: direct ? (byId[direct] ? trim_(byId[direct].Number) : direct + ' (missing)') : '',
       projectContract: viaProject ? (byId[viaProject] ? trim_(byId[viaProject].Number) : viaProject + ' (missing)') : '',
       countedUnder: [ topOf(direct) ? trim_((byId[topOf(direct)] || {}).Number) + ' (performer)' : '',
-                      topOf(viaProject) ? trim_((byId[topOf(viaProject)] || {}).Number) + ' (job)' : ''
+                      jobTopOf(a) ? trim_((byId[jobTopOf(a)] || {}).Number) + ' (job)' : ''
                     ].filter(String).join(' · ') || '(not counted)'
     });
   });

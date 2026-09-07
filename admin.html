@@ -1026,7 +1026,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.183';
+const BUILD = '2026-08-08.184';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3364,69 +3364,88 @@ async function loadCosts(){
   }catch(e){ notice('costErr','err', esc(e.message)); }
   finally{ __done(); }
 }
+// One half of the costs table: a heading, the rows, and a total for every column that has
+// one. The label on the last column depends on which way the money goes — what is left of
+// a budget we spend is not the same statement as the margin on work we are paid for.
+function costGroup(rows, title, outgoing){
+  const head = `<tr><td colspan="7" style="background:#EEF3F8;padding:10px 8px;font-size:14px"><b>${esc(title)}</b>`
+      + `<span class="muted"> · ${rows.length} contract(s)</span></td></tr>`
+    + '<tr><th>Contract</th><th>Counterparty</th><th class="num">Price</th>'
+    + '<th class="num">Sub-contracted</th><th class="num">Work done for it</th>'
+    + `<th class="num">Earned under it</th><th class="num">${outgoing?'Left of the budget':'Margin'}</th></tr>`;
+  if(!rows.length) return head + '<tr><td class="empty" colspan="7">Nothing in this period.</td></tr>';
+
+  let tPrice=0, tSub=0, tJob=0, tOwn=0, tLeft=0, anyLeft=false;
+  const body = rows.map(c=>{
+    // Cost of a contract = what was sub-contracted plus the work done for it. What the
+    // counterparty earned under their own contract is a separate figure — adding both
+    // would count the same money twice.
+    const totalUsd = Math.round((c.subCost.usd + c.jobCost.usd)*100)/100;
+    // A framework agreement carries no total of its own — clause 1.4 of the Eller one says
+    // so outright. Its value is the work orders issued under it, and the margin is measured
+    // against that.
+    const framework = (c.kind === 'framework');
+    const headUsd = framework ? (c.workOrderValue ? c.workOrderValue.usd : 0) : c.amountUsd;
+    const left = (headUsd ? Math.round((headUsd - totalUsd)*100)/100 : null);
+    tPrice += headUsd||0; tSub += c.subCost.usd; tJob += c.jobCost.usd; tOwn += c.ownCost.usd;
+    if(left!==null){ tLeft += left; anyLeft = true; }
+
+    const people = (c.people||[]).length
+      ? `<br><span class="muted" style="font-size:11px">${c.people.slice(0,4).map(p=>`${esc(p.who)} ${bucketText(p.cost).replace(/<br>/g,', ')}`).join('<br>')}${c.people.length>4?`<br>+${c.people.length-4} more`:''}</span>`
+      : '';
+    return `<tr>
+      <td><b>${esc(c.number)}</b>${framework?' <span class="tag draft">framework</span>':''}${
+          c.subCount?` <span class="muted">· ${c.subCount} sub</span>`:''}
+        <br><span class="muted" style="font-size:11px">${outgoing?'we pay':'we are paid'}</span></td>
+      <td>${esc(c.counterparty)}${(c.startDate||c.endDate)?`<br><span class="muted" style="font-size:11px">${esc(shortDate(c.startDate))} – ${esc(c.endDate?shortDate(c.endDate):'open')}</span>`:''}</td>
+      <td class="num">${framework
+          ? (c.workOrders
+              ? `${bucketText(c.workOrderValue)}<br><span class="muted" style="font-size:11px">`
+                + `committed · ${c.workOrders} order(s)</span>`
+                + (c.confirmedReports
+                    ? `<br><b>${bucketText(c.confirmed)}</b><span class="muted" style="font-size:11px">`
+                      + ` confirmed by ${c.confirmedReports} report(s)</span>` : '')
+                + `<br><span class="muted" style="font-size:11px">`
+                + c.workOrderList.map(w=>`${esc(w.number)} ${cur(w.currency)}${money(w.amount)}`
+                    + (w.kind==='work_request'?' <i>ceiling</i>':'')
+                    + (w.end?` · to ${esc(shortDate(w.end))}`:'')).join('<br>')
+                + `</span>`
+                + (c.ceilingBreach||[]).map(b=>`<br><span style="color:var(--warn);font-size:11px">`
+                    + `${esc(b.number)}: ${cur(b.currency)}${money(b.used)} against a ceiling of `
+                    + `${cur(b.currency)}${money(b.ceiling)}</span>`).join('')
+              : '<span class="muted">no orders yet</span>')
+          : (c.amount?`${cur(c.currency)}${money(c.amount)}`:'—')
+            + `<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span>`}</td>
+      <td class="num">${bucketText(c.subCost)}${c.subCost.usd?`<br><span class="muted">$${money(c.subCost.usd)}</span>`:''}
+        ${(c.subs||[]).length?`<br><span class="muted" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}${x.purchased?' <i>bought</i>':''}`).join('<br>')}</span>`:''}</td>
+      <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}</span>`:''}${people}
+        ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
+      <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}</span>`:''}
+        ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
+      <td class="num">${left===null?'—':`<span style="color:${left<0?'var(--warn)':'inherit'}">${left<0?'−':''}$${money(Math.abs(left))}</span>`}</td>
+    </tr>`;
+  }).join('');
+
+  const t = n => `<td class="num" style="background:#EEF3F8"><b>$${money(Math.round(n*100)/100)}</b></td>`;
+  const totals = `<tr><td colspan="2" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>`
+    + t(tPrice) + t(tSub) + t(tJob) + t(tOwn)
+    + (anyLeft
+        ? `<td class="num" style="background:#EEF3F8"><b><span style="color:${tLeft<0?'var(--warn)':'inherit'}">${tLeft<0?'−':''}$${money(Math.abs(Math.round(tLeft*100)/100))}</span></b></td>`
+        : '<td style="background:#EEF3F8"></td>')
+    + '</tr>';
+  return head + body + totals;
+}
+
 function renderCosts(r){
   const tb=$('costTable').querySelector('tbody');
-  const rows=(r.contracts||[]).slice().sort((a,b)=>
+  const all=(r.contracts||[]).slice().sort((a,b)=>
     ((b.subCost.usd+b.jobCost.usd+b.ownCost.usd)-(a.subCost.usd+a.jobCost.usd+a.ownCost.usd)));
-  let totSub=0, totJob=0, totOwn=0;
-  tb.innerHTML = '<tr><th>Contract</th><th>Counterparty</th><th class="num">Price</th>'
-    + '<th class="num">Sub-contracts</th><th class="num">Work done for it</th>'
-    + '<th class="num">Earned under it</th><th class="num">Left / margin</th></tr>'
-    + (rows.length ? rows.map(c=>{
-        totSub+=c.subCost.usd; totJob+=c.jobCost.usd; totOwn+=c.ownCost.usd;
-        const outgoing = c.direction === 'outgoing';
-        // Cost of a contract = its sub-contracts plus the work done for it. What the
-        // counterparty earned under their own contract is a separate figure — adding both
-        // would count the same money twice.
-        const totalUsd = Math.round((c.subCost.usd + c.jobCost.usd)*100)/100;
-        // A framework agreement carries no total of its own — clause 1.4 of the Eller one says
-        // so outright. Its value is the work orders issued under it, and the margin is measured
-        // against that.
-        const framework = (c.kind === 'framework');
-        const headUsd = framework ? (c.workOrderValue ? c.workOrderValue.usd : 0) : c.amountUsd;
-        const left = (headUsd ? Math.round((headUsd - totalUsd)*100)/100 : null);
-        const leftLabel = outgoing ? 'left of the budget' : 'margin';
-        const people = (c.people||[]).length
-          ? `<br><span class="muted" style="font-size:11px">${c.people.slice(0,4).map(p=>`${esc(p.who)} ${bucketText(p.cost).replace(/<br>/g,', ')}`).join('<br>')}${c.people.length>4?`<br>+${c.people.length-4} more`:''}</span>`
-          : '';
-        return `<tr>
-          <td><b>${esc(c.number)}</b>${framework?' <span class="tag draft">framework</span>':''}${
-              c.subCount?` <span class="muted">· ${c.subCount} sub</span>`:''}
-            <br><span class="muted" style="font-size:11px">${outgoing?'we pay':'we are paid'}</span></td>
-          <td>${esc(c.counterparty)}${(c.startDate||c.endDate)?`<br><span class="muted" style="font-size:11px">${esc(shortDate(c.startDate))} – ${esc(c.endDate?shortDate(c.endDate):'open')}</span>`:''}</td>
-          <td class="num">${framework
-              ? (c.workOrders
-                  ? `${bucketText(c.workOrderValue)}<br><span class="muted" style="font-size:11px">`
-                    + `committed · ${c.workOrders} order(s)</span>`
-                    + (c.confirmedReports
-                        ? `<br><b>${bucketText(c.confirmed)}</b><span class="muted" style="font-size:11px">`
-                          + ` confirmed by ${c.confirmedReports} report(s)</span>` : '')
-                    + `<br><span class="muted" style="font-size:11px">`
-                    + c.workOrderList.map(w=>`${esc(w.number)} ${cur(w.currency)}${money(w.amount)}`
-                        + (w.kind==='work_request'?' <i>ceiling</i>':'')
-                        + (w.end?` · to ${esc(shortDate(w.end))}`:'')).join('<br>')
-                    + `</span>`
-                    + (c.ceilingBreach||[]).map(b=>`<br><span style="color:var(--warn);font-size:11px">`
-                        + `${esc(b.number)}: ${cur(b.currency)}${money(b.used)} against a ceiling of `
-                        + `${cur(b.currency)}${money(b.ceiling)}</span>`).join('')
-                  : '<span class="muted">no orders yet</span>')
-              : (c.amount?`${cur(c.currency)}${money(c.amount)}`:'—')
-                + `<br><span class="muted">${c.amountUsd?'$'+money(c.amountUsd):''}</span>`}</td>
-          <td class="num">${bucketText(c.subCost)}${c.subCost.usd?`<br><span class="muted">$${money(c.subCost.usd)}</span>`:''}
-            ${(c.subs||[]).length?`<br><span class="muted" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}`).join('<br>')}</span>`:''}</td>
-          <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}</span>`:''}${people}
-            ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
-          <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}</span>`:''}
-            ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
-          <td class="num">${left===null?'—':`<span style="color:${left<0?'var(--warn)':'inherit'}">${left<0?'−':''}$${money(Math.abs(left))}</span><br><span class="muted" style="font-size:11px">${leftLabel}</span>`}</td>
-        </tr>`;
-      }).join('')
-      : '<tr><td class="empty" colspan="7">Nothing in this period.</td></tr>')
-    + (rows.length ? `<tr><td colspan="3" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>
-        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(totSub*100)/100)}</b></td>
-        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(totJob*100)/100)}</b></td>
-        <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(totOwn*100)/100)}</b></td>
-        <td style="background:#EEF3F8"></td></tr>` : '');
+
+  // Money coming in and money going out answer different questions, and one table left the
+  // reader sorting them by eye. Each half totals on its own: a sum across the two would be
+  // revenue and cost added together, which is not a figure anybody wants.
+  tb.innerHTML = costGroup(all.filter(c=>c.direction!=='outgoing'), 'We are paid under these', false)
+               + costGroup(all.filter(c=>c.direction==='outgoing'), 'We pay under these', true);
 
   const ob=$('costOffTable').querySelector('tbody');
   const off=(r.offContract||[]).slice().sort((a,b)=>b.cost.usd-a.cost.usd);
