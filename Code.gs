@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.182';
+const BUILD = '2026-08-08.183';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -5016,9 +5016,19 @@ function costReport_(d) {
   var acceptedByTarget = {};
   assignments.forEach(function (a) {
     if (!trim_(a.AcceptedBy)) return;
-    var key = trim_(a.RequestContractID) || trim_(a.ContractID);
-    if (!key) return;
-    (acceptedByTarget[key] = acceptedByTarget[key] || []).push(a);
+    var pr = projById[a.ProjectID];
+    // A report reaches the contract the work was done for in one of two ways: it names it
+    // (RequestContractID, how a Wasat work request is answered), or it belongs to a project
+    // that runs under it (how our own people report). Indexing only the first left every
+    // framework we are paid under confirming nothing at all, because the performers there
+    // report through projects and never name the order.
+    var keys = [trim_(a.RequestContractID), pr ? trim_(pr.ContractID) : '', trim_(a.ContractID)];
+    var seen = {};
+    keys.forEach(function (k) {
+      if (!k || seen[k]) return;
+      seen[k] = 1;
+      (acceptedByTarget[k] = acceptedByTarget[k] || []).push(a);
+    });
   });
 
   var byPerformer = {}, byJob = {};
@@ -5070,24 +5080,31 @@ function costReport_(d) {
     if (trim_(c.ParentContractID)) return;
     var id = String(c.ContractID);
     var subs = contracts.filter(function (x) { return String(x.ParentContractID) === id; });
-    var subCost = emptyBucket_(), subList = [];
+    // A framework agreement has no total of its own: what it is worth is the sum of the work
+    // orders issued under it, and until the first one is signed that sum is nothing.
+    var kind = trim_(c.ContractKind);
+    var isFramework = kind === 'framework';
+    var isOrder = function (x) {
+      var k = trim_(x.ContractKind);
+      return k === 'work_order' || k === 'work_request';
+    };
+    var subCost = emptyBucket_(), subList = [], plainSubs = 0;
     subs.forEach(function (x) {
+      // An order under a framework is what the framework is worth, not something bought on
+      // top of it. Counting it here as well put it on both sides of the margin, and every
+      // framework we are paid under came out short by exactly the work done for it.
+      if (isFramework && isOrder(x)) return;
+      plainSubs++;
       if (!inRange(String(trim_(x.SignDate)).slice(0, 10))) return;
       addTo_(subCost, x.Currency, x.Amount, trim_(x.SignDate));
       subList.push({ number: trim_(x.Number), who: cpName_(x.CounterpartyID),
                      amount: num_(x.Amount), currency: trim_(x.Currency) });
     });
     subList.sort(function (a, b) { return num_(b.amount) - num_(a.amount); });
-    // A framework agreement has no total of its own: what it is worth is the sum of the work
-    // orders issued under it, and until the first one is signed that sum is nothing.
-    var kind = trim_(c.ContractKind);
     // Two ways a framework turns into money. A work order is a fixed commitment known when it
     // is signed (Eller). A work request only sets a ceiling; what is actually owed is settled
     // by the accepted reports against it (Wasat). Both are "committed", but only one is final.
-    var orders = subs.filter(function (x) {
-      var k = trim_(x.ContractKind);
-      return k === 'work_order' || k === 'work_request';
-    });
+    var orders = subs.filter(isOrder);
     var woValue = emptyBucket_();
     orders.forEach(function (x) { addTo_(woValue, x.Currency, x.Amount, trim_(x.SignDate) || trim_(x.StartDate)); });
 
@@ -5095,13 +5112,27 @@ function costReport_(d) {
     var orderIds = {};
     orders.forEach(function (x) { orderIds[String(x.ContractID)] = 1; });
     var confirmed = emptyBucket_(), confirmedReports = 0, ceilingBreach = [];
-    // Confirmed against a framework means what its contractors have charged and we accepted.
+    // Which figure confirms the money depends on which way it flows. Under a framework we
+    // are paid for, what is settled is what our performers reported and we accepted. Under
+    // one we pay for, it is what the contractor charged us. Reading the second under both
+    // was why an incoming framework showed nothing confirmed however much work was done.
+    var incoming = trim_(c.Direction) !== 'outgoing';
+    var confirmedOf = function (a) {
+      return incoming
+        ? { amount: reportTotal_(a), currency: trim_(a.Currency) }
+        : { amount: externalCost_(a), currency: trim_(a.ExtCurrency) || a.Currency };
+    };
+    // The same report can reach a framework by more than one route now, so it is counted once.
+    var seenConfirmed = {};
     var countConfirmed = function (a) {
+      var aid = String(a.AssignmentID || '');
+      if (aid && seenConfirmed[aid]) return;
       var dt = reportDateOf_(a);
       if (!inRange(dt)) return;
-      var ext = externalCost_(a);
-      if (!ext) return;
-      addTo_(confirmed, trim_(a.ExtCurrency) || a.Currency, ext, dt);
+      var got = confirmedOf(a);
+      if (!got.amount) return;
+      if (aid) seenConfirmed[aid] = 1;
+      addTo_(confirmed, got.currency, got.amount, dt);
       confirmedReports++;
     };
     (acceptedByTarget[id] || []).forEach(countConfirmed);
@@ -5114,10 +5145,12 @@ function costReport_(d) {
       if (trim_(x.ContractKind) !== 'work_request') return;
       var limit = num_(x.CeilingApproved) || num_(x.Amount);
       if (!limit) return;
-      var used = 0;
+      var used = 0, seenUsed = {};
       (acceptedByTarget[String(x.ContractID)] || []).forEach(function (a) {
-        if (trim_(a.RequestContractID) !== String(x.ContractID)) return;
-        used += externalCost_(a);
+        var aid = String(a.AssignmentID || '');
+        if (aid && seenUsed[aid]) return;
+        if (aid) seenUsed[aid] = 1;
+        used += confirmedOf(a).amount;
       });
       if (used > limit) {
         ceilingBreach.push({ number: trim_(x.Number), ceiling: limit, used: round2_(used),
@@ -5142,7 +5175,7 @@ function costReport_(d) {
                  start: trim_(x.StartDate), end: trim_(x.EndDate),
                  acceptance: trim_(x.TargetAcceptance), pricing: trim_(x.PricingModel) };
       }).sort(function (a, b) { return String(a.number).localeCompare(String(b.number)); }),
-      subCount: subs.length, subCost: subCost, subs: subList,
+      subCount: plainSubs, subCost: subCost, subs: subList,
       // what the counterparty of this contract has earned under it
       ownCost: perf.cost, ownPending: perf.pending, ownReports: perf.reports, ownPending_n: perf.reportsPending,
       // what the work under this contract has cost, across every performer
