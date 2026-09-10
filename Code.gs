@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.192';
+const BUILD = '2026-08-08.194';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -2813,13 +2813,33 @@ function invQueueAccept_(d) {
   var c = findRow_(SHEETS.contracts, 'ContractID', contractId);
   if (!c) return { ok: false, error: 'Contract not found' };
 
+  // Pressing the button twice — or once on a slow connection — used to append a second
+  // identical invoice, because the queue row was only marked as recorded after the append.
+  // The queue entry already knows whether it has been recorded; asking again is not a new
+  // invoice, it is the same one.
+  if (trim_(row.InvoiceID)) {
+    return { ok: true, invoiceId: trim_(row.InvoiceID), already: true };
+  }
+  var number = trim_(d.number) || trim_(row.Number);
+  if (number) {
+    var clash = readAll_(SHEETS.invoices).filter(function (v) {
+      return String(trim_(v.ContractID)) === String(contractId)
+          && trim_(v.Number).toLowerCase() === number.toLowerCase();
+    })[0];
+    if (clash) {
+      return { ok: false, error: 'Invoice ' + number + ' is already recorded against this contract'
+                                 + ' (' + trim_(clash.InvoiceDate) + ', ' + trim_(clash.Currency)
+                                 + ' ' + num_(clash.Amount) + '). Delete that one first if this is a replacement.' };
+    }
+  }
+
   var id = Utilities.getUuid();
   var date = trim_(d.invoiceDate) || trim_(row.InvoiceDate) || new Date().toISOString().slice(0, 10);
   var amount = num_(d.amount) || num_(row.Amount);
   var currency = trim_(d.currency) || trim_(row.Currency) || trim_(c.Currency);
   var fx = computeFx_(currency, amount, date);
   appendRow_(SHEETS.invoices, {
-    InvoiceID: id, Number: trim_(d.number) || trim_(row.Number), ContractID: contractId,
+    InvoiceID: id, Number: number, ContractID: contractId,
     CounterpartyID: trim_(c.CounterpartyID), InvoiceDate: date, DueDate: trim_(row.DueDate),
     Amount: amount, Currency: currency,
     AmountUSD: fx.AmountUSD, FxRate: fx.FxRate, FxAsOf: fx.FxAsOf,
@@ -5242,7 +5262,7 @@ function costReport_(d) {
     var invIds = {};
     invIds[id] = 1;
     orders.forEach(function (x) { invIds[String(x.ContractID)] = 1; });
-    var invoiced = emptyBucket_(), invoiceCount = 0;
+    var invoiced = emptyBucket_(), invoiceCount = 0, invNumbers = {}, invDuplicates = [];
     invoices.forEach(function (v) {
       if (!invIds[String(trim_(v.ContractID))]) return;
       var vd = String(trim_(v.InvoiceDate)).slice(0, 10);
@@ -5250,6 +5270,13 @@ function costReport_(d) {
       if (!num_(v.Amount)) return;
       addTo_(invoiced, trim_(v.Currency), num_(v.Amount), vd);
       invoiceCount++;
+      // Two rows carrying the same invoice number is a double count, and it shows up in the
+      // total as money that was never billed. It is named rather than left to be inferred.
+      var nk = trim_(v.Number).toLowerCase();
+      if (nk) {
+        invNumbers[nk] = (invNumbers[nk] || 0) + 1;
+        if (invNumbers[nk] === 2) invDuplicates.push(trim_(v.Number));
+      }
     });
 
     var perf = byPerformer[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0 };
@@ -5283,7 +5310,7 @@ function costReport_(d) {
                  acceptance: trim_(x.TargetAcceptance), pricing: trim_(x.PricingModel) };
       }).sort(function (a, b) { return String(a.number).localeCompare(String(b.number)); }),
       subCount: plainSubs, subCost: subCost, subs: subList, extReports: job.extReports,
-      invoiced: invoiced, invoiceCount: invoiceCount,
+      invoiced: invoiced, invoiceCount: invoiceCount, invoiceDuplicates: invDuplicates,
       // what the counterparty of this contract has earned under it
       ownCost: perf.cost, ownPending: perf.pending, ownReports: perf.reports, ownPending_n: perf.reportsPending,
       // what the work under this contract has cost, across every performer

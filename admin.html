@@ -1035,7 +1035,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.192';
+const BUILD = '2026-08-08.194';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1073,7 +1073,56 @@ function busy(btn){
 
 // Timing of every call is kept, so a slow screen can be traced to the request that caused it.
 window.API_LOG = [];
+// Every request shows on the button that started it, whether or not the handler remembered
+// to arrange that. Twenty-nine of the handlers did not, and a button that gives no sign of
+// having been pressed invites a second press: that is how one invoice was recorded twice.
+//
+// The click is caught on the way down, before any handler runs, so the element is known by
+// the time the first api() call is made — and a press on a button that is already working
+// is dropped there rather than running the handler again.
+let CLICK_EL = null, CLICK_AT = 0, RUN_EL = null;
+const BUSY_STATE = new WeakMap();
+document.addEventListener('click', function(e){
+  const el = (e.target && e.target.closest) ? e.target.closest('button,.btn') : null;
+  if(el && el.dataset && el.dataset.fxBusy){ e.preventDefault(); e.stopPropagation(); return; }
+  CLICK_EL = el; CLICK_AT = Date.now();
+}, true);
+
+function holdBusy(el){
+  // A handler that already put the button to work keeps charge of it.
+  if(!el || el.disabled) return null;
+  let st = BUSY_STATE.get(el);
+  if(!st){ st = { n:0, done:null, timer:null }; BUSY_STATE.set(el, st); }
+  if(st.timer){ clearTimeout(st.timer); st.timer = null; }
+  if(st.n === 0 && !st.done){ st.done = busy(el); el.dataset.fxBusy = '1'; }
+  st.n++;
+  return function(){
+    st.n--;
+    if(st.n > 0) return;
+    // One press usually makes several calls in a row — record, reload, refresh. Letting the
+    // button go between them would flicker and reopen the gap for a second press.
+    st.timer = setTimeout(function(){
+      if(st.n > 0) return;
+      if(st.done){ st.done(); st.done = null; }
+      delete el.dataset.fxBusy;
+      if(RUN_EL === el) RUN_EL = null;
+    }, 150);
+  };
+}
+
 async function api(action, payload={}){
+  let el = RUN_EL;
+  if(!el && CLICK_EL && (Date.now() - CLICK_AT) < 2000){ el = CLICK_EL; CLICK_EL = null; }
+  const release = el ? holdBusy(el) : null;
+  if(release) RUN_EL = el;
+  try{
+    return await apiCall(action, payload);
+  } finally {
+    if(release) release();
+  }
+}
+
+async function apiCall(action, payload={}){
   let res;
   const t0 = performance.now();
   try{
@@ -1644,8 +1693,9 @@ async function invQueueAccept(queueId, btn){
   const sel = $('invq_'+queueId);
   const done = busy(btn);
   try{
-    await api('inv_queue_accept',{ queueId, contractId: sel ? sel.value : '' });
-    notice('invQueueErr','ok','Recorded.');
+    const res = await api('inv_queue_accept',{ queueId, contractId: sel ? sel.value : '' });
+    notice('invQueueErr','ok', res && res.already
+      ? 'This one was already recorded — nothing was added.' : 'Recorded.');
     await loadInvoices(); await invQueueRefresh();
   }catch(e){ notice('invQueueErr','err', esc(e.message)); }
   finally{ done(); }
@@ -3420,7 +3470,10 @@ function invoicedCell(c, outgoing, framework, hourly){
   if(!c.invoiceCount) return '<span class="muted">—</span>';
   let out = bucketText(inv)
     + `<span class="muted det" style="font-size:11px">${c.invoiceCount} invoice(s) · $${money(inv.usd)}${bucketGap(inv)?' partial':''}</span>`
-    + gapNote(inv);
+    + gapNote(inv)
+    + ((c.invoiceDuplicates||[]).length
+        ? `<span class="det" style="color:var(--warn);font-size:11px">counted twice: ${c.invoiceDuplicates.map(esc).join(', ')}</span>`
+        : '');
 
   const base = invoicedBaseline(c, outgoing, framework, hourly);
   const ccys = Object.keys(base.by).concat(Object.keys(inv.by))
