@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.195';
+const BUILD = '2026-08-08.197';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -456,12 +456,69 @@ function adminSetCurrentAttachment_(d) {
   if (makeCurrent) clearCurrentAttachments_(a.ParentType, a.ParentID, trim_(a.DocType), a.AttachmentID);
   return { ok: true };
 }
+// Invoice files recorded before the parent was corrected sit on the contract. Run this once
+// from the editor: it moves each of them onto the invoice it names, and touches nothing else.
+// It reports what it did and can be run again safely — a file already on its invoice is left
+// alone.
+function fixInvoiceAttachments() {
+  var invoices = readAll_(SHEETS.invoices);
+  var moved = [], skipped = [];
+  readAll_(SHEETS.attachments).forEach(function (a) {
+    if (trim_(a.ParentType) !== 'contract') return;
+    if (trim_(a.DocType) !== 'invoice') return;
+    var num = trim_(a.Description).replace(/^Invoice\s+/i, '');
+    if (!num) { skipped.push(trim_(a.FileName) + ': no invoice number on it'); return; }
+    var v = invoices.filter(function (x) {
+      return String(trim_(x.ContractID)) === String(trim_(a.ParentID))
+          && trim_(x.Number).toLowerCase() === num.toLowerCase();
+    });
+    if (v.length !== 1) {
+      skipped.push(trim_(a.FileName) + ': ' + (v.length ? v.length + ' invoices match ' + num
+                                                        : 'no invoice ' + num + ' on that contract'));
+      return;
+    }
+    updateRow_(SHEETS.attachments, 'AttachmentID', String(a.AttachmentID),
+               { ParentType: 'invoice', ParentID: trim_(v[0].InvoiceID) });
+    moved.push(trim_(a.FileName) + ' → invoice ' + num);
+  });
+  var out = 'Moved ' + moved.length + ':\n' + (moved.join('\n') || '  (none)')
+          + '\n\nLeft alone ' + skipped.length + ':\n' + (skipped.join('\n') || '  (none)');
+  Logger.log(out);
+  return out;
+}
+
 function adminListAttachments_(d) {
   requireAdmin_(d);
   var pt = attachType_(d.parentType);
   var pid = trim_(d.parentId);
-  var all = readAll_(SHEETS.attachments).filter(function (a) { return a.ParentType === pt && String(a.ParentID) === pid; });
-  return { ok: true, attachments: all };
+  var att = readAll_(SHEETS.attachments);
+  var all = att.filter(function (a) { return a.ParentType === pt && String(a.ParentID) === pid; });
+
+  // A contract's own documents are its agreement and annexes. The invoices raised under it
+  // carry their own files, and those belong to the invoice — but the contract card is still
+  // where one goes looking for everything to do with the contract, so they are listed there
+  // too, as a reference rather than a second copy: same row, shown once on each card.
+  var viaInvoices = [];
+  if (pt === 'contract') {
+    var byInvoice = {};
+    readAll_(SHEETS.invoices).forEach(function (v) {
+      if (String(trim_(v.ContractID)) === pid) byInvoice[String(trim_(v.InvoiceID))] = v;
+    });
+    att.forEach(function (a) {
+      var v = (trim_(a.ParentType) === 'invoice') ? byInvoice[String(trim_(a.ParentID))] : null;
+      if (!v) return;
+      viaInvoices.push({
+        AttachmentID: a.AttachmentID, FileName: a.FileName, Url: a.Url,
+        DriveFileID: a.DriveFileID, DocDate: a.DocDate, Description: a.Description,
+        InvoiceID: trim_(v.InvoiceID), InvoiceNumber: trim_(v.Number),
+        InvoiceDate: trim_(v.InvoiceDate), Amount: num_(v.Amount), Currency: trim_(v.Currency)
+      });
+    });
+    viaInvoices.sort(function (x, y) {
+      return String(y.InvoiceDate || '').localeCompare(String(x.InvoiceDate || ''));
+    });
+  }
+  return { ok: true, attachments: all, invoiceDocs: viaInvoices };
 }
 function adminDeleteAttachment_(d) {
   requireAdmin_(d);
@@ -2845,10 +2902,13 @@ function invQueueAccept_(d) {
     AmountUSD: fx.AmountUSD, FxRate: fx.FxRate, FxAsOf: fx.FxAsOf,
     CreatedAt: new Date().toISOString()
   });
-  // The file becomes an attachment of the contract, so it is where documents are looked for.
+  // The file belongs to the invoice it is. Filing it under the contract put it on a card
+  // nobody opens looking for it, while the invoice's own card said "No files" with the PDF
+  // sitting two clicks away. The contract still lists its invoices, and each one opens with
+  // its document.
   appendRow_(SHEETS.attachments, {
-    AttachmentID: Utilities.getUuid(), ParentType: 'contract', ParentID: contractId,
-    FileName: trim_(row.FileName), Description: 'Invoice ' + trim_(row.Number), DocType: 'invoice',
+    AttachmentID: Utilities.getUuid(), ParentType: 'invoice', ParentID: id,
+    FileName: trim_(row.FileName), Description: 'Invoice ' + number, DocType: 'invoice',
     DocDate: date, IsCurrent: 'no', DriveFileID: trim_(row.DriveFileID),
     Url: 'https://drive.google.com/file/d/' + trim_(row.DriveFileID) + '/view',
     CreatedAt: new Date().toISOString()

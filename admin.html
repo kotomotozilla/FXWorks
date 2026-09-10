@@ -1035,7 +1035,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.195';
+const BUILD = '2026-08-08.197';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1896,6 +1896,26 @@ const DOC_TYPE_LABEL = { signed:'Signed original', draft:'Draft', annex:'Annex /
 function docTypeOptions(sel){
   return Object.keys(DOC_TYPE_LABEL).map(k=>`<option value="${k}" ${String(sel)===k?'selected':''}>${DOC_TYPE_LABEL[k]}</option>`).join('');
 }
+// Files belonging to the invoices raised under this contract. They live on their invoices —
+// this is where to see that they exist without hunting through the invoice list. Nothing here
+// edits or deletes: a document is changed on the card that owns it, so there is one place to
+// do it and no way to remove a file from a record that still needs it.
+function invoiceDocsBlock(docs){
+  if(!docs || !docs.length) return '';
+  const rows = docs.map(d=>`<div style="padding:6px 0;border-top:1px solid var(--line)">
+      <a href="${esc(d.Url)}" target="_blank" rel="noopener">📎 ${esc(d.FileName)}</a>
+      <div class="muted" style="font-size:12px">Invoice ${esc(d.InvoiceNumber||'—')}${
+        d.Amount?` · ${cur(d.Currency)}${money(d.Amount)}`:''}${
+        d.InvoiceDate?` · ${esc(fmtDate(d.InvoiceDate))}`:''}
+        · <a href="#" onclick="openInvoiceFromContract('${esc(d.InvoiceID)}');return false;">open the invoice</a></div>
+    </div>`).join('');
+  return `<div style="height:14px"></div>
+    <h2 style="font-size:15px">Invoice documents <span class="muted" style="font-weight:400">· ${docs.length}</span></h2>
+    <div class="muted" style="font-size:12px">Filed under their invoices. Open the invoice to change or remove one.</div>
+    ${rows}`;
+}
+function openInvoiceFromContract(id){ closeModal('ctModal'); openInvoice(id); }
+
 async function renderAttachments(elId, parentType, parentId){
   const el=$(elId); el.innerHTML='<div class="muted">Loading…</div>';
   try{
@@ -1949,7 +1969,7 @@ async function renderAttachments(elId, parentType, parentId){
       <label style="display:flex;align-items:center;gap:6px;font-size:14px"><input type="checkbox" id="${elId}_cur" style="width:auto" ${parentType==='contract'?'checked':''}> Mark as current for its type</label>
       <div style="height:8px"></div>
       <button class="btn sm" id="${elId}_btn" onclick="uploadAttachment('${parentType}','${parentId}','${elId}')">Upload</button>
-      <div style="height:6px"></div>${list}
+      <div style="height:6px"></div>${list}${invoiceDocsBlock(r.invoiceDocs)}
       <p class="muted" style="font-size:11px">Stored privately in your Google Drive (folder "FXWorks Attachments") — only you, the Drive owner, can open them. Files are never removed automatically. Max ~20 MB per file.</p>`;
   }catch(e){ el.innerHTML='<div class="notice err">'+esc(e.message)+'</div>'; }
 }
