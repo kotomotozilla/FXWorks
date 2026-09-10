@@ -1034,7 +1034,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.188';
+const BUILD = '2026-08-08.189';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3324,6 +3324,18 @@ function shortDate(v){
   const p=d.split('-');
   return `${p[2]}.${p[1]}.${p[0].slice(2)}`;
 }
+// What a bucket holds that has no dollar figure, because no rate could be had for it. A
+// dollar total standing next to one of these is a partial sum and must not be read as the
+// whole; anything derived from it is not shown at all.
+function bucketGap(b){
+  const m = (b && b.missing) || {};
+  const ks = Object.keys(m).filter(c=>m[c]);
+  return ks.length ? ks.map(c=>`${cur(c)}${money(m[c])}`).join(', ') : '';
+}
+function gapNote(b){
+  const g = bucketGap(b);
+  return g ? `<br><span style="color:var(--warn);font-size:11px">${g} — no rate</span>` : '';
+}
 function bucketText(b){
   const keys = Object.keys(b && b.by || {});
   if(!keys.length) return '—';
@@ -3384,7 +3396,7 @@ function costGroup(rows, title, outgoing){
     + `<th class="num">Earned under it</th><th class="num">${outgoing?'Left of the budget':'Margin'}</th></tr>`;
   if(!rows.length) return head + '<tr><td class="empty" colspan="7">Nothing in this period.</td></tr>';
 
-  let tPrice=0, tSub=0, tJob=0, tOwn=0, tLeft=0, anyLeft=false;
+  let tPrice=0, tSub=0, tJob=0, tOwn=0, tLeft=0, anyLeft=false, anyGap=false;
   const body = rows.map(c=>{
     // Cost of a contract = what was sub-contracted plus the work done for it. What the
     // counterparty earned under their own contract is a separate figure — adding both
@@ -3405,8 +3417,13 @@ function costGroup(rows, title, outgoing){
     // under it is a cost of the contract it was bought for, and sits there. What it has
     // used up is what its orders have confirmed.
     const spentUsd = framework ? (c.confirmed ? c.confirmed.usd : 0) : totalUsd;
-    const left = (budgetUsd ? Math.round((budgetUsd - spentUsd)*100)/100 : null);
+    // A margin worked out from a sum that is missing part of itself is not a small error,
+    // it is a plausible wrong number. Better no figure than that one.
+    const gap = bucketGap(c.subCost) || bucketGap(c.jobCost)
+             || (framework ? (bucketGap(c.confirmed) || bucketGap(c.workOrderValue)) : '');
+    const left = (budgetUsd && !gap) ? Math.round((budgetUsd - spentUsd)*100)/100 : null;
     tPrice += budgetUsd||0; tSub += c.subCost.usd; tJob += c.jobCost.usd; tOwn += c.ownCost.usd;
+    if(gap) anyGap = true;
     if(left!==null){ tLeft += left; anyLeft = true; }
 
     const people = (c.people||[]).length
@@ -3435,20 +3452,23 @@ function costGroup(rows, title, outgoing){
               : '<span class="muted">no orders yet</span>')
           : (c.amount?`${cur(c.currency)}${money(c.amount)}${hourly?' <span class="muted">per hour</span>':''}`:'—')
             + `<br><span class="muted">${(c.amountUsd&&!hourly)?'$'+money(c.amountUsd):''}</span>`}</td>
-      <td class="num">${bucketText(c.subCost)}${c.subCost.usd?`<br><span class="muted">$${money(c.subCost.usd)}</span>`:''}
+      <td class="num">${bucketText(c.subCost)}${c.subCost.usd?`<br><span class="muted">$${money(c.subCost.usd)}${bucketGap(c.subCost)?' partial':''}</span>`:''}${gapNote(c.subCost)}
         ${(c.subs||[]).length?`<br><span class="muted" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}${x.purchased?' <i>bought</i>':''}`).join('<br>')}</span>`:''}</td>
-      <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}</span>`:''}${people}
+      <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}${bucketGap(c.jobCost)?' partial':''}</span>`:''}${gapNote(c.jobCost)}${people}
         ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
-      <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}</span>`:''}
+      <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}${bucketGap(c.ownCost)?' partial':''}</span>`:''}${gapNote(c.ownCost)}
         ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
       <td class="num">${left===null
-          ? `<span class="muted">—${hourly?'<br><span style="font-size:11px">no budget · by the hour</span>':''}</span>`
+          ? `<span class="muted">—${gap?'<br><span style="color:var(--warn);font-size:11px">no rate for '+esc(gap)+'</span>'
+                                    :(hourly?'<br><span style="font-size:11px">no budget · by the hour</span>':'')}</span>`
           : `<span style="color:${left<0?'var(--warn)':'inherit'}">${left<0?'−':''}$${money(Math.abs(left))}</span>`}</td>
     </tr>`;
   }).join('');
 
   const t = n => `<td class="num" style="background:#EEF3F8"><b>$${money(Math.round(n*100)/100)}</b></td>`;
-  const totals = `<tr><td colspan="2" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>`
+  const totals = `<tr><td colspan="2" style="background:#EEF3F8"><b>Total, USD equivalent</b>`
+    + (anyGap?`<br><span style="color:var(--warn);font-size:11px">partial — some amounts had no rate</span>`:'')
+    + `</td>`
     + t(tPrice) + t(tSub) + t(tJob) + t(tOwn)
     + (anyLeft
         ? `<td class="num" style="background:#EEF3F8"><b><span style="color:${tLeft<0?'var(--warn)':'inherit'}">${tLeft<0?'−':''}$${money(Math.abs(Math.round(tLeft*100)/100))}</span></b></td>`

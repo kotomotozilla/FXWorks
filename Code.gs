@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.188';
+const BUILD = '2026-08-08.189';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -4966,12 +4966,26 @@ function addTo_(bucket, currency, amount, dateStr) {
   var c = trim_(currency) || 'USD';
   bucket.by[c] = round2_((bucket.by[c] || 0) + num_(amount));
   var usd = toUsd_(c, amount, dateStr);
-  bucket.usd = round2_(bucket.usd + (usd == null ? 0 : usd));
+  if (usd == null) {
+    // No rate for this currency. Treating that as zero, as this did, quietly dropped the
+    // amount out of every dollar figure built on it — the total, the margin, the column
+    // sum — while it went on showing in the breakdown. Whatever could not be converted is
+    // recorded here so the page can say the dollar figure is partial instead of wrong.
+    if (!bucket.missing) bucket.missing = {};
+    bucket.missing[c] = round2_((bucket.missing[c] || 0) + num_(amount));
+  } else {
+    bucket.usd = round2_(bucket.usd + usd);
+  }
   return bucket;
 }
-function emptyBucket_() { return { by: {}, usd: 0 }; }
+function emptyBucket_() { return { by: {}, usd: 0, missing: {} }; }
 function mergeBucket_(dst, src) {
   Object.keys(src.by).forEach(function (c) { dst.by[c] = round2_((dst.by[c] || 0) + src.by[c]); });
+  var m = src.missing || {};
+  Object.keys(m).forEach(function (c) {
+    if (!dst.missing) dst.missing = {};
+    dst.missing[c] = round2_((dst.missing[c] || 0) + m[c]);
+  });
   dst.usd = round2_(dst.usd + src.usd);
   return dst;
 }
@@ -4985,7 +4999,15 @@ function toUsd_(currency, amount, dateStr) {
   var key = c;
   if (USD_RATE_CACHE[key] === undefined) {
     var fx = computeFx_(c, 1, dateStr || new Date().toISOString().slice(0, 10));
-    USD_RATE_CACHE[key] = (fx && num_(fx.FxRate)) ? num_(fx.FxRate) : null;
+    var rate = (fx && num_(fx.FxRate)) ? num_(fx.FxRate) : null;
+    // The rate service has no data for every date asked of it — a date in the future, or
+    // one before its history begins. The first row that happened to carry such a date used
+    // to poison the cache and take the whole currency down with it for the entire report.
+    if (rate == null) {
+      var latest = computeFx_(c, 1, '');
+      rate = (latest && num_(latest.FxRate)) ? num_(latest.FxRate) : null;
+    }
+    USD_RATE_CACHE[key] = rate;
   }
   var r = USD_RATE_CACHE[key];
   return (r == null) ? null : round2_(num_(amount) * r);
