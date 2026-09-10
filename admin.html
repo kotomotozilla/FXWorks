@@ -1035,7 +1035,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.191';
+const BUILD = '2026-08-08.192';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3398,33 +3398,46 @@ async function loadCosts(){
 //                 accepted: a framework's confirmed figure, or what the counterparty earned
 //                 under their own contract. More reported than invoiced means a bill is coming.
 //
+// The two sides are compared currency by currency, never through dollars. An invoice is
+// almost always raised in the currency of its contract, and converting both to USD at rates
+// of two different days manufactured a difference out of nothing: €217,700 invoiced against
+// a €217,700 contract came out as $6,204.45 still to bill.
+//
 // An invoice is never treated as a payment. Whether the money moved is a question for the
 // statements, and it gets a column of its own when they are in.
-function invoicedBaseline(c, outgoing, framework, budgetUsd){
+function invoicedBaseline(c, outgoing, framework, hourly){
   if(outgoing){
     const b = framework ? c.confirmed : c.ownCost;
-    return { usd: b ? b.usd : 0, bucket: b,
+    return { by: (b && b.by) || {},
              short: 'reported but not invoiced', over: 'invoiced above what was reported' };
   }
-  return { usd: budgetUsd||0, bucket: framework ? c.workOrderValue : null,
-           short: 'of the price not invoiced yet', over: 'invoiced above the price' };
+  const by = framework ? ((c.workOrderValue && c.workOrderValue.by) || {})
+           : (!hourly && c.amount) ? { [c.currency || 'USD']: c.amount } : {};
+  return { by: by, short: 'of the price not invoiced yet', over: 'invoiced above the price' };
 }
-function invoicedCell(c, outgoing, framework, budgetUsd){
+function invoicedCell(c, outgoing, framework, hourly){
   const inv = c.invoiced || { by:{}, usd:0, missing:{} };
   if(!c.invoiceCount) return '<span class="muted">—</span>';
   let out = bucketText(inv)
-    + `<br><span class="muted">${c.invoiceCount} invoice(s) · $${money(inv.usd)}${bucketGap(inv)?' partial':''}</span>`
+    + `<span class="muted det" style="font-size:11px">${c.invoiceCount} invoice(s) · $${money(inv.usd)}${bucketGap(inv)?' partial':''}</span>`
     + gapNote(inv);
 
-  // A difference between two dollar figures means nothing when either of them is missing a
-  // currency it could not convert.
-  const base = invoicedBaseline(c, outgoing, framework, budgetUsd);
-  if(!base.usd || bucketGap(inv) || (base.bucket && bucketGap(base.bucket))) return out;
-  const d = Math.round((base.usd - inv.usd)*100)/100;
-  if(Math.abs(d) < 0.01) return out + '<br><span class="muted" style="font-size:11px">fully invoiced</span>';
-  out += d > 0
-    ? `<br><span style="color:var(--warn);font-size:11px">$${money(d)} ${base.short}</span>`
-    : `<br><span class="muted" style="font-size:11px">$${money(-d)} ${base.over}</span>`;
+  const base = invoicedBaseline(c, outgoing, framework, hourly);
+  const ccys = Object.keys(base.by).concat(Object.keys(inv.by))
+    .filter((v,i,a)=>a.indexOf(v)===i);
+  if(!ccys.length) return out;
+
+  const short = [], over = [];
+  ccys.forEach(k=>{
+    const d = Math.round(((base.by[k]||0) - (inv.by[k]||0))*100)/100;
+    if(d >= 0.01) short.push(`${cur(k)}${money(d)}`);
+    else if(d <= -0.01) over.push(`${cur(k)}${money(-d)}`);
+  });
+  if(!short.length && !over.length){
+    return out + '<span class="muted det" style="font-size:11px">fully invoiced</span>';
+  }
+  if(short.length) out += `<span class="det" style="color:var(--warn);font-size:11px">${short.join(', ')} ${base.short}</span>`;
+  if(over.length)  out += `<span class="muted det" style="font-size:11px">${over.join(', ')} ${base.over}</span>`;
   return out;
 }
 function costGroup(rows, title, outgoing){
@@ -3501,7 +3514,7 @@ function costGroup(rows, title, outgoing){
         ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
       <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}${bucketGap(c.ownCost)?' partial':''}</span>`:''}${gapNote(c.ownCost)}
         ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
-      <td class="num">${invoicedCell(c, outgoing, framework, budgetUsd)}</td>
+      <td class="num">${invoicedCell(c, outgoing, framework, hourly)}</td>
       <td class="num">${left===null
           ? `<span class="muted">—${gap?'<br><span style="color:var(--warn);font-size:11px">no rate for '+esc(gap)+'</span>'
                                     :(hourly?'<br><span style="font-size:11px">no budget · by the hour</span>':'')}</span>`
