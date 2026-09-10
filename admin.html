@@ -43,6 +43,7 @@
   .fbadge{background:var(--brand);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:6px}
   table.cost{font-size:13px} table.cost th,table.cost td{padding:6px 8px}
   table.cost td:first-child,table.cost th:first-child{white-space:nowrap}
+  table.cost td.num .det{white-space:normal;display:block;max-width:190px;margin-left:auto}
   .row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1 1 170px;min-width:150px}
   .row>label,.row>div>label{display:block;white-space:normal}
   .panel{border:1px solid var(--line);border-radius:14px;padding:18px;background:#fff;margin:0 0 18px}
@@ -1034,7 +1035,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.189';
+const BUILD = '2026-08-08.191';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3388,15 +3389,54 @@ async function loadCosts(){
 // One half of the costs table: a heading, the rows, and a total for every column that has
 // one. The label on the last column depends on which way the money goes — what is left of
 // a budget we spend is not the same statement as the margin on work we are paid for.
+// What has been billed against a contract, and what that leaves open. The comparison is not
+// the same on the two sides, so it is made explicit rather than left to be guessed:
+//
+//   we are paid — bill against what is owed to us, so the baseline is the price, or what a
+//                 framework has committed. What is not yet invoiced is money not yet asked for.
+//   we pay      — bill against what has been established as due, so the baseline is what was
+//                 accepted: a framework's confirmed figure, or what the counterparty earned
+//                 under their own contract. More reported than invoiced means a bill is coming.
+//
+// An invoice is never treated as a payment. Whether the money moved is a question for the
+// statements, and it gets a column of its own when they are in.
+function invoicedBaseline(c, outgoing, framework, budgetUsd){
+  if(outgoing){
+    const b = framework ? c.confirmed : c.ownCost;
+    return { usd: b ? b.usd : 0, bucket: b,
+             short: 'reported but not invoiced', over: 'invoiced above what was reported' };
+  }
+  return { usd: budgetUsd||0, bucket: framework ? c.workOrderValue : null,
+           short: 'of the price not invoiced yet', over: 'invoiced above the price' };
+}
+function invoicedCell(c, outgoing, framework, budgetUsd){
+  const inv = c.invoiced || { by:{}, usd:0, missing:{} };
+  if(!c.invoiceCount) return '<span class="muted">—</span>';
+  let out = bucketText(inv)
+    + `<br><span class="muted">${c.invoiceCount} invoice(s) · $${money(inv.usd)}${bucketGap(inv)?' partial':''}</span>`
+    + gapNote(inv);
+
+  // A difference between two dollar figures means nothing when either of them is missing a
+  // currency it could not convert.
+  const base = invoicedBaseline(c, outgoing, framework, budgetUsd);
+  if(!base.usd || bucketGap(inv) || (base.bucket && bucketGap(base.bucket))) return out;
+  const d = Math.round((base.usd - inv.usd)*100)/100;
+  if(Math.abs(d) < 0.01) return out + '<br><span class="muted" style="font-size:11px">fully invoiced</span>';
+  out += d > 0
+    ? `<br><span style="color:var(--warn);font-size:11px">$${money(d)} ${base.short}</span>`
+    : `<br><span class="muted" style="font-size:11px">$${money(-d)} ${base.over}</span>`;
+  return out;
+}
 function costGroup(rows, title, outgoing){
-  const head = `<tr><td colspan="7" style="background:#EEF3F8;padding:10px 8px;font-size:14px"><b>${esc(title)}</b>`
+  const head = `<tr><td colspan="8" style="background:#EEF3F8;padding:10px 8px;font-size:14px"><b>${esc(title)}</b>`
       + `<span class="muted"> · ${rows.length} contract(s)</span></td></tr>`
     + '<tr><th>Contract</th><th>Counterparty</th><th class="num">Price</th>'
     + '<th class="num">Sub-contracted</th><th class="num">Work done for it</th>'
-    + `<th class="num">Earned under it</th><th class="num">${outgoing?'Left of the budget':'Margin'}</th></tr>`;
-  if(!rows.length) return head + '<tr><td class="empty" colspan="7">Nothing in this period.</td></tr>';
+    + '<th class="num">Earned under it</th><th class="num">Invoiced</th>'
+    + `<th class="num">${outgoing?'Left of the budget':'Margin'}</th></tr>`;
+  if(!rows.length) return head + '<tr><td class="empty" colspan="8">Nothing in this period.</td></tr>';
 
-  let tPrice=0, tSub=0, tJob=0, tOwn=0, tLeft=0, anyLeft=false, anyGap=false;
+  let tPrice=0, tSub=0, tJob=0, tOwn=0, tInv=0, tLeft=0, anyLeft=false, anyGap=false;
   const body = rows.map(c=>{
     // Cost of a contract = what was sub-contracted plus the work done for it. What the
     // counterparty earned under their own contract is a separate figure — adding both
@@ -3423,11 +3463,12 @@ function costGroup(rows, title, outgoing){
              || (framework ? (bucketGap(c.confirmed) || bucketGap(c.workOrderValue)) : '');
     const left = (budgetUsd && !gap) ? Math.round((budgetUsd - spentUsd)*100)/100 : null;
     tPrice += budgetUsd||0; tSub += c.subCost.usd; tJob += c.jobCost.usd; tOwn += c.ownCost.usd;
+    tInv += (c.invoiced?c.invoiced.usd:0);
     if(gap) anyGap = true;
     if(left!==null){ tLeft += left; anyLeft = true; }
 
     const people = (c.people||[]).length
-      ? `<br><span class="muted" style="font-size:11px">${c.people.slice(0,4).map(p=>`${esc(p.who)} ${bucketText(p.cost).replace(/<br>/g,', ')}`).join('<br>')}${c.people.length>4?`<br>+${c.people.length-4} more`:''}</span>`
+      ? `<span class="muted det" style="font-size:11px">${c.people.slice(0,4).map(p=>`${esc(p.who)} ${bucketText(p.cost).replace(/<br>/g,', ')}`).join('<br>')}${c.people.length>4?`<br>+${c.people.length-4} more`:''}</span>`
       : '';
     return `<tr>
       <td><b>${esc(c.number)}</b>${framework?' <span class="tag draft">framework</span>':''}${
@@ -3436,28 +3477,31 @@ function costGroup(rows, title, outgoing){
       <td>${esc(c.counterparty)}${(c.startDate||c.endDate)?`<br><span class="muted" style="font-size:11px">${esc(shortDate(c.startDate))} – ${esc(c.endDate?shortDate(c.endDate):'open')}</span>`:''}</td>
       <td class="num">${framework
           ? (c.workOrders
-              ? `${bucketText(c.workOrderValue)}<br><span class="muted" style="font-size:11px">`
+              ? `${bucketText(c.workOrderValue)}<span class="muted det" style="font-size:11px">`
                 + `committed · ${c.workOrders} order(s)</span>`
                 + (c.confirmedReports
-                    ? `<br><b>${bucketText(c.confirmed)}</b><span class="muted" style="font-size:11px">`
-                      + ` confirmed by ${c.confirmedReports} report(s)</span>` : '')
-                + `<br><span class="muted" style="font-size:11px">`
+                    ? `<b>${bucketText(c.confirmed)}</b><span class="muted det" style="font-size:11px">`
+                      + `confirmed by ${c.confirmedReports} report(s)</span>` : '')
+                + `<span class="muted det" style="font-size:11px">`
                 + c.workOrderList.map(w=>`${esc(w.number)} ${cur(w.currency)}${money(w.amount)}`
                     + (w.kind==='work_request'?' <i>ceiling</i>':'')
                     + (w.end?` · to ${esc(shortDate(w.end))}`:'')).join('<br>')
                 + `</span>`
-                + (c.ceilingBreach||[]).map(b=>`<br><span style="color:var(--warn);font-size:11px">`
-                    + `${esc(b.number)}: ${cur(b.currency)}${money(b.used)} against a ceiling of `
-                    + `${cur(b.currency)}${money(b.ceiling)}</span>`).join('')
+                // The order is named a line above; repeating it here alongside both figures
+                // was the longest string in the table and set the width of the column.
+                + (c.ceilingBreach||[]).map(b=>`<span class="det" style="color:var(--warn);font-size:11px">`
+                    + `over the ceiling by ${cur(b.currency)}${money(Math.max(0,b.used-b.ceiling))}`
+                    + `</span>`).join('')
               : '<span class="muted">no orders yet</span>')
           : (c.amount?`${cur(c.currency)}${money(c.amount)}${hourly?' <span class="muted">per hour</span>':''}`:'—')
             + `<br><span class="muted">${(c.amountUsd&&!hourly)?'$'+money(c.amountUsd):''}</span>`}</td>
       <td class="num">${bucketText(c.subCost)}${c.subCost.usd?`<br><span class="muted">$${money(c.subCost.usd)}${bucketGap(c.subCost)?' partial':''}</span>`:''}${gapNote(c.subCost)}
-        ${(c.subs||[]).length?`<br><span class="muted" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}${x.purchased?' <i>bought</i>':''}`).join('<br>')}</span>`:''}</td>
+        ${(c.subs||[]).length?`<span class="muted det" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}${x.purchased?' <i>bought</i>':''}`).join('<br>')}</span>`:''}</td>
       <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}${bucketGap(c.jobCost)?' partial':''}</span>`:''}${gapNote(c.jobCost)}${people}
         ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
       <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}${bucketGap(c.ownCost)?' partial':''}</span>`:''}${gapNote(c.ownCost)}
         ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
+      <td class="num">${invoicedCell(c, outgoing, framework, budgetUsd)}</td>
       <td class="num">${left===null
           ? `<span class="muted">—${gap?'<br><span style="color:var(--warn);font-size:11px">no rate for '+esc(gap)+'</span>'
                                     :(hourly?'<br><span style="font-size:11px">no budget · by the hour</span>':'')}</span>`
@@ -3469,7 +3513,7 @@ function costGroup(rows, title, outgoing){
   const totals = `<tr><td colspan="2" style="background:#EEF3F8"><b>Total, USD equivalent</b>`
     + (anyGap?`<br><span style="color:var(--warn);font-size:11px">partial — some amounts had no rate</span>`:'')
     + `</td>`
-    + t(tPrice) + t(tSub) + t(tJob) + t(tOwn)
+    + t(tPrice) + t(tSub) + t(tJob) + t(tOwn) + t(tInv)
     + (anyLeft
         ? `<td class="num" style="background:#EEF3F8"><b><span style="color:${tLeft<0?'var(--warn)':'inherit'}">${tLeft<0?'−':''}$${money(Math.abs(Math.round(tLeft*100)/100))}</span></b></td>`
         : '<td style="background:#EEF3F8"></td>')

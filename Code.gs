@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.189';
+const BUILD = '2026-08-08.191';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -5042,6 +5042,7 @@ function costReport_(d) {
                                      : function (c) { return inRange(contractDateOf(c)); };
 
   var contracts = readAll_(SHEETS.contracts);
+  var invoices = readAll_(SHEETS.invoices);
   var projects = readAll_(SHEETS.projects);
   var assignments = readAll_(SHEETS.assignments);
   var byId = {}, projById = {};
@@ -5235,6 +5236,22 @@ function costReport_(d) {
       }
     });
 
+    // What has been invoiced against this contract. An invoice is a claim, not a receipt —
+    // it says a bill was raised, never that money moved. It is kept in a column of its own
+    // for that reason, and the gap against it is what the reconciliation asks about.
+    var invIds = {};
+    invIds[id] = 1;
+    orders.forEach(function (x) { invIds[String(x.ContractID)] = 1; });
+    var invoiced = emptyBucket_(), invoiceCount = 0;
+    invoices.forEach(function (v) {
+      if (!invIds[String(trim_(v.ContractID))]) return;
+      var vd = String(trim_(v.InvoiceDate)).slice(0, 10);
+      if (!reportInRange(vd)) return;
+      if (!num_(v.Amount)) return;
+      addTo_(invoiced, trim_(v.Currency), num_(v.Amount), vd);
+      invoiceCount++;
+    });
+
     var perf = byPerformer[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0 };
     var job = byJob[id] || { cost: emptyBucket_(), pending: emptyBucket_(), reports: 0, reportsPending: 0,
                              people: {}, ext: emptyBucket_(), extBy: {}, extReports: 0 };
@@ -5266,6 +5283,7 @@ function costReport_(d) {
                  acceptance: trim_(x.TargetAcceptance), pricing: trim_(x.PricingModel) };
       }).sort(function (a, b) { return String(a.number).localeCompare(String(b.number)); }),
       subCount: plainSubs, subCost: subCost, subs: subList, extReports: job.extReports,
+      invoiced: invoiced, invoiceCount: invoiceCount,
       // what the counterparty of this contract has earned under it
       ownCost: perf.cost, ownPending: perf.pending, ownReports: perf.reports, ownPending_n: perf.reportsPending,
       // what the work under this contract has cost, across every performer
