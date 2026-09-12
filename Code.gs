@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.198';
+const BUILD = '2026-08-08.201';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -111,7 +111,7 @@ const HEADERS = {
                 'ProjectID', 'ReimbursementID', 'ReimbursedAt', 'Source', 'CreatedAt', 'OrgID'],
   // Which file proves which line. Kept apart from the attachment's own parent: one folio
   // covers several lines, and a line can be proved by more than one document.
-  expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'CreatedAt', 'OrgID']
+  expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'Role', 'CreatedAt', 'OrgID']
 };
 
 const CURRENCIES = ['USD', 'EUR', 'AED', 'SGD'];
@@ -245,6 +245,8 @@ function route_(action, d) {
     case 'list_travel':        return travelList_(d);
     case 'link_expense_file':  return linkExpenseFile_(d);
     case 'unlink_expense_file':return unlinkExpenseFile_(d);
+    case 'expense_file_role':  return setExpenseFileRole_(d);
+    case 'save_trip_destinations': return saveTripDestinations_(d);
     case 'fxexp_scan':         return fxexpScan_(d);
     case 'fxexp_migrate':      return fxexpMigrate_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
@@ -6150,6 +6152,11 @@ function setup() {
 // arrives before anybody types the line it belongs to.
 // ─────────────────────────────────────────────────────────────────────────────
 var EXPENSE_PAID_BY = ['company', 'personal'];
+// One expense is often proved by several documents at once — a flight by the ticket, the
+// boarding pass and the airline's invoice. The role says which of them a file is, so a
+// glance at a line shows not just that something is attached but what is missing.
+var EXPENSE_FILE_ROLES = ['ticket', 'boarding', 'invoice', 'receipt', 'statement', 'other'];
+function fileRole_(v) { v = trim_(v).toLowerCase(); return EXPENSE_FILE_ROLES.indexOf(v) >= 0 ? v : 'other'; }
 function paidBy_(v) { v = trim_(v).toLowerCase(); return EXPENSE_PAID_BY.indexOf(v) >= 0 ? v : 'company'; }
 
 // Reads an FXExp export — the array the old app's "Export data" button writes out. Nothing
@@ -6304,6 +6311,22 @@ function fxexpMigrate_(d) {
   return { ok: true, made: made, problems: problems };
 }
 
+// The old app wrote destinations however they were typed — semicolons in one record, bare
+// spaces in another. Corrected in one pass here rather than worked around everywhere a trip
+// is read or grouped.
+function saveTripDestinations_(d) {
+  requireAdmin_(d);
+  var rows = Array.isArray(d.trips) ? d.trips : [];
+  var saved = 0, missed = [];
+  rows.forEach(function (r) {
+    var id = trim_(r.tripId), value = trim_(r.destinations);
+    if (!id) return;
+    if (updateRow_(SHEETS.trips, 'TripID', id, { Destinations: value })) saved++;
+    else missed.push(id);
+  });
+  return { ok: true, saved: saved, missed: missed };
+}
+
 function travelList_(d) {
   requireAdmin_(d);
   var files = readAll_(SHEETS.attachments).filter(function (a) {
@@ -6320,14 +6343,31 @@ function linkExpenseFile_(d) {
   requireAdmin_(d);
   var expenseId = trim_(d.expenseId), attachmentId = trim_(d.attachmentId);
   if (!expenseId || !attachmentId) return { ok: false, error: 'Pick a line and a file' };
+  var role = fileRole_(d.role);
   var dup = readAll_(SHEETS.expenseFiles).filter(function (l) {
     return String(l.ExpenseID) === expenseId && String(l.AttachmentID) === attachmentId;
   });
-  if (dup.length) return { ok: true, link: dup[0] };
+  if (dup.length) {
+    // Attaching the same file again is how the role gets corrected, not a second link.
+    if (trim_(d.role) && fileRole_(dup[0].Role) !== role) {
+      updateRow_(SHEETS.expenseFiles, 'LinkID', dup[0].LinkID, { Role: role });
+      dup[0].Role = role;
+    }
+    return { ok: true, link: dup[0] };
+  }
   var row = { LinkID: Utilities.getUuid(), ExpenseID: expenseId, AttachmentID: attachmentId,
-              CreatedAt: new Date().toISOString() };
+              Role: role, CreatedAt: new Date().toISOString() };
   appendRow_(SHEETS.expenseFiles, row);
   return { ok: true, link: row };
+}
+
+function setExpenseFileRole_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.linkId);
+  if (!id) return { ok: false, error: 'Missing link' };
+  var role = fileRole_(d.role);
+  if (!updateRow_(SHEETS.expenseFiles, 'LinkID', id, { Role: role })) return { ok: false, error: 'Link not found' };
+  return { ok: true, linkId: id, role: role };
 }
 
 function unlinkExpenseFile_(d) {

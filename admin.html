@@ -442,6 +442,18 @@
       </div>
 
       <div class="panel">
+        <h2>Destinations</h2>
+        <p class="muted">However they were typed in the old app — semicolons, commas, or nothing at all.
+          The suggestion below separates them with commas; where the old record ran the names together
+          with spaces there is nothing safe to split on (Abu Dhabi is one place, not two), so fix those
+          by hand. Only the lines you change are written.</p>
+        <div id="trvDestErr"></div>
+        <div id="trvDest"></div>
+        <div style="height:10px"></div>
+        <div class="acts"><button class="btn sm" onclick="trvSaveDest(this)">Save changes</button></div>
+      </div>
+
+      <div class="panel">
         <h2>Bring the old records over</h2>
         <p class="muted">Open the travel app, press <b>Export data</b>, and paste the file here. Nothing is
           written until you press Migrate, and a trip already carried over is skipped — so this can be done
@@ -1067,7 +1079,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.198';
+const BUILD = '2026-08-08.201';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5794,7 +5806,12 @@ async function loadData(){
 })();
 // ── Trips and expenses ───────────────────────────────────────────────────────
 // A line without a file is the thing to look for, so the list counts those first.
-let TRAVEL = { trips:[], expenses:[], links:[], files:[] }, TRV_OPEN = '';
+let TRAVEL = { trips:[], expenses:[], links:[], files:[] }, TRV_OPEN = '', TRV_PICK = '';
+const TRV_ROLES = ['ticket','boarding','invoice','receipt','statement','other'];
+// The travel records carry currencies the rest of the system never sees — baht, Hong Kong
+// dollars, sterling. A missing symbol used to fall back to '$', which turned 109,289 baht
+// into a figure that read as dollars; the code is printed instead.
+function trvAmt(c, n){ c = String(c||'').toUpperCase(); return (SYM[c] ? SYM[c] : (c ? c+' ' : '')) + money(n); }
 
 function travelInit(){ if(!TRAVEL.trips.length || stale('travel')) travelLoad(); else travelRender(); }
 
@@ -5826,7 +5843,50 @@ function trvLinksFor(expenseId){ return TRAVEL.links.filter(l=>String(l.ExpenseI
 function trvFile(id){ return TRAVEL.files.find(f=>String(f.AttachmentID)===String(id)) || null; }
 function trvTotals(lines){
   const by = {}; lines.forEach(x=>{ const c=String(x.Currency||'—'); by[c]=(by[c]||0)+(+x.Amount||0); });
-  return Object.keys(by).sort().map(c=>cur(c)+money(by[c])).join(' · ') || '—';
+  return Object.keys(by).sort().map(c=>trvAmt(c, by[c])).join(' · ') || '—';
+}
+
+// Semicolons, slashes and stray spacing become one separator. Repeats are kept: Bangkok →
+// Singapore → Bangkok is a route, not a typo.
+function trvNormDest(s){
+  return String(s||'').replace(/[;|\/]+/g, ',').split(',')
+    .map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean).join(', ');
+}
+function trvRenderDest(){
+  const box = $('trvDest'); if(!box) return;
+  const trips = TRAVEL.trips.slice().sort((x,y)=>String(x.Reference||'').localeCompare(String(y.Reference||'')));
+  if(!trips.length){ box.innerHTML = '<div class="muted">Nothing to tidy yet.</div>'; return; }
+  box.innerHTML = '<div class="scroll"><table><thead><tr><th>Reference</th><th>As stored</th>'
+    + '<th>Suggested</th></tr></thead><tbody>'
+    + trips.map(t=>{
+        const now = String(t.Destinations||''), next = trvNormDest(now);
+        const odd = next && next.indexOf(',') < 0 && /\s/.test(next);
+        return `<tr><td>${esc(t.Reference||'')}</td><td class="muted">${esc(now)||'—'}</td>`
+          + `<td><input id="trvDest_${esc(t.TripID)}" value="${esc(next)}" style="width:100%">`
+          + (odd?`<div class="muted" style="font-size:12px">nothing to split on — separate by hand if this is more than one place</div>`:'')
+          + `</td></tr>`;
+      }).join('')
+    + '</tbody></table></div>';
+}
+
+async function trvSaveDest(btn){
+  const done = busy(btn);
+  try{
+    notice('trvDestErr','','');
+    const changed = [];
+    TRAVEL.trips.forEach(t=>{
+      const el = $('trvDest_'+t.TripID); if(!el) return;
+      const value = el.value.trim();
+      if(value !== String(t.Destinations||'')) changed.push({ tripId: t.TripID, destinations: value });
+    });
+    if(!changed.length){ notice('trvDestErr','ok','Nothing changed.'); return; }
+    const r = await api('save_trip_destinations',{ trips: changed });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    changed.forEach(ch=>{ const t = TRAVEL.trips.find(x=>String(x.TripID)===String(ch.tripId)); if(t) t.Destinations = ch.destinations; });
+    notice('trvDestErr','ok', r.saved+' trip(s) updated.');
+    travelRender();
+  }catch(e){ notice('trvDestErr','err',esc(e.message)); }
+  finally{ done(); }
 }
 
 function travelRender(){
@@ -5841,7 +5901,7 @@ function travelRender(){
       + ` — <b>${noFile}</b> line(s) with nothing attached, <b>${loose}</b> file(s) not assigned to a line`
     : 'Nothing here yet — migrate the old records below.';
 
-  if(!trips.length){ t.innerHTML = '<tbody><tr><td class="empty">No trips</td></tr></tbody>'; return; }
+  if(!trips.length){ t.innerHTML = '<tbody><tr><td class="empty">No trips</td></tr></tbody>'; trvRenderDest(); return; }
   let h = '<thead><tr><th>Reference</th><th>Dates</th><th>Destinations</th><th>Status</th>'
         + '<th class="num">Lines</th><th class="num">Spent</th><th class="num">Files</th><th></th></tr></thead><tbody>';
   trips.forEach(tr=>{
@@ -5856,11 +5916,12 @@ function travelRender(){
     if(TRV_OPEN===id) h += `<tr><td colspan="8">${trvDetail(tr, lines, files)}</td></tr>`;
   });
   t.innerHTML = h + '</tbody>';
+  trvRenderDest();
 }
 
 function trvDetail(tr, lines, files){
   const linked = {}; TRAVEL.links.forEach(l=>linked[String(l.AttachmentID)]=1);
-  const opts = files.map(f=>`<option value="${esc(f.AttachmentID)}">${esc(f.Description||f.FileName||'file')}</option>`).join('');
+  const fname = f => (f.Description||f.FileName||'file');
   let h = `<div style="padding:6px 2px 10px">`;
   if(tr.Purpose) h += `<div class="muted" style="font-size:13px;margin-bottom:8px">${esc(tr.Purpose)}</div>`;
   h += `<table><thead><tr><th>Date</th><th>Category</th><th>Supplier</th><th class="num">Amount</th>`
@@ -5870,16 +5931,33 @@ function trvDetail(tr, lines, files){
     const ls = trvLinksFor(x.ExpenseID);
     const proof = ls.length
       ? ls.map(l=>{ const f=trvFile(l.AttachmentID);
-          const nm = f ? (f.Description||f.FileName||'file') : 'missing file';
+          const nm = f ? fname(f) : 'missing file';
           const a = (f&&f.Url) ? `<a href="${esc(f.Url)}" target="_blank">${esc(nm)}</a>` : esc(nm);
-          return `${a} <button class="btn ghost sm" onclick="trvUnlink('${esc(l.LinkID)}')" title="detach">×</button>`;
-        }).join('<br>')
+          return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">${a}`
+            + `<select onchange="trvRole('${esc(l.LinkID)}',this.value)" style="max-width:130px">`
+            + TRV_ROLES.map(r=>`<option value="${r}" ${String(l.Role||'other')===r?'selected':''}>${r}</option>`).join('')
+            + `</select>`
+            + `<button class="btn ghost sm" onclick="trvUnlink('${esc(l.LinkID)}')" title="detach">×</button></div>`;
+        }).join('')
       : `<span style="color:#B4472E">none</span>`;
-    const picker = files.length
-      ? `<div style="margin-top:4px;display:flex;gap:6px"><select id="trvPick_${esc(x.ExpenseID)}" style="max-width:220px">${opts}</select>`
-        + `<button class="btn ghost sm" onclick="trvLink('${esc(x.ExpenseID)}',this)">Attach</button></div>` : '';
+    const open = TRV_PICK === String(x.ExpenseID);
+    let picker = '';
+    if(files.length){
+      picker = `<div style="margin-top:4px"><button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">`
+             + `${open?'Done':'Attach files ('+files.length+')'}</button>`;
+      if(open){
+        const on = {}; ls.forEach(l=>on[String(l.AttachmentID)]=1);
+        picker += `<div style="margin-top:6px;padding:8px;border:1px solid #DDE3EA;border-radius:8px">`
+          + files.map(f=>`<label style="display:flex;gap:8px;align-items:center;font-weight:400;margin:2px 0">`
+              + `<input type="checkbox" ${on[String(f.AttachmentID)]?'checked':''} `
+              + `onchange="trvToggleFile('${esc(x.ExpenseID)}','${esc(f.AttachmentID)}',this)"> `
+              + `<span>${esc(fname(f))}</span></label>`).join('')
+          + `</div>`;
+      }
+      picker += `</div>`;
+    }
     h += `<tr><td>${esc(fmtDate(x.Date))}</td><td>${esc(x.Category||'')}</td><td>${esc(x.Supplier||'')}</td>`
-       + `<td class="num">${cur(x.Currency)}${money(x.Amount)}</td>`
+       + `<td class="num">${trvAmt(x.Currency, x.Amount)}</td>`
        + `<td class="num">${x.AmountUSD===''||x.AmountUSD==null?'—':'$'+money(x.AmountUSD)}</td>`
        + `<td>${esc(x.PaidBy||'company')}${x.PaidByName?' · '+esc(x.PaidByName):''}</td>`
        + `<td>${proof}${picker}</td></tr>`;
@@ -5894,18 +5972,41 @@ function trvDetail(tr, lines, files){
   return h;
 }
 
-function trvToggle(id){ TRV_OPEN = (TRV_OPEN===String(id)) ? '' : String(id); travelRender(); }
+function trvToggle(id){ TRV_OPEN = (TRV_OPEN===String(id)) ? '' : String(id); TRV_PICK = ''; travelRender(); }
 
-async function trvLink(expenseId, btn){
-  const sel = $('trvPick_'+expenseId); if(!sel || !sel.value) return;
-  const done = busy(btn);
+function trvPick(expenseId){ TRV_PICK = (TRV_PICK===String(expenseId)) ? '' : String(expenseId); travelRender(); }
+
+// The checkbox is the state of the link itself: ticking it attaches, unticking detaches, and
+// the list stays open so several files can be ticked off against one line in a row.
+async function trvToggleFile(expenseId, attachmentId, box){
+  const want = box.checked;
+  box.disabled = true;
   try{
-    const r = await api('link_expense_file',{ expenseId, attachmentId: sel.value });
-    if(!r.ok) throw new Error(r.error||'Could not attach');
-    if(r.link && !TRAVEL.links.some(l=>String(l.LinkID)===String(r.link.LinkID))) TRAVEL.links.push(r.link);
+    if(want){
+      const r = await api('link_expense_file',{ expenseId, attachmentId });
+      if(!r.ok) throw new Error(r.error||'Could not attach');
+      if(r.link && !TRAVEL.links.some(l=>String(l.LinkID)===String(r.link.LinkID))) TRAVEL.links.push(r.link);
+    }else{
+      const l = TRAVEL.links.find(l=>String(l.ExpenseID)===String(expenseId) && String(l.AttachmentID)===String(attachmentId));
+      if(l){
+        const r = await api('unlink_expense_file',{ linkId: l.LinkID });
+        if(!r.ok) throw new Error(r.error||'Could not detach');
+        TRAVEL.links = TRAVEL.links.filter(y=>String(y.LinkID)!==String(l.LinkID));
+      }
+    }
+    travelRender();
+  }catch(e){ box.checked = !want; notice('trvErr','err',esc(e.message)); }
+  finally{ box.disabled = false; }
+}
+
+async function trvRole(linkId, role){
+  try{
+    const r = await api('expense_file_role',{ linkId, role });
+    if(!r.ok) throw new Error(r.error||'Could not change that');
+    const l = TRAVEL.links.find(y=>String(y.LinkID)===String(linkId));
+    if(l) l.Role = r.role;
     travelRender();
   }catch(e){ notice('trvErr','err',esc(e.message)); }
-  finally{ done(); }
 }
 
 async function trvUnlink(linkId){
@@ -5923,7 +6024,7 @@ async function trvScan(btn){
     notice('trvMigErr','','');
     const r = await api('fxexp_scan',{ json: $('trvJson').value });
     if(!r.ok) throw new Error(r.error||'Could not read that');
-    const c = r.counts, tot = Object.keys(r.totals||{}).sort().map(k=>cur(k)+money(r.totals[k])).join(' · ');
+    const c = r.counts, tot = Object.keys(r.totals||{}).sort().map(k=>trvAmt(k, r.totals[k])).join(' · ');
     let h = `<div class="notice ok">${c.trips} trip(s) in the file — <b>${c.fresh}</b> to carry over, `
           + `${c.known} already here. ${c.expenses} expense line(s), ${c.attachments} file(s).`
           + (tot?` Total in the file: ${tot}.`:'') + `</div>`;
