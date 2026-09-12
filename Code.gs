@@ -27,12 +27,13 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.197';
+const BUILD = '2026-08-08.198';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
                  queue: 'ParseQueue', queueText: 'ParseQueueText', queueFile: 'ParseQueueFile',
-                 signatures: 'Signatures', invoiceQueue: 'InvoiceQueue', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries' };
+                 signatures: 'Signatures', invoiceQueue: 'InvoiceQueue', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries',
+                 trips: 'Trips', expenses: 'Expenses', expenseFiles: 'ExpenseFiles' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt', 'OrgID'],
@@ -98,7 +99,19 @@ const HEADERS = {
                 'ExtPdfID', 'ExtPdfUrl', 'ExtPdfAt',
                 'OverrunApprovedBy', 'OverrunApprovedAt', 'OverrunPdfID', 'OverrunPdfUrl',
                 'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate', 'OrgID', 'OrgID'],
-  entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt', 'OrgID']
+  entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt', 'OrgID'],
+  // A trip is the heading a group of expense lines hangs from; the lines themselves carry
+  // the money, and may equally hang from a project or from nothing.
+  trips:       ['TripID', 'Reference', 'Status', 'RequestedBy', 'Purpose', 'CounterpartyID', 'Counterparty',
+                'Destinations', 'ProjectID', 'StartDate', 'EndDate', 'ActualStart', 'ActualEnd',
+                'EstimatedCost', 'Currency', 'ReportDate', 'Activities', 'Meetings', 'Notes', 'ReportNotes',
+                'NoPersonal', 'ReportPdfID', 'ReportPdfUrl', 'ReportPdfAt', 'Source', 'CreatedAt', 'OrgID'],
+  expenses:    ['ExpenseID', 'Date', 'Category', 'Supplier', 'Description', 'Amount', 'Currency',
+                'AmountUSD', 'FxRate', 'FxAsOf', 'PaidBy', 'PaidByName', 'ParentType', 'ParentID',
+                'ProjectID', 'ReimbursementID', 'ReimbursedAt', 'Source', 'CreatedAt', 'OrgID'],
+  // Which file proves which line. Kept apart from the attachment's own parent: one folio
+  // covers several lines, and a line can be proved by more than one document.
+  expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'CreatedAt', 'OrgID']
 };
 
 const CURRENCIES = ['USD', 'EUR', 'AED', 'SGD'];
@@ -228,6 +241,12 @@ function route_(action, d) {
     case 'list_payments':      requireAdmin_(d); return { ok: true, payments: paymentsOf_(trim_(d.counterpartyId)) };
     case 'unmatch_payment':    return adminUnmatchPayment_(d);
     case 'delete_payments':    return adminDeletePayments_(d);
+    // Travel and expenses
+    case 'list_travel':        return travelList_(d);
+    case 'link_expense_file':  return linkExpenseFile_(d);
+    case 'unlink_expense_file':return unlinkExpenseFile_(d);
+    case 'fxexp_scan':         return fxexpScan_(d);
+    case 'fxexp_migrate':      return fxexpMigrate_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
     case 'orphan_reports':     requireAdmin_(d); return orphanReports_();
     case 'get_project':        return adminGetProject_(d);
@@ -423,7 +442,10 @@ function adminAddAttachment_(d) {
     return { ok: true, attachment: row };
   } catch (e) { return { ok: false, error: 'Upload failed: ' + e }; }
 }
-function attachType_(t) { t = trim_(t); return (t === 'invoice' || t === 'counterparty') ? t : 'contract'; }
+function attachType_(t) {
+  t = trim_(t);
+  return (t === 'invoice' || t === 'counterparty' || t === 'trip' || t === 'expense') ? t : 'contract';
+}
 var DOC_TYPES = ['signed', 'draft', 'annex', 'amendment', 'other'];
 function attachDocType_(t) { t = trim_(t).toLowerCase(); return DOC_TYPES.indexOf(t) >= 0 ? t : 'other'; }
 function clearCurrentAttachments_(parentType, parentId, docType, keepId) {
@@ -6118,4 +6140,199 @@ function setup() {
   getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.documents); getSheet_(SHEETS.blocks); getSheet_(SHEETS.terms); getSheet_(SHEETS.payments); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
   ensureCounterparties_();
   SpreadsheetApp.getActive().toast('Sheets created.');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Travel and expenses
+// A trip is a heading, not a wallet: the money sits in expense lines, and a line belongs
+// just as easily to a project or to nothing at all. A line and the file that proves it are
+// linked separately — one hotel folio often covers several lines, and a photo usually
+// arrives before anybody types the line it belongs to.
+// ─────────────────────────────────────────────────────────────────────────────
+var EXPENSE_PAID_BY = ['company', 'personal'];
+function paidBy_(v) { v = trim_(v).toLowerCase(); return EXPENSE_PAID_BY.indexOf(v) >= 0 ? v : 'company'; }
+
+// Reads an FXExp export — the array the old app's "Export data" button writes out. Nothing
+// is written here: the preview and the migration read it the same way, so what the preview
+// promises is exactly what gets carried over.
+function fxexpParse_(raw) {
+  var data = raw;
+  if (typeof data === 'string') {
+    var s = trim_(data);
+    if (!s) throw new Error('Nothing to read — paste the exported JSON first');
+    data = JSON.parse(s);
+  }
+  if (data && !Array.isArray(data) && Array.isArray(data.trips)) data = data.trips;
+  if (!Array.isArray(data)) throw new Error('Expected the exported trips array (a JSON array of trip records)');
+  var out = [];
+  for (var i = 0; i < data.length; i++) {
+    var t = data[i] || {}, ref = trim_(t.id);
+    if (!ref) continue;
+    var rep = (t.report && typeof t.report === 'object') ? t.report : null;
+    var trip = {
+      reference: ref,
+      createdDate: trim_(t.createdDate) || trim_(t.createdAt).slice(0, 10),
+      requestedBy: trim_(t.requestedBy),
+      destinations: Array.isArray(t.destinations) ? t.destinations.join(', ') : trim_(t.destinations),
+      purpose: trim_(t.purpose),
+      counterparty: trim_(t.counterparty),
+      startDate: trim_(t.startDate),
+      endDate: trim_(t.endDate),
+      estimatedCost: num_(t.estimatedCost),
+      currency: trim_(t.currency).toUpperCase(),
+      notes: trim_(t.notes),
+      status: trim_(t.status) || (rep ? 'Reported' : 'Requested'),
+      actualStart: rep ? trim_(rep.actualStart) : '',
+      actualEnd: rep ? trim_(rep.actualEnd) : '',
+      reportDate: rep ? trim_(rep.reportDate) : '',
+      activities: rep ? trim_(rep.activities) : '',
+      meetings: rep ? trim_(rep.meetings) : '',
+      reportNotes: rep ? trim_(rep.notes) : '',
+      noPersonal: (rep && rep.noPersonal) ? 'yes' : '',
+      expenses: [], attachments: []
+    };
+    var exps = (rep && Array.isArray(rep.expenses)) ? rep.expenses : [];
+    for (var j = 0; j < exps.length; j++) {
+      var x = exps[j] || {};
+      if (!num_(x.amount) && !trim_(x.supplier) && !trim_(x.date)) continue;
+      trip.expenses.push({
+        date: trim_(x.date) || trip.startDate || trip.createdDate,
+        category: trim_(x.category) || 'Other',
+        supplier: trim_(x.supplier),
+        amount: num_(x.amount),
+        currency: trim_(x.currency).toUpperCase() || trip.currency
+      });
+    }
+    var atts = (rep && Array.isArray(rep.attachments)) ? rep.attachments : [];
+    for (var k = 0; k < atts.length; k++) {
+      var a = atts[k] || {};
+      if (!trim_(a.fileId) && !trim_(a.url)) continue;
+      trip.attachments.push({
+        fileId: trim_(a.fileId), url: trim_(a.url),
+        name: trim_(a.name) || 'attachment',
+        description: trim_(a.description) || trim_(a.name),
+        mimeType: trim_(a.mimeType)
+      });
+    }
+    out.push(trip);
+  }
+  return out;
+}
+
+function fxexpScan_(d) {
+  requireAdmin_(d);
+  var trips = fxexpParse_(d.json);
+  var have = {};
+  readAll_(SHEETS.trips).forEach(function (r) { var ref = trim_(r.Reference); if (ref) have[ref] = true; });
+  var rows = [], totals = {}, nExp = 0, nAtt = 0, fresh = 0;
+  trips.forEach(function (t) {
+    var known = !!have[t.reference];
+    if (!known) fresh++;
+    nExp += t.expenses.length; nAtt += t.attachments.length;
+    t.expenses.forEach(function (x) {
+      var c = x.currency || '—';
+      totals[c] = round2_((totals[c] || 0) + x.amount);
+    });
+    rows.push({ reference: t.reference, destinations: t.destinations, startDate: t.startDate,
+                endDate: t.endDate, status: t.status, expenses: t.expenses.length,
+                attachments: t.attachments.length, known: known });
+  });
+  return { ok: true, trips: rows, totals: totals,
+           counts: { trips: trips.length, fresh: fresh, known: trips.length - fresh,
+                     expenses: nExp, attachments: nAtt } };
+}
+
+// Writes what the preview showed. A trip already carried over is left alone, so running this
+// a second time adds nothing — which is what makes it safe to do in pieces.
+function fxexpMigrate_(d) {
+  requireAdmin_(d);
+  var trips = fxexpParse_(d.json), makePrivate = truthy_(d.makePrivate);
+  var have = {};
+  readAll_(SHEETS.trips).forEach(function (r) { var ref = trim_(r.Reference); if (ref) have[ref] = true; });
+  var now = new Date().toISOString();
+  var made = { trips: 0, expenses: 0, attachments: 0, skipped: 0, privatised: 0 }, problems = [];
+  USD_RATE_CACHE = {};
+  trips.forEach(function (t) {
+    if (have[t.reference]) { made.skipped++; return; }
+    var tripId = Utilities.getUuid();
+    appendRow_(SHEETS.trips, {
+      TripID: tripId, Reference: t.reference, Status: t.status,
+      RequestedBy: t.requestedBy || CONFIG.DEFAULT_SIGNATORY,
+      Purpose: t.purpose, Counterparty: t.counterparty, Destinations: t.destinations,
+      StartDate: t.startDate, EndDate: t.endDate, ActualStart: t.actualStart, ActualEnd: t.actualEnd,
+      EstimatedCost: t.estimatedCost || '', Currency: t.currency, ReportDate: t.reportDate,
+      Activities: t.activities, Meetings: t.meetings, Notes: t.notes, ReportNotes: t.reportNotes,
+      NoPersonal: t.noPersonal, Source: 'fxexp', CreatedAt: t.createdDate || now
+    });
+    made.trips++;
+    t.expenses.forEach(function (x) {
+      var fx = computeFx_(x.currency, x.amount, x.date);
+      appendRow_(SHEETS.expenses, {
+        ExpenseID: Utilities.getUuid(), Date: x.date, Category: x.category, Supplier: x.supplier,
+        Description: '', Amount: x.amount, Currency: x.currency,
+        AmountUSD: fx.AmountUSD, FxRate: fx.FxRate, FxAsOf: fx.FxAsOf,
+        // The old app never asked who paid, and it was the company card every time bar one or
+        // two. Recorded as such, and correctable on the line.
+        PaidBy: 'company', PaidByName: '',
+        ParentType: 'trip', ParentID: tripId, ProjectID: '',
+        Source: 'fxexp', CreatedAt: now
+      });
+      made.expenses++;
+    });
+    t.attachments.forEach(function (a) {
+      var fileId = trim_(a.fileId), url = a.url, name = a.name;
+      if (fileId) {
+        try {
+          var f = DriveApp.getFileById(fileId);
+          name = f.getName() || name;
+          url = f.getUrl();
+          if (makePrivate) {
+            try { f.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE); made.privatised++; }
+            catch (e2) { problems.push(name + ' — access left as it was (' + e2 + ')'); }
+          }
+        } catch (e) { problems.push((name || fileId) + ' — no longer in Drive, recorded as a link only'); }
+      }
+      appendRow_(SHEETS.attachments, {
+        AttachmentID: Utilities.getUuid(), ParentType: 'trip', ParentID: tripId,
+        FileName: name, Description: a.description, DocType: 'other',
+        DocDate: t.reportDate || t.endDate || t.startDate || '', IsCurrent: 'no',
+        DriveFileID: fileId, Url: url, CreatedAt: now
+      });
+      made.attachments++;
+    });
+  });
+  return { ok: true, made: made, problems: problems };
+}
+
+function travelList_(d) {
+  requireAdmin_(d);
+  var files = readAll_(SHEETS.attachments).filter(function (a) {
+    var p = trim_(a.ParentType);
+    return p === 'trip' || p === 'expense';
+  });
+  return { ok: true, trips: readAll_(SHEETS.trips), expenses: readAll_(SHEETS.expenses),
+           links: readAll_(SHEETS.expenseFiles), files: files };
+}
+
+// What a file proves is recorded apart from where it is stored: the attachment keeps its own
+// parent, and this says which lines it covers.
+function linkExpenseFile_(d) {
+  requireAdmin_(d);
+  var expenseId = trim_(d.expenseId), attachmentId = trim_(d.attachmentId);
+  if (!expenseId || !attachmentId) return { ok: false, error: 'Pick a line and a file' };
+  var dup = readAll_(SHEETS.expenseFiles).filter(function (l) {
+    return String(l.ExpenseID) === expenseId && String(l.AttachmentID) === attachmentId;
+  });
+  if (dup.length) return { ok: true, link: dup[0] };
+  var row = { LinkID: Utilities.getUuid(), ExpenseID: expenseId, AttachmentID: attachmentId,
+              CreatedAt: new Date().toISOString() };
+  appendRow_(SHEETS.expenseFiles, row);
+  return { ok: true, link: row };
+}
+
+function unlinkExpenseFile_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.linkId);
+  if (!id) return { ok: false, error: 'Missing link' };
+  return { ok: true, removed: deleteRowsWhere_(SHEETS.expenseFiles, 'LinkID', id) };
 }
