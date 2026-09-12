@@ -1079,7 +1079,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.201';
+const BUILD = '2026-08-08.202';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5924,8 +5924,9 @@ function trvDetail(tr, lines, files){
   const fname = f => (f.Description||f.FileName||'file');
   let h = `<div style="padding:6px 2px 10px">`;
   if(tr.Purpose) h += `<div class="muted" style="font-size:13px;margin-bottom:8px">${esc(tr.Purpose)}</div>`;
-  h += `<table><thead><tr><th>Date</th><th>Category</th><th>Supplier</th><th class="num">Amount</th>`
-     + `<th class="num">USD</th><th>Paid by</th><th>Proof</th></tr></thead><tbody>`;
+  h += `<table style="table-layout:auto"><thead><tr><th>Date</th><th>Category</th><th>Supplier</th>`
+     + `<th class="num">Amount</th><th class="num">USD</th><th>Paid by</th>`
+     + `<th style="min-width:230px">Proof</th></tr></thead><tbody>`;
   if(!lines.length) h += '<tr><td class="empty" colspan="7">No expense lines</td></tr>';
   lines.forEach(x=>{
     const ls = trvLinksFor(x.ExpenseID);
@@ -5941,21 +5942,10 @@ function trvDetail(tr, lines, files){
         }).join('')
       : `<span style="color:#B4472E">none</span>`;
     const open = TRV_PICK === String(x.ExpenseID);
-    let picker = '';
-    if(files.length){
-      picker = `<div style="margin-top:4px"><button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">`
-             + `${open?'Done':'Attach files ('+files.length+')'}</button>`;
-      if(open){
-        const on = {}; ls.forEach(l=>on[String(l.AttachmentID)]=1);
-        picker += `<div style="margin-top:6px;padding:8px;border:1px solid #DDE3EA;border-radius:8px">`
-          + files.map(f=>`<label style="display:flex;gap:8px;align-items:center;font-weight:400;margin:2px 0">`
-              + `<input type="checkbox" ${on[String(f.AttachmentID)]?'checked':''} `
-              + `onchange="trvToggleFile('${esc(x.ExpenseID)}','${esc(f.AttachmentID)}',this)"> `
-              + `<span>${esc(fname(f))}</span></label>`).join('')
-          + `</div>`;
-      }
-      picker += `</div>`;
-    }
+    const picker = files.length
+      ? `<div style="margin-top:4px"><button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">`
+        + `${open?'Close':'Attach files ('+files.length+')'}</button></div>`
+      : '';
     h += `<tr><td>${esc(fmtDate(x.Date))}</td><td>${esc(x.Category||'')}</td><td>${esc(x.Supplier||'')}</td>`
        + `<td class="num">${trvAmt(x.Currency, x.Amount)}</td>`
        + `<td class="num">${x.AmountUSD===''||x.AmountUSD==null?'—':'$'+money(x.AmountUSD)}</td>`
@@ -5963,6 +5953,25 @@ function trvDetail(tr, lines, files){
        + `<td>${proof}${picker}</td></tr>`;
   });
   h += '</tbody></table>';
+
+  // Full width, under the table: a file name is a sentence, not a column.
+  const picked = lines.find(x=>String(x.ExpenseID)===TRV_PICK);
+  if(picked && files.length){
+    const on = {}; trvLinksFor(picked.ExpenseID).forEach(l=>on[String(l.AttachmentID)]=1);
+    h += `<div style="margin-top:10px;padding:10px;border:1px solid #DDE3EA;border-radius:10px">`
+      + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">`
+      + `<b>Files for ${esc(fmtDate(picked.Date))} · ${esc(picked.Category||'')}`
+      + `${picked.Supplier?' · '+esc(picked.Supplier):''}</b>`
+      + `<button class="btn ghost sm" onclick="trvPick('${esc(picked.ExpenseID)}')">Done</button></div>`
+      + `<div style="display:flex;flex-wrap:wrap;gap:6px 18px">`
+      + files.map(f=>`<label style="display:inline-flex;gap:8px;align-items:center;font-weight:400;`
+          + `flex:1 1 260px;min-width:240px;margin:2px 0">`
+          + `<input type="checkbox" style="flex:0 0 auto" ${on[String(f.AttachmentID)]?'checked':''} `
+          + `onchange="trvToggleFile('${esc(picked.ExpenseID)}','${esc(f.AttachmentID)}',this)">`
+          + `<span style="white-space:normal">${esc(fname(f))}</span></label>`).join('')
+      + `</div></div>`;
+  }
+
   const loose = files.filter(f=>!linked[String(f.AttachmentID)]);
   h += `<div class="muted" style="font-size:13px;margin-top:10px">Files on this trip: ${files.length}`
      + (loose.length ? ` — not assigned to any line: ` + loose.map(f=>
