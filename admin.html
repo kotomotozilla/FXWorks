@@ -441,7 +441,9 @@
       <div class="panel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Trips and expenses</h2>
-          <div class="acts"><button class="btn ghost sm" onclick="travelLoad(this)">Refresh</button></div>
+          <div class="acts"><span id="trvTools"></span>
+            <button class="btn sm" onclick="newTrip()">+ New trip</button>
+            <button class="btn ghost sm" onclick="travelLoad(this)">Refresh</button></div>
         </div>
         <div id="trvErr"></div>
         <div id="trvSummary" class="muted" style="font-size:13px;margin:6px 0"></div>
@@ -536,6 +538,77 @@
 </div></div>
 
 <!-- Report editor modal -->
+<div id="trModal" class="modal hidden"><div class="box">
+  <h2><span id="tr_title">Trip</span><button class="x" onclick="closeModal('trModal')">×</button></h2>
+  <div id="trFormErr"></div>
+  <div class="row">
+    <div style="flex:1;min-width:200px"><label>Reference</label><input id="tr_ref" placeholder="left blank — built from the date and destinations"></div>
+    <div style="flex:0 0 150px"><label>Status</label><select id="tr_status">
+      <option value="Requested">Requested</option><option value="Reported">Reported</option></select></div>
+  </div>
+  <div class="row">
+    <div style="flex:2;min-width:220px"><label>Destinations</label><input id="tr_dest" placeholder="Dubai, Amsterdam, Budapest"></div>
+    <div style="flex:1;min-width:180px"><label>Counterparty</label><input id="tr_cp" placeholder="who was met"></div>
+  </div>
+  <div><label>Purpose</label><textarea id="tr_purpose" rows="2"></textarea></div>
+  <div class="row">
+    <div style="flex:1;min-width:160px"><label>Project</label><select id="tr_project"></select></div>
+    <div style="flex:0 0 150px"><label>Estimate</label><input id="tr_est" type="number" step="0.01"></div>
+    <div style="flex:0 0 120px"><label>Currency</label><select id="tr_cur"></select></div>
+  </div>
+  <div class="row">
+    <div style="flex:1;min-width:150px"><label>Planned from</label><input id="tr_start" type="date"></div>
+    <div style="flex:1;min-width:150px"><label>Planned to</label><input id="tr_end" type="date"></div>
+    <div style="flex:1;min-width:150px"><label>Actually from</label><input id="tr_astart" type="date"></div>
+    <div style="flex:1;min-width:150px"><label>Actually to</label><input id="tr_aend" type="date"></div>
+  </div>
+  <div class="row">
+    <div style="flex:1;min-width:150px"><label>Report date</label><input id="tr_repdate" type="date"></div>
+    <div style="flex:2;min-width:200px"><label>Requested by</label><input id="tr_by"></div>
+  </div>
+  <div><label>What was done</label><textarea id="tr_act" rows="3"></textarea></div>
+  <div><label>Who was met</label><textarea id="tr_meet" rows="2"></textarea></div>
+  <div class="row">
+    <div style="flex:1;min-width:220px"><label>Notes on the request</label><textarea id="tr_notes" rows="2"></textarea></div>
+    <div style="flex:1;min-width:220px"><label>Notes on the report</label><textarea id="tr_rnotes" rows="2"></textarea></div>
+  </div>
+  <label style="display:flex;gap:8px;align-items:center;font-weight:400">
+    <input id="tr_nopers" type="checkbox" style="width:18px;height:18px;flex:0 0 18px;padding:0;margin:0"> No personal legs on this trip
+  </label>
+  <div style="height:12px"></div>
+  <div class="acts">
+    <button class="btn sm" onclick="saveTripForm(this)">Save</button>
+    <button class="btn ghost sm" onclick="closeModal('trModal')">Cancel</button>
+  </div>
+</div></div>
+
+<div id="exModal" class="modal top hidden"><div class="box">
+  <h2><span id="ex_title">Expense</span><button class="x" onclick="closeModal('exModal')">×</button></h2>
+  <div id="exFormErr"></div>
+  <div id="ex_where" class="muted" style="font-size:13px;margin-bottom:8px"></div>
+  <div class="row">
+    <div style="flex:0 0 160px"><label>Date</label><input id="ex_date" type="date"></div>
+    <div style="flex:1;min-width:180px"><label>Category</label><select id="ex_cat"></select></div>
+    <div style="flex:1;min-width:180px"><label>Supplier</label><input id="ex_sup"></div>
+  </div>
+  <div class="row">
+    <div style="flex:0 0 160px"><label>Amount</label><input id="ex_amt" type="number" step="0.01"></div>
+    <div style="flex:0 0 120px"><label>Currency</label><select id="ex_cur"></select></div>
+    <div style="flex:0 0 160px"><label>Paid by</label><select id="ex_paid">
+      <option value="company">Company</option><option value="personal">Personally</option></select></div>
+    <div style="flex:1;min-width:160px"><label>Who paid (if personally)</label><input id="ex_paidname"></div>
+  </div>
+  <div class="row">
+    <div style="flex:1;min-width:180px"><label>Project</label><select id="ex_project"></select></div>
+    <div style="flex:2;min-width:220px"><label>Description</label><input id="ex_desc"></div>
+  </div>
+  <div style="height:12px"></div>
+  <div class="acts">
+    <button class="btn sm" onclick="saveExpenseForm(this)">Save</button>
+    <button class="btn ghost sm" onclick="closeModal('exModal')">Cancel</button>
+  </div>
+</div></div>
+
 <div id="wrModal" class="modal hidden"><div class="box">
   <h2><span id="wr_title">Work report</span><button class="x" onclick="closeModal('wrModal')">×</button></h2>
   <div class="row" style="align-items:end">
@@ -1086,7 +1159,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.204';
+const BUILD = '2026-08-08.205';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5919,7 +5992,10 @@ function travelRender(){
        + `<td>${esc(tr.Destinations||'')}</td><td>${esc(tr.Status||'')}</td>`
        + `<td class="num">${lines.length}${missing?` <span style="color:#B4472E">(${missing} without a file)</span>`:''}</td>`
        + `<td class="num">${trvTotals(lines)}</td><td class="num">${files.length}</td>`
-       + `<td class="num"><button class="btn ghost sm" onclick="trvToggle('${id}')">${TRV_OPEN===id?'Hide':'Open'}</button></td></tr>`;
+       + `<td class="num" style="white-space:nowrap">`
+       + `<button class="btn ghost sm" onclick="trvToggle('${id}')">${TRV_OPEN===id?'Hide':'Open'}</button> `
+       + `<button class="btn ghost sm" onclick="editTrip('${id}')">Edit</button> `
+       + `<button class="btn ghost sm" onclick="delTrip('${id}')" title="delete this trip">×</button></td></tr>`;
     if(TRV_OPEN===id) h += `<tr><td colspan="8">${trvDetail(tr, lines, files)}</td></tr>`;
   });
   t.innerHTML = h + '</tbody>';
@@ -5950,8 +6026,8 @@ function trvDetail(tr, lines, files){
   if(tr.Purpose) h += `<div class="muted" style="font-size:13px;margin-bottom:8px">${esc(tr.Purpose)}</div>`;
   h += `<table style="table-layout:auto"><thead><tr><th>Date</th><th>Category</th><th>Supplier</th>`
      + `<th class="num">Amount</th><th class="num">USD</th><th>Paid by</th>`
-     + `<th style="min-width:230px">Proof</th></tr></thead><tbody>`;
-  if(!lines.length) h += '<tr><td class="empty" colspan="7">No expense lines</td></tr>';
+     + `<th style="min-width:230px">Proof</th><th></th></tr></thead><tbody>`;
+  if(!lines.length) h += '<tr><td class="empty" colspan="8">No expense lines</td></tr>';
   lines.forEach(x=>{
     const ls = trvLinksFor(x.ExpenseID);
     const proof = ls.length
@@ -5975,17 +6051,34 @@ function trvDetail(tr, lines, files){
        + `<td class="num">${trvAmt(x.Currency, x.Amount)}</td>`
        + `<td class="num">${x.AmountUSD===''||x.AmountUSD==null?'—':'$'+money(x.AmountUSD)}</td>`
        + `<td>${esc(x.PaidBy||'company')}${x.PaidByName?' · '+esc(x.PaidByName):''}</td>`
-       + `<td>${proof}${picker}</td></tr>`;
-    if(open && files.length) h += `<tr><td colspan="7" style="padding:8px 4px">${trvPickerPanel(x, files)}</td></tr>`;
+       + `<td>${proof}${picker}</td>`
+       + `<td class="num" style="white-space:nowrap">`
+       + `<button class="btn ghost sm" onclick="editExpense('${esc(x.ExpenseID)}')">Edit</button> `
+       + `<button class="btn ghost sm" onclick="delExpense('${esc(x.ExpenseID)}')" title="delete this line">×</button></td></tr>`;
+    if(open && files.length) h += `<tr><td colspan="8" style="padding:8px 4px">${trvPickerPanel(x, files)}</td></tr>`;
   });
   h += '</tbody></table>';
 
-  const loose = files.filter(f=>!linked[String(f.AttachmentID)]);
-  h += `<div class="muted" style="font-size:13px;margin-top:10px">Files on this trip: ${files.length}`
-     + (loose.length ? ` — not assigned to any line: ` + loose.map(f=>
-         (f.Url?`<a href="${esc(f.Url)}" target="_blank">${esc(f.Description||f.FileName||'file')}</a>`
-              :esc(f.Description||f.FileName||'file'))).join(', ') : '')
-     + `</div></div>`;
+  h += `<div style="margin-top:10px"><button class="btn ghost sm" `
+     + `onclick="newExpense('trip','${esc(tr.TripID)}')">+ Add expense</button></div>`;
+
+  const own = files.filter(f=>String(f.ParentType)==='trip' && String(f.ParentID)===String(tr.TripID));
+  h += `<div style="margin-top:14px"><b style="font-size:14px">Files</b>`
+     + `<div class="trvfiles" style="margin-top:8px">`
+     + (own.length ? own.map(f=>{
+         const used = TRAVEL.links.filter(l=>String(l.AttachmentID)===String(f.AttachmentID)).length;
+         return `<div class="f"><span style="flex:1 1 auto">${esc(fname(f))}`
+           + (used ? ` <span class="muted" style="font-size:12px">· on ${used} line(s)</span>`
+                   : ` <span style="color:#B4472E;font-size:12px">· not assigned</span>`)
+           + `</span>`
+           + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
+           + `<button class="btn ghost sm" onclick="trvDeleteFile('${esc(f.AttachmentID)}')" title="delete">×</button></div>`;
+       }).join('') : `<span class="muted" style="font-size:13px">No files yet</span>`)
+     + `</div>`
+     + `<div style="margin-top:8px"><input type="file" id="trvUp_${esc(tr.TripID)}" `
+     + `onchange="trvUpload('${esc(tr.TripID)}',this)" style="width:auto;padding:6px"></div></div>`;
+
+  h += `</div>`;
   return h;
 }
 
@@ -6073,6 +6166,182 @@ async function trvMigrate(btn){
     await travelLoad();
   }catch(e){ notice('trvMigErr','err',esc(e.message)); }
   finally{ done(); }
+}
+
+// ── Entering and editing trips and expense lines ─────────────────────────────
+const TRV_CURRENCIES = ['USD','EUR','AED','GBP','HKD','THB','SGD','CHF','CZK','HUF','KZT'];
+const TRV_CATEGORIES = ['Airfare / transport','Accommodation','Local transport / transfer',
+                        'Visa / insurance','Meals','Other'];
+let TRV_EDIT_TRIP = '', TRV_EDIT_EXP = '', TRV_EXP_PARENT = null;
+
+function trvCurOptions(sel){
+  const list = TRV_CURRENCIES.slice();
+  const s = String(sel||'').toUpperCase();
+  if(s && list.indexOf(s) < 0) list.push(s);
+  return list.map(c=>`<option value="${c}" ${s===c?'selected':''}>${c}</option>`).join('');
+}
+function trvCatOptions(sel){
+  const list = TRV_CATEGORIES.slice();
+  const s = String(sel||'');
+  if(s && list.indexOf(s) < 0) list.push(s);
+  return list.map(c=>`<option value="${esc(c)}" ${s===c?'selected':''}>${esc(c)}</option>`).join('');
+}
+function trvProjOptions(sel){
+  return '<option value="">— none —</option>' + (PROJECTS||[]).map(p=>
+    `<option value="${esc(p.ProjectID)}" ${String(sel)===String(p.ProjectID)?'selected':''}>${esc(p.Name||'')}</option>`).join('');
+}
+function trvProjName(id){
+  const p = (PROJECTS||[]).find(x=>String(x.ProjectID)===String(id));
+  return p ? (p.Name||'') : '';
+}
+
+function newTrip(){ trvOpenTrip(null); }
+function editTrip(id){ trvOpenTrip(TRAVEL.trips.find(t=>String(t.TripID)===String(id)) || null); }
+function trvOpenTrip(t){
+  TRV_EDIT_TRIP = t ? String(t.TripID) : '';
+  $('tr_title').textContent = t ? ('Trip ' + (t.Reference||'')) : 'New trip';
+  notice('trFormErr','','');
+  $('tr_ref').value = t ? (t.Reference||'') : '';
+  $('tr_status').value = (t && t.Status==='Reported') ? 'Reported' : 'Requested';
+  $('tr_dest').value = t ? (t.Destinations||'') : '';
+  $('tr_cp').value = t ? (t.Counterparty||'') : '';
+  $('tr_purpose').value = t ? (t.Purpose||'') : '';
+  $('tr_project').innerHTML = trvProjOptions(t ? t.ProjectID : '');
+  $('tr_est').value = t && t.EstimatedCost!=='' && t.EstimatedCost!=null ? t.EstimatedCost : '';
+  $('tr_cur').innerHTML = trvCurOptions(t ? t.Currency : 'EUR');
+  $('tr_start').value = t && t.StartDate ? fmtDate(t.StartDate) : todayISO();
+  $('tr_end').value = t && t.EndDate ? fmtDate(t.EndDate) : '';
+  $('tr_astart').value = t && t.ActualStart ? fmtDate(t.ActualStart) : '';
+  $('tr_aend').value = t && t.ActualEnd ? fmtDate(t.ActualEnd) : '';
+  $('tr_repdate').value = t && t.ReportDate ? fmtDate(t.ReportDate) : '';
+  $('tr_by').value = t ? (t.RequestedBy||'') : 'Konstantin Maiorov';
+  $('tr_act').value = t ? (t.Activities||'') : '';
+  $('tr_meet').value = t ? (t.Meetings||'') : '';
+  $('tr_notes').value = t ? (t.Notes||'') : '';
+  $('tr_rnotes').value = t ? (t.ReportNotes||'') : '';
+  $('tr_nopers').checked = !!(t && String(t.NoPersonal||'').toLowerCase()==='yes');
+  $('trModal').classList.remove('hidden');
+}
+
+async function saveTripForm(btn){
+  const done = busy(btn);
+  try{
+    const r = await api('save_trip',{
+      tripId: TRV_EDIT_TRIP, reference: $('tr_ref').value, status: $('tr_status').value,
+      destinations: $('tr_dest').value, counterparty: $('tr_cp').value, purpose: $('tr_purpose').value,
+      projectId: $('tr_project').value, estimatedCost: $('tr_est').value, currency: $('tr_cur').value,
+      startDate: $('tr_start').value, endDate: $('tr_end').value,
+      actualStart: $('tr_astart').value, actualEnd: $('tr_aend').value,
+      reportDate: $('tr_repdate').value, requestedBy: $('tr_by').value,
+      activities: $('tr_act').value, meetings: $('tr_meet').value,
+      notes: $('tr_notes').value, reportNotes: $('tr_rnotes').value,
+      noPersonal: $('tr_nopers').checked
+    });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    const i = TRAVEL.trips.findIndex(t=>String(t.TripID)===String(r.trip.TripID));
+    if(i>=0) TRAVEL.trips[i] = r.trip; else TRAVEL.trips.push(r.trip);
+    $('trModal').classList.add('hidden');
+    travelRender();
+  }catch(e){ notice('trFormErr','err',esc(e.message)); }
+  finally{ done(); }
+}
+
+async function delTrip(id){
+  const t = TRAVEL.trips.find(x=>String(x.TripID)===String(id));
+  if(!confirm('Delete trip '+((t&&t.Reference)||'')+'?')) return;
+  try{
+    const r = await api('delete_trip',{ tripId:id });
+    if(!r.ok) throw new Error(r.error||'Could not delete');
+    TRAVEL.trips = TRAVEL.trips.filter(x=>String(x.TripID)!==String(id));
+    if(TRV_OPEN===String(id)) TRV_OPEN='';
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
+}
+
+function newExpense(parentType, parentId){ trvOpenExpense(null, parentType, parentId); }
+function editExpense(id){
+  const x = TRAVEL.expenses.find(e=>String(e.ExpenseID)===String(id));
+  if(x) trvOpenExpense(x, x.ParentType, x.ParentID);
+}
+function trvOpenExpense(x, parentType, parentId){
+  TRV_EDIT_EXP = x ? String(x.ExpenseID) : '';
+  TRV_EXP_PARENT = { type: parentType||'none', id: parentId||'' };
+  notice('exFormErr','','');
+  $('ex_title').textContent = x ? 'Expense' : 'New expense';
+  const trip = TRAVEL.trips.find(t=>String(t.TripID)===String(TRV_EXP_PARENT.id));
+  $('ex_where').textContent = TRV_EXP_PARENT.type==='trip'
+    ? 'On trip ' + ((trip&&trip.Reference)||'')
+    : (TRV_EXP_PARENT.type==='project' ? 'On project ' + trvProjName(TRV_EXP_PARENT.id) : 'Not tied to a trip');
+  $('ex_date').value = x && x.Date ? fmtDate(x.Date) : (trip && trip.StartDate ? fmtDate(trip.StartDate) : todayISO());
+  $('ex_cat').innerHTML = trvCatOptions(x ? x.Category : '');
+  $('ex_sup').value = x ? (x.Supplier||'') : '';
+  $('ex_amt').value = x ? (x.Amount||'') : '';
+  $('ex_cur').innerHTML = trvCurOptions(x ? x.Currency : (trip ? trip.Currency : 'USD'));
+  $('ex_paid').value = (x && String(x.PaidBy||'')==='personal') ? 'personal' : 'company';
+  $('ex_paidname').value = x ? (x.PaidByName||'') : '';
+  $('ex_project').innerHTML = trvProjOptions(x ? x.ProjectID : (trip ? trip.ProjectID : ''));
+  $('ex_desc').value = x ? (x.Description||'') : '';
+  $('exModal').classList.remove('hidden');
+}
+
+async function saveExpenseForm(btn){
+  const done = busy(btn);
+  try{
+    const r = await api('save_expense',{
+      expenseId: TRV_EDIT_EXP, parentType: TRV_EXP_PARENT.type, parentId: TRV_EXP_PARENT.id,
+      date: $('ex_date').value, category: $('ex_cat').value, supplier: $('ex_sup').value,
+      amount: $('ex_amt').value, currency: $('ex_cur').value,
+      paidBy: $('ex_paid').value, paidByName: $('ex_paidname').value,
+      projectId: $('ex_project').value, description: $('ex_desc').value
+    });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    const i = TRAVEL.expenses.findIndex(e=>String(e.ExpenseID)===String(r.expense.ExpenseID));
+    if(i>=0) TRAVEL.expenses[i] = r.expense; else TRAVEL.expenses.push(r.expense);
+    $('exModal').classList.add('hidden');
+    travelRender();
+  }catch(e){ notice('exFormErr','err',esc(e.message)); }
+  finally{ done(); }
+}
+
+async function delExpense(id){
+  if(!confirm('Delete this expense line? The files stay — only this line and its links go.')) return;
+  try{
+    const r = await api('delete_expense',{ expenseId:id });
+    if(!r.ok) throw new Error(r.error||'Could not delete');
+    TRAVEL.expenses = TRAVEL.expenses.filter(x=>String(x.ExpenseID)!==String(id));
+    TRAVEL.links = TRAVEL.links.filter(l=>String(l.ExpenseID)!==String(id));
+    if(TRV_PICK===String(id)) TRV_PICK='';
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
+}
+
+// Files land on the trip; which line each one proves is said separately, with the tick boxes.
+async function trvUpload(tripId, input){
+  const file = input.files[0];
+  if(!file) return;
+  if(file.size > 20*1024*1024){ notice('trvErr','err','File too large (max ~20 MB).'); input.value=''; return; }
+  notice('trvErr','','Uploading '+esc(file.name)+'…');
+  try{
+    const r = await api('add_attachment',{ parentType:'trip', parentId:tripId, fileName:file.name,
+      description:file.name, docType:'other', mimeType:file.type||'application/octet-stream',
+      dataBase64: await fileToBase64(file) });
+    if(!r.ok) throw new Error(r.error||'Upload failed');
+    TRAVEL.files.push(r.attachment);
+    notice('trvErr','','');
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
+  finally{ input.value=''; }
+}
+
+async function trvDeleteFile(attachmentId){
+  if(!confirm('Delete this file? It goes to Trash in Drive, and any line it proved loses that link.')) return;
+  try{
+    const r = await api('delete_attachment',{ id: attachmentId });
+    if(!r.ok) throw new Error(r.error||'Could not delete');
+    TRAVEL.files = TRAVEL.files.filter(f=>String(f.AttachmentID)!==String(attachmentId));
+    TRAVEL.links = TRAVEL.links.filter(l=>String(l.AttachmentID)!==String(attachmentId));
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
 }
 
 </script>

@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.204';
+const BUILD = '2026-08-08.205';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -247,6 +247,10 @@ function route_(action, d) {
     case 'unlink_expense_file':return unlinkExpenseFile_(d);
     case 'expense_file_role':  return setExpenseFileRole_(d);
     case 'save_trip_destinations': return saveTripDestinations_(d);
+    case 'save_trip':          return saveTrip_(d);
+    case 'delete_trip':        return deleteTrip_(d);
+    case 'save_expense':       return saveExpense_(d);
+    case 'delete_expense':     return deleteExpense_(d);
     case 'fxexp_scan':         return fxexpScan_(d);
     case 'fxexp_migrate':      return fxexpMigrate_(d);
     case 'list_projects':      requireAdmin_(d); return { ok: true, projects: readAll_(SHEETS.projects), assignments: readAll_(SHEETS.assignments) };
@@ -549,6 +553,8 @@ function adminDeleteAttachment_(d) {
   var a = findRow_(SHEETS.attachments, 'AttachmentID', trim_(d.id));
   if (a && a.DriveFileID) { try { DriveApp.getFileById(a.DriveFileID).setTrashed(true); } catch (e) {} }
   deleteRowsWhere_(SHEETS.attachments, 'AttachmentID', trim_(d.id));
+  // Whatever this file was proving loses the claim along with the file.
+  deleteRowsWhere_(SHEETS.expenseFiles, 'AttachmentID', trim_(d.id));
   return { ok: true };
 }
 function deleteAttachmentsFor_(parentType, parentId) {
@@ -6375,4 +6381,135 @@ function unlinkExpenseFile_(d) {
   var id = trim_(d.linkId);
   if (!id) return { ok: false, error: 'Missing link' };
   return { ok: true, removed: deleteRowsWhere_(SHEETS.expenseFiles, 'LinkID', id) };
+}
+
+// ── Entering and editing trips and expense lines ─────────────────────────────
+// The reference is built the way the old app built it — the date the trip was raised and
+// where it went — because that is what the paper file and the Drive file names already use.
+function tripSlug_(s) {
+  return trim_(s).split(/[,;\/]+/).map(function (p) { return trim_(p).replace(/\s+/g, ''); })
+    .filter(function (p) { return !!p; }).join('-');
+}
+function makeTripRef_(dateStr, destinations, excludeId) {
+  var d = trim_(dateStr) || new Date().toISOString().slice(0, 10);
+  var slug = tripSlug_(destinations);
+  var base = d.replace(/-/g, '') + (slug ? '-' + slug : '');
+  var all = readAll_(SHEETS.trips), ref = base, n = 1;
+  var taken = function (candidate) {
+    return all.some(function (t) {
+      return trim_(t.Reference) === candidate && String(t.TripID) !== String(excludeId || '');
+    });
+  };
+  while (taken(ref)) { n++; ref = base + '-' + n; }
+  return ref;
+}
+
+function tripFields_(d) {
+  return {
+    Status: trim_(d.status) || 'Requested',
+    RequestedBy: trim_(d.requestedBy) || CONFIG.DEFAULT_SIGNATORY,
+    Purpose: trim_(d.purpose),
+    CounterpartyID: trim_(d.counterpartyId),
+    Counterparty: trim_(d.counterparty),
+    Destinations: trim_(d.destinations),
+    ProjectID: trim_(d.projectId),
+    StartDate: trim_(d.startDate), EndDate: trim_(d.endDate),
+    ActualStart: trim_(d.actualStart), ActualEnd: trim_(d.actualEnd),
+    EstimatedCost: (d.estimatedCost === '' || d.estimatedCost == null) ? '' : num_(d.estimatedCost),
+    Currency: trim_(d.currency).toUpperCase(),
+    ReportDate: trim_(d.reportDate),
+    Activities: trim_(d.activities), Meetings: trim_(d.meetings),
+    Notes: trim_(d.notes), ReportNotes: trim_(d.reportNotes),
+    NoPersonal: truthy_(d.noPersonal) ? 'yes' : ''
+  };
+}
+
+function saveTrip_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.tripId), f = tripFields_(d);
+  if (id) {
+    var cur = findRow_(SHEETS.trips, 'TripID', id);
+    if (!cur) return { ok: false, error: 'Trip not found' };
+    f.Reference = trim_(d.reference) || trim_(cur.Reference) || makeTripRef_(f.StartDate, f.Destinations, id);
+    updateRow_(SHEETS.trips, 'TripID', id, f);
+    return { ok: true, trip: findRow_(SHEETS.trips, 'TripID', id) };
+  }
+  f.TripID = Utilities.getUuid();
+  f.Reference = trim_(d.reference) || makeTripRef_(f.StartDate, f.Destinations, '');
+  f.Source = 'manual';
+  f.CreatedAt = new Date().toISOString();
+  appendRow_(SHEETS.trips, f);
+  return { ok: true, trip: findRow_(SHEETS.trips, 'TripID', f.TripID) };
+}
+
+// Nothing is deleted from under a trip by deleting the trip: the lines and the files are the
+// evidence, and losing them to one mistaken click is not a trade worth making.
+function deleteTrip_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.tripId);
+  if (!findRow_(SHEETS.trips, 'TripID', id)) return { ok: false, error: 'Trip not found' };
+  var lines = readAll_(SHEETS.expenses).filter(function (x) {
+    return trim_(x.ParentType) === 'trip' && String(x.ParentID) === String(id);
+  });
+  var files = readAll_(SHEETS.attachments).filter(function (a) {
+    return trim_(a.ParentType) === 'trip' && String(a.ParentID) === String(id);
+  });
+  if (lines.length || files.length) {
+    return { ok: false, error: 'This trip still holds ' + lines.length + ' expense line(s) and '
+             + files.length + ' file(s). Remove those first.' };
+  }
+  deleteRowsWhere_(SHEETS.trips, 'TripID', id);
+  return { ok: true };
+}
+
+function expenseParent_(t) { t = trim_(t).toLowerCase(); return (t === 'trip' || t === 'project') ? t : 'none'; }
+
+function saveExpense_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.expenseId);
+  var parentType = expenseParent_(d.parentType);
+  var parentId = (parentType === 'none') ? '' : trim_(d.parentId);
+  if (parentType !== 'none' && !parentId) return { ok: false, error: 'Pick what this expense belongs to' };
+  var date = trim_(d.date) || new Date().toISOString().slice(0, 10);
+  var currency = trim_(d.currency).toUpperCase() || 'USD';
+  var amount = num_(d.amount);
+  USD_RATE_CACHE = {};
+  var fx = computeFx_(currency, amount, date);
+
+  var projectId = trim_(d.projectId);
+  // A line under a trip belongs to whatever the trip is for, unless it says otherwise itself.
+  if (!projectId && parentType === 'trip') {
+    var t = findRow_(SHEETS.trips, 'TripID', parentId);
+    if (t) projectId = trim_(t.ProjectID);
+  }
+  if (parentType === 'project') projectId = parentId;
+
+  var f = {
+    Date: date, Category: trim_(d.category) || 'Other', Supplier: trim_(d.supplier),
+    Description: trim_(d.description), Amount: amount, Currency: currency,
+    AmountUSD: fx.AmountUSD, FxRate: fx.FxRate, FxAsOf: fx.FxAsOf,
+    PaidBy: paidBy_(d.paidBy), PaidByName: trim_(d.paidByName),
+    ParentType: parentType, ParentID: parentId, ProjectID: projectId
+  };
+  if (id) {
+    if (!findRow_(SHEETS.expenses, 'ExpenseID', id)) return { ok: false, error: 'Expense not found' };
+    updateRow_(SHEETS.expenses, 'ExpenseID', id, f);
+    return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', id) };
+  }
+  f.ExpenseID = Utilities.getUuid();
+  f.Source = 'manual';
+  f.CreatedAt = new Date().toISOString();
+  appendRow_(SHEETS.expenses, f);
+  return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', f.ExpenseID) };
+}
+
+// The line goes; the files it pointed at stay, since the same document often proves another
+// line as well. Only the pointers are cleared.
+function deleteExpense_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.expenseId);
+  if (!findRow_(SHEETS.expenses, 'ExpenseID', id)) return { ok: false, error: 'Expense not found' };
+  deleteRowsWhere_(SHEETS.expenseFiles, 'ExpenseID', id);
+  deleteRowsWhere_(SHEETS.expenses, 'ExpenseID', id);
+  return { ok: true };
 }
