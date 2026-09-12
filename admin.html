@@ -1079,7 +1079,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.202';
+const BUILD = '2026-08-08.203';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5919,6 +5919,25 @@ function travelRender(){
   trvRenderDest();
 }
 
+function trvPickerPanel(x, files){
+  const on = {}; trvLinksFor(x.ExpenseID).forEach(l=>on[String(l.AttachmentID)]=1);
+  const fname = f => (f.Description||f.FileName||'file');
+  return `<div style="padding:10px;border:1px solid #DDE3EA;border-radius:10px;background:#FAFBFC">`
+    + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">`
+    + `<b>Files for ${esc(fmtDate(x.Date))} · ${esc(x.Category||'')}${x.Supplier?' · '+esc(x.Supplier):''}</b>`
+    + `<button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">Done</button></div>`
+    + `<div style="display:flex;flex-wrap:wrap;gap:6px 18px">`
+    + files.map(f=>`<div style="display:flex;gap:8px;align-items:center;flex:1 1 280px;min-width:260px;margin:2px 0">`
+        + `<label style="display:flex;gap:8px;align-items:center;font-weight:400;flex:1 1 auto">`
+        + `<input type="checkbox" style="flex:0 0 auto" ${on[String(f.AttachmentID)]?'checked':''} `
+        + `onchange="trvToggleFile('${esc(x.ExpenseID)}','${esc(f.AttachmentID)}',this)">`
+        + `<span style="white-space:normal">${esc(fname(f))}</span></label>`
+        + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener" class="muted" `
+               + `style="flex:0 0 auto;font-size:12px" title="open in a new tab">open</a>`:'')
+        + `</div>`).join('')
+    + `</div></div>`;
+}
+
 function trvDetail(tr, lines, files){
   const linked = {}; TRAVEL.links.forEach(l=>linked[String(l.AttachmentID)]=1);
   const fname = f => (f.Description||f.FileName||'file');
@@ -5951,26 +5970,9 @@ function trvDetail(tr, lines, files){
        + `<td class="num">${x.AmountUSD===''||x.AmountUSD==null?'—':'$'+money(x.AmountUSD)}</td>`
        + `<td>${esc(x.PaidBy||'company')}${x.PaidByName?' · '+esc(x.PaidByName):''}</td>`
        + `<td>${proof}${picker}</td></tr>`;
+    if(open && files.length) h += `<tr><td colspan="7" style="padding:8px 4px">${trvPickerPanel(x, files)}</td></tr>`;
   });
   h += '</tbody></table>';
-
-  // Full width, under the table: a file name is a sentence, not a column.
-  const picked = lines.find(x=>String(x.ExpenseID)===TRV_PICK);
-  if(picked && files.length){
-    const on = {}; trvLinksFor(picked.ExpenseID).forEach(l=>on[String(l.AttachmentID)]=1);
-    h += `<div style="margin-top:10px;padding:10px;border:1px solid #DDE3EA;border-radius:10px">`
-      + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">`
-      + `<b>Files for ${esc(fmtDate(picked.Date))} · ${esc(picked.Category||'')}`
-      + `${picked.Supplier?' · '+esc(picked.Supplier):''}</b>`
-      + `<button class="btn ghost sm" onclick="trvPick('${esc(picked.ExpenseID)}')">Done</button></div>`
-      + `<div style="display:flex;flex-wrap:wrap;gap:6px 18px">`
-      + files.map(f=>`<label style="display:inline-flex;gap:8px;align-items:center;font-weight:400;`
-          + `flex:1 1 260px;min-width:240px;margin:2px 0">`
-          + `<input type="checkbox" style="flex:0 0 auto" ${on[String(f.AttachmentID)]?'checked':''} `
-          + `onchange="trvToggleFile('${esc(picked.ExpenseID)}','${esc(f.AttachmentID)}',this)">`
-          + `<span style="white-space:normal">${esc(fname(f))}</span></label>`).join('')
-      + `</div></div>`;
-  }
 
   const loose = files.filter(f=>!linked[String(f.AttachmentID)]);
   h += `<div class="muted" style="font-size:13px;margin-top:10px">Files on this trip: ${files.length}`
