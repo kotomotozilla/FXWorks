@@ -26,6 +26,13 @@
   label{display:block;font-size:13px;color:var(--muted);margin:0 0 6px}
   input,textarea,select{width:100%;font-family:inherit;font-size:15px;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
   input[type=date]{-webkit-appearance:none;appearance:none;min-width:0}
+  .trvfiles{display:flex;flex-wrap:wrap;gap:10px 22px}
+  .trvfiles .f{display:flex;align-items:center;gap:10px;flex:1 1 320px;min-width:280px}
+  .trvfiles label{display:flex;align-items:center;gap:9px;margin:0;flex:1 1 auto;cursor:pointer;
+                  font-size:14px;color:var(--ink);white-space:normal;line-height:1.35}
+  .trvfiles input[type=checkbox]{width:18px;height:18px;min-width:18px;flex:0 0 18px;
+                  padding:0;margin:0;border-radius:4px;accent-color:var(--accent)}
+  .trvfiles a{flex:0 0 auto;font-size:12px;white-space:nowrap}
   input[type=file].hiddenfile{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;padding:0;border:0}
   .filebox{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .filebox .fname{font-size:13px;color:var(--muted);word-break:break-all}
@@ -1079,7 +1086,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.203';
+const BUILD = '2026-08-08.204';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5922,18 +5929,16 @@ function travelRender(){
 function trvPickerPanel(x, files){
   const on = {}; trvLinksFor(x.ExpenseID).forEach(l=>on[String(l.AttachmentID)]=1);
   const fname = f => (f.Description||f.FileName||'file');
-  return `<div style="padding:10px;border:1px solid #DDE3EA;border-radius:10px;background:#FAFBFC">`
-    + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">`
+  return `<div style="padding:12px;border:1px solid #DDE3EA;border-radius:10px;background:#FAFBFC">`
+    + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">`
     + `<b>Files for ${esc(fmtDate(x.Date))} · ${esc(x.Category||'')}${x.Supplier?' · '+esc(x.Supplier):''}</b>`
     + `<button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">Done</button></div>`
-    + `<div style="display:flex;flex-wrap:wrap;gap:6px 18px">`
-    + files.map(f=>`<div style="display:flex;gap:8px;align-items:center;flex:1 1 280px;min-width:260px;margin:2px 0">`
-        + `<label style="display:flex;gap:8px;align-items:center;font-weight:400;flex:1 1 auto">`
-        + `<input type="checkbox" style="flex:0 0 auto" ${on[String(f.AttachmentID)]?'checked':''} `
+    + `<div class="trvfiles">`
+    + files.map(f=>`<div class="f"><label>`
+        + `<input type="checkbox" ${on[String(f.AttachmentID)]?'checked':''} `
         + `onchange="trvToggleFile('${esc(x.ExpenseID)}','${esc(f.AttachmentID)}',this)">`
-        + `<span style="white-space:normal">${esc(fname(f))}</span></label>`
-        + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener" class="muted" `
-               + `style="flex:0 0 auto;font-size:12px" title="open in a new tab">open</a>`:'')
+        + `<span>${esc(fname(f))}</span></label>`
+        + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener" title="open in a new tab">open</a>`:'')
         + `</div>`).join('')
     + `</div></div>`;
 }
@@ -5954,7 +5959,8 @@ function trvDetail(tr, lines, files){
           const nm = f ? fname(f) : 'missing file';
           const a = (f&&f.Url) ? `<a href="${esc(f.Url)}" target="_blank">${esc(nm)}</a>` : esc(nm);
           return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">${a}`
-            + `<select onchange="trvRole('${esc(l.LinkID)}',this.value)" style="max-width:130px">`
+            + `<select onchange="trvRole('${esc(l.LinkID)}',this.value)" `
+            + `style="width:auto;max-width:130px;padding:4px 8px;font-size:13px">`
             + TRV_ROLES.map(r=>`<option value="${r}" ${String(l.Role||'other')===r?'selected':''}>${r}</option>`).join('')
             + `</select>`
             + `<button class="btn ghost sm" onclick="trvUnlink('${esc(l.LinkID)}')" title="detach">×</button></div>`;
