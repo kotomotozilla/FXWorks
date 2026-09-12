@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.207';
+const BUILD = '2026-08-08.208';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -256,6 +256,7 @@ function route_(action, d) {
     case 'delete_activity':    return deleteActivity_(d);
     case 'save_expense':       return saveExpense_(d);
     case 'exp_read':           return expRead_(d);
+    case 'attach_move':        return attachMove_(d);
     case 'delete_expense':     return deleteExpense_(d);
     case 'fxexp_scan':         return fxexpScan_(d);
     case 'fxexp_migrate':      return fxexpMigrate_(d);
@@ -456,7 +457,9 @@ function adminAddAttachment_(d) {
 }
 function attachType_(t) {
   t = trim_(t);
-  return (t === 'invoice' || t === 'counterparty' || t === 'activity' || t === 'expense') ? t : 'contract';
+  // 'inbox' is a file that has been uploaded and read but not yet said to belong anywhere.
+  return (t === 'invoice' || t === 'counterparty' || t === 'activity' || t === 'expense' || t === 'inbox')
+    ? t : 'contract';
 }
 var DOC_TYPES = ['signed', 'draft', 'annex', 'amendment', 'other'];
 function attachDocType_(t) { t = trim_(t).toLowerCase(); return DOC_TYPES.indexOf(t) >= 0 ? t : 'other'; }
@@ -6382,7 +6385,7 @@ function travelList_(d) {
   ensureActivities_();
   var files = readAll_(SHEETS.attachments).filter(function (a) {
     var p = trim_(a.ParentType);
-    return p === 'activity' || p === 'expense';
+    return p === 'activity' || p === 'expense' || p === 'inbox';
   });
   return { ok: true, activities: readAll_(SHEETS.activities), expenses: readAll_(SHEETS.expenses),
            links: readAll_(SHEETS.expenseFiles), files: files };
@@ -6657,7 +6660,47 @@ function expRead_(d) {
     description: trim_(o.description).slice(0, 120)
   };
   if (read.serviceFrom && read.serviceTo && read.serviceTo < read.serviceFrom) read.serviceTo = '';
-  return { ok: true, read: read, attachmentId: String(att.AttachmentID), model: call.model };
+  var guess = expActivityGuess_(read.date);
+  return { ok: true, read: read, attachmentId: String(att.AttachmentID), model: call.model,
+           activityId: guess.activityId, activityWhy: guess.why };
+}
+
+// A file waits in the inbox until it is said to belong somewhere; accepting the reading is
+// what moves it, so nothing has to be uploaded twice.
+function attachMove_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.attachmentId);
+  if (!findRow_(SHEETS.attachments, 'AttachmentID', id)) return { ok: false, error: 'File not found' };
+  var parentType = attachType_(d.parentType), parentId = trim_(d.parentId);
+  if (!parentId) return { ok: false, error: 'Nothing to attach it to' };
+  updateRow_(SHEETS.attachments, 'AttachmentID', id, { ParentType: parentType, ParentID: parentId });
+  return { ok: true, attachment: findRow_(SHEETS.attachments, 'AttachmentID', id) };
+}
+
+// Which trip a document belongs to is usually settled by its date falling inside one. Where
+// it falls in none, the nearest within a fortnight is offered — as a suggestion with its
+// reason, never as a decision.
+function expActivityGuess_(dateStr) {
+  var date = trim_(dateStr);
+  if (!date) return { activityId: '', why: '' };
+  var acts = readAll_(SHEETS.activities), best = null;
+  acts.forEach(function (a) {
+    var s = trim_(a.ActualStart) || trim_(a.StartDate), e = trim_(a.ActualEnd) || trim_(a.EndDate) || s;
+    if (!s) return;
+    if (date >= s && date <= e) {
+      if (!best || best.gap > 0) best = { id: String(a.ActivityID), gap: 0, ref: trim_(a.Reference) };
+      return;
+    }
+    var gap = Math.min(Math.abs(dayGap_(date, s)), Math.abs(dayGap_(date, e)));
+    if (gap <= 14 && (!best || gap < best.gap)) best = { id: String(a.ActivityID), gap: gap, ref: trim_(a.Reference) };
+  });
+  if (!best) return { activityId: '', why: '' };
+  return { activityId: best.id,
+           why: best.gap === 0 ? 'the date falls inside ' + best.ref
+                               : best.ref + ' is ' + best.gap + ' day(s) away' };
+}
+function dayGap_(a, b) {
+  return Math.round((new Date(a).getTime() - new Date(b).getTime()) / 86400000);
 }
 
 var EXPENSE_CATEGORIES = ['Airfare / transport', 'Accommodation', 'Local transport / transfer',
