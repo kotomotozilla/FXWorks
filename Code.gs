@@ -27,13 +27,13 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.205';
+const BUILD = '2026-08-08.206';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
                  queue: 'ParseQueue', queueText: 'ParseQueueText', queueFile: 'ParseQueueFile',
                  signatures: 'Signatures', invoiceQueue: 'InvoiceQueue', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries',
-                 trips: 'Trips', expenses: 'Expenses', expenseFiles: 'ExpenseFiles' };
+                 activities: 'Activities', expenses: 'Expenses', expenseFiles: 'ExpenseFiles' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt', 'OrgID'],
@@ -100,15 +100,19 @@ const HEADERS = {
                 'OverrunApprovedBy', 'OverrunApprovedAt', 'OverrunPdfID', 'OverrunPdfUrl',
                 'PayoutFxRate', 'PayoutFxAsOf', 'PayoutEstimate', 'OrgID', 'OrgID'],
   entries:     ['EntryID', 'AssignmentID', 'ProjectID', 'ProjectName', 'EmployeeEmail', 'ActivityDescription', 'CreatedAt', 'OrgID'],
-  // A trip is the heading a group of expense lines hangs from; the lines themselves carry
-  // the money, and may equally hang from a project or from nothing.
-  trips:       ['TripID', 'Reference', 'Status', 'RequestedBy', 'Purpose', 'CounterpartyID', 'Counterparty',
-                'Destinations', 'ProjectID', 'StartDate', 'EndDate', 'ActualStart', 'ActualEnd',
+  // An activity is the heading a group of expense lines hangs from — a trip today, an
+  // exhibition or a conference on the same shape later. The lines carry the money, and may
+  // equally hang from a project or from nothing.
+  activities:  ['ActivityID', 'Type', 'Reference', 'Status', 'RequestedBy', 'Purpose', 'CounterpartyID',
+                'Counterparty', 'Destinations', 'ProjectID', 'StartDate', 'EndDate', 'ActualStart', 'ActualEnd',
                 'EstimatedCost', 'Currency', 'ReportDate', 'Activities', 'Meetings', 'Notes', 'ReportNotes',
                 'NoPersonal', 'ReportPdfID', 'ReportPdfUrl', 'ReportPdfAt', 'Source', 'CreatedAt', 'OrgID'],
-  expenses:    ['ExpenseID', 'Date', 'Category', 'Supplier', 'Description', 'Amount', 'Currency',
-                'AmountUSD', 'FxRate', 'FxAsOf', 'PaidBy', 'PaidByName', 'ParentType', 'ParentID',
-                'ProjectID', 'ReimbursementID', 'ReimbursedAt', 'Source', 'CreatedAt', 'OrgID'],
+  // ServiceFrom/ServiceTo: a hotel over a month end or a year of insurance paid at once
+  // belongs to the period of the service, not to the day the card was charged.
+  expenses:    ['ExpenseID', 'Date', 'ServiceFrom', 'ServiceTo', 'Category', 'Supplier', 'Description',
+                'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'PaidBy', 'PaidByName',
+                'ParentType', 'ParentID', 'ProjectID', 'ReimbursementID', 'ReimbursedAt',
+                'Source', 'CreatedAt', 'OrgID'],
   // Which file proves which line. Kept apart from the attachment's own parent: one folio
   // covers several lines, and a line can be proved by more than one document.
   expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'Role', 'CreatedAt', 'OrgID']
@@ -247,8 +251,9 @@ function route_(action, d) {
     case 'unlink_expense_file':return unlinkExpenseFile_(d);
     case 'expense_file_role':  return setExpenseFileRole_(d);
     case 'save_trip_destinations': return saveTripDestinations_(d);
-    case 'save_trip':          return saveTrip_(d);
-    case 'delete_trip':        return deleteTrip_(d);
+    case 'save_activity':      return saveActivity_(d);
+    case 'save_activity_report': return saveActivityReport_(d);
+    case 'delete_activity':    return deleteActivity_(d);
     case 'save_expense':       return saveExpense_(d);
     case 'delete_expense':     return deleteExpense_(d);
     case 'fxexp_scan':         return fxexpScan_(d);
@@ -450,7 +455,7 @@ function adminAddAttachment_(d) {
 }
 function attachType_(t) {
   t = trim_(t);
-  return (t === 'invoice' || t === 'counterparty' || t === 'trip' || t === 'expense') ? t : 'contract';
+  return (t === 'invoice' || t === 'counterparty' || t === 'activity' || t === 'expense') ? t : 'contract';
 }
 var DOC_TYPES = ['signed', 'draft', 'annex', 'amendment', 'other'];
 function attachDocType_(t) { t = trim_(t).toLowerCase(); return DOC_TYPES.indexOf(t) >= 0 ? t : 'other'; }
@@ -6151,23 +6156,73 @@ function setup() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Travel and expenses
-// A trip is a heading, not a wallet: the money sits in expense lines, and a line belongs
-// just as easily to a project or to nothing at all. A line and the file that proves it are
-// linked separately — one hotel folio often covers several lines, and a photo usually
-// arrives before anybody types the line it belongs to.
+// Activities and expenses
+// An activity is a heading a group of expense lines hangs from, and a trip is one kind of
+// it — an exhibition, a conference or a demonstration is the same shape with different
+// fields showing. The money sits in the lines; a line belongs just as easily to a project
+// or to nothing at all. What proves a line is recorded separately again: one flight is one
+// expense with a ticket, a boarding pass and an invoice behind it.
 // ─────────────────────────────────────────────────────────────────────────────
+var ACTIVITY_TYPES = ['trip', 'exhibition', 'conference', 'demonstration', 'other'];
+function activityType_(v) { v = trim_(v).toLowerCase(); return ACTIVITY_TYPES.indexOf(v) >= 0 ? v : 'trip'; }
+
 var EXPENSE_PAID_BY = ['company', 'personal'];
+function paidBy_(v) { v = trim_(v).toLowerCase(); return EXPENSE_PAID_BY.indexOf(v) >= 0 ? v : 'company'; }
+
 // One expense is often proved by several documents at once — a flight by the ticket, the
 // boarding pass and the airline's invoice. The role says which of them a file is, so a
 // glance at a line shows not just that something is attached but what is missing.
 var EXPENSE_FILE_ROLES = ['ticket', 'boarding', 'invoice', 'receipt', 'statement', 'other'];
 function fileRole_(v) { v = trim_(v).toLowerCase(); return EXPENSE_FILE_ROLES.indexOf(v) >= 0 ? v : 'other'; }
-function paidBy_(v) { v = trim_(v).toLowerCase(); return EXPENSE_PAID_BY.indexOf(v) >= 0 ? v : 'company'; }
 
-// Reads an FXExp export — the array the old app's "Export data" button writes out. Nothing
-// is written here: the preview and the migration read it the same way, so what the preview
-// promises is exactly what gets carried over.
+// The sheet began life as "Trips" with a TripID column, and the expense and attachment rows
+// pointed at it with ParentType 'trip'. Renaming in place keeps every id valid — only the
+// words change — and the flag makes sure it happens once.
+var ACT_READY = false;
+function ensureActivities_() {
+  if (ACT_READY) return;
+  ACT_READY = true;
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('activities_migrated') === 'yes') return;
+  var ss = ss_();
+  if (!ss.getSheetByName(SHEETS.activities)) {
+    var old = ss.getSheetByName('Trips');
+    if (old) {
+      old.setName(SHEETS.activities);
+      var lastCol = old.getLastColumn();
+      if (lastCol > 0) {
+        var head = old.getRange(1, 1, 1, lastCol).getValues()[0];
+        var i = head.indexOf('TripID');
+        if (i >= 0) old.getRange(1, i + 1).setValue('ActivityID');
+      }
+      invalidateCache_(SHEETS.activities);
+      delete SHEET_HANDLES[SHEETS.activities];
+      delete SHEET_CHECKED[SHEETS.activities];
+    }
+  }
+  retypeParents_(SHEETS.expenses);
+  retypeParents_(SHEETS.attachments);
+  props.setProperty('activities_migrated', 'yes');
+}
+
+// Written as a column, not row by row: a few dozen rows here, but the same pass would be
+// minutes of Sheets calls on a full year of receipts.
+function retypeParents_(name) {
+  var sh = getSheet_(name);
+  if (sh.getLastRow() < 2) return;
+  var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  var col = head.indexOf('ParentType');
+  if (col < 0) return;
+  var range = sh.getRange(2, col + 1, sh.getLastRow() - 1, 1), values = range.getValues(), touched = false;
+  for (var i = 0; i < values.length; i++) {
+    if (trim_(values[i][0]) === 'trip') { values[i][0] = 'activity'; touched = true; }
+  }
+  if (touched) { range.setValues(values); invalidateCache_(name); }
+}
+
+// ── Reading an FXExp export ──────────────────────────────────────────────────
+// Nothing is written here: the preview and the migration read it the same way, so what the
+// preview promises is exactly what gets carried over.
 function fxexpParse_(raw) {
   var data = raw;
   if (typeof data === 'string') {
@@ -6234,9 +6289,10 @@ function fxexpParse_(raw) {
 
 function fxexpScan_(d) {
   requireAdmin_(d);
+  ensureActivities_();
   var trips = fxexpParse_(d.json);
   var have = {};
-  readAll_(SHEETS.trips).forEach(function (r) { var ref = trim_(r.Reference); if (ref) have[ref] = true; });
+  readAll_(SHEETS.activities).forEach(function (r) { var ref = trim_(r.Reference); if (ref) have[ref] = true; });
   var rows = [], totals = {}, nExp = 0, nAtt = 0, fresh = 0;
   trips.forEach(function (t) {
     var known = !!have[t.reference];
@@ -6255,21 +6311,22 @@ function fxexpScan_(d) {
                      expenses: nExp, attachments: nAtt } };
 }
 
-// Writes what the preview showed. A trip already carried over is left alone, so running this
-// a second time adds nothing — which is what makes it safe to do in pieces.
+// Writes what the preview showed. An activity already carried over is left alone, so running
+// this a second time adds nothing — which is what makes it safe to do in pieces.
 function fxexpMigrate_(d) {
   requireAdmin_(d);
+  ensureActivities_();
   var trips = fxexpParse_(d.json), makePrivate = truthy_(d.makePrivate);
   var have = {};
-  readAll_(SHEETS.trips).forEach(function (r) { var ref = trim_(r.Reference); if (ref) have[ref] = true; });
+  readAll_(SHEETS.activities).forEach(function (r) { var ref = trim_(r.Reference); if (ref) have[ref] = true; });
   var now = new Date().toISOString();
   var made = { trips: 0, expenses: 0, attachments: 0, skipped: 0, privatised: 0 }, problems = [];
   USD_RATE_CACHE = {};
   trips.forEach(function (t) {
     if (have[t.reference]) { made.skipped++; return; }
-    var tripId = Utilities.getUuid();
-    appendRow_(SHEETS.trips, {
-      TripID: tripId, Reference: t.reference, Status: t.status,
+    var actId = Utilities.getUuid();
+    appendRow_(SHEETS.activities, {
+      ActivityID: actId, Type: 'trip', Reference: t.reference, Status: t.status,
       RequestedBy: t.requestedBy || CONFIG.DEFAULT_SIGNATORY,
       Purpose: t.purpose, Counterparty: t.counterparty, Destinations: t.destinations,
       StartDate: t.startDate, EndDate: t.endDate, ActualStart: t.actualStart, ActualEnd: t.actualEnd,
@@ -6281,13 +6338,14 @@ function fxexpMigrate_(d) {
     t.expenses.forEach(function (x) {
       var fx = computeFx_(x.currency, x.amount, x.date);
       appendRow_(SHEETS.expenses, {
-        ExpenseID: Utilities.getUuid(), Date: x.date, Category: x.category, Supplier: x.supplier,
+        ExpenseID: Utilities.getUuid(), Date: x.date, ServiceFrom: '', ServiceTo: '',
+        Category: x.category, Supplier: x.supplier,
         Description: '', Amount: x.amount, Currency: x.currency,
         AmountUSD: fx.AmountUSD, FxRate: fx.FxRate, FxAsOf: fx.FxAsOf,
         // The old app never asked who paid, and it was the company card every time bar one or
         // two. Recorded as such, and correctable on the line.
         PaidBy: 'company', PaidByName: '',
-        ParentType: 'trip', ParentID: tripId, ProjectID: '',
+        ParentType: 'activity', ParentID: actId, ProjectID: '',
         Source: 'fxexp', CreatedAt: now
       });
       made.expenses++;
@@ -6306,7 +6364,7 @@ function fxexpMigrate_(d) {
         } catch (e) { problems.push((name || fileId) + ' — no longer in Drive, recorded as a link only'); }
       }
       appendRow_(SHEETS.attachments, {
-        AttachmentID: Utilities.getUuid(), ParentType: 'trip', ParentID: tripId,
+        AttachmentID: Utilities.getUuid(), ParentType: 'activity', ParentID: actId,
         FileName: name, Description: a.description, DocType: 'other',
         DocDate: t.reportDate || t.endDate || t.startDate || '', IsCurrent: 'no',
         DriveFileID: fileId, Url: url, CreatedAt: now
@@ -6317,34 +6375,188 @@ function fxexpMigrate_(d) {
   return { ok: true, made: made, problems: problems };
 }
 
+// ── Reading ──────────────────────────────────────────────────────────────────
+function travelList_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var files = readAll_(SHEETS.attachments).filter(function (a) {
+    var p = trim_(a.ParentType);
+    return p === 'activity' || p === 'expense';
+  });
+  return { ok: true, activities: readAll_(SHEETS.activities), expenses: readAll_(SHEETS.expenses),
+           links: readAll_(SHEETS.expenseFiles), files: files };
+}
+
+// ── Raising an activity, then reporting on it ────────────────────────────────
+// Two moments, two forms: what is planned, and what actually happened. The status follows
+// from the second being filled in rather than being set by hand and drifting out of step.
+function activitySlug_(s) {
+  return trim_(s).split(/[,;\/]+/).map(function (p) { return trim_(p).replace(/\s+/g, ''); })
+    .filter(function (p) { return !!p; }).join('-');
+}
+function makeActivityRef_(dateStr, destinations, excludeId) {
+  var d = trim_(dateStr) || new Date().toISOString().slice(0, 10);
+  var slug = activitySlug_(destinations);
+  var base = d.replace(/-/g, '') + (slug ? '-' + slug : '');
+  var all = readAll_(SHEETS.activities), ref = base, n = 1;
+  var taken = function (candidate) {
+    return all.some(function (t) {
+      return trim_(t.Reference) === candidate && String(t.ActivityID) !== String(excludeId || '');
+    });
+  };
+  while (taken(ref)) { n++; ref = base + '-' + n; }
+  return ref;
+}
+
+function saveActivity_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var id = trim_(d.activityId);
+  var f = {
+    Type: activityType_(d.type),
+    Purpose: trim_(d.purpose),
+    Counterparty: trim_(d.counterparty),
+    Destinations: trim_(d.destinations),
+    ProjectID: trim_(d.projectId),
+    StartDate: trim_(d.startDate), EndDate: trim_(d.endDate),
+    EstimatedCost: (d.estimatedCost === '' || d.estimatedCost == null) ? '' : num_(d.estimatedCost),
+    Currency: trim_(d.currency).toUpperCase(),
+    Notes: trim_(d.notes)
+  };
+  if (f.StartDate && f.EndDate && f.EndDate < f.StartDate) return { ok: false, error: 'The end date is before the start date' };
+  if (id) {
+    var cur = findRow_(SHEETS.activities, 'ActivityID', id);
+    if (!cur) return { ok: false, error: 'Activity not found' };
+    f.Reference = trim_(d.reference) || trim_(cur.Reference) || makeActivityRef_(f.StartDate, f.Destinations, id);
+    updateRow_(SHEETS.activities, 'ActivityID', id, f);
+    return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id) };
+  }
+  f.ActivityID = Utilities.getUuid();
+  f.Reference = trim_(d.reference) || makeActivityRef_(f.StartDate, f.Destinations, '');
+  f.Status = 'Requested';
+  f.RequestedBy = trim_(d.requestedBy) || CONFIG.DEFAULT_SIGNATORY;
+  f.Source = 'manual';
+  f.CreatedAt = new Date().toISOString();
+  appendRow_(SHEETS.activities, f);
+  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', f.ActivityID) };
+}
+
+function saveActivityReport_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var id = trim_(d.activityId);
+  var cur = findRow_(SHEETS.activities, 'ActivityID', id);
+  if (!cur) return { ok: false, error: 'Activity not found' };
+  var f = {
+    ActualStart: trim_(d.actualStart), ActualEnd: trim_(d.actualEnd),
+    ReportDate: trim_(d.reportDate),
+    Activities: trim_(d.activities), Meetings: trim_(d.meetings),
+    ReportNotes: trim_(d.reportNotes),
+    NoPersonal: truthy_(d.noPersonal) ? 'yes' : '',
+    RequestedBy: trim_(d.requestedBy) || trim_(cur.RequestedBy) || CONFIG.DEFAULT_SIGNATORY
+  };
+  if (f.ActualStart && f.ActualEnd && f.ActualEnd < f.ActualStart) return { ok: false, error: 'The end date is before the start date' };
+  // Reported is what the record shows, not what somebody remembered to tick.
+  f.Status = (f.ReportDate || f.Activities || f.ActualEnd) ? 'Reported' : 'Requested';
+  updateRow_(SHEETS.activities, 'ActivityID', id, f);
+  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id) };
+}
+
+function deleteActivity_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var id = trim_(d.activityId);
+  if (!findRow_(SHEETS.activities, 'ActivityID', id)) return { ok: false, error: 'Activity not found' };
+  var lines = readAll_(SHEETS.expenses).filter(function (x) {
+    return trim_(x.ParentType) === 'activity' && String(x.ParentID) === String(id);
+  });
+  var files = readAll_(SHEETS.attachments).filter(function (a) {
+    return trim_(a.ParentType) === 'activity' && String(a.ParentID) === String(id);
+  });
+  if (lines.length || files.length) {
+    return { ok: false, error: 'This still holds ' + lines.length + ' expense line(s) and '
+             + files.length + ' file(s). Remove those first.' };
+  }
+  deleteRowsWhere_(SHEETS.activities, 'ActivityID', id);
+  return { ok: true };
+}
+
 // The old app wrote destinations however they were typed — semicolons in one record, bare
-// spaces in another. Corrected in one pass here rather than worked around everywhere a trip
-// is read or grouped.
+// spaces in another. Corrected in one pass rather than worked around everywhere.
 function saveTripDestinations_(d) {
   requireAdmin_(d);
+  ensureActivities_();
   var rows = Array.isArray(d.trips) ? d.trips : [];
   var saved = 0, missed = [];
   rows.forEach(function (r) {
-    var id = trim_(r.tripId), value = trim_(r.destinations);
+    var id = trim_(r.tripId) || trim_(r.activityId), value = trim_(r.destinations);
     if (!id) return;
-    if (updateRow_(SHEETS.trips, 'TripID', id, { Destinations: value })) saved++;
+    if (updateRow_(SHEETS.activities, 'ActivityID', id, { Destinations: value })) saved++;
     else missed.push(id);
   });
   return { ok: true, saved: saved, missed: missed };
 }
 
-function travelList_(d) {
+// ── Expense lines ────────────────────────────────────────────────────────────
+function expenseParent_(t) { t = trim_(t).toLowerCase(); return (t === 'activity' || t === 'project') ? t : 'none'; }
+
+function saveExpense_(d) {
   requireAdmin_(d);
-  var files = readAll_(SHEETS.attachments).filter(function (a) {
-    var p = trim_(a.ParentType);
-    return p === 'trip' || p === 'expense';
-  });
-  return { ok: true, trips: readAll_(SHEETS.trips), expenses: readAll_(SHEETS.expenses),
-           links: readAll_(SHEETS.expenseFiles), files: files };
+  ensureActivities_();
+  var id = trim_(d.expenseId);
+  var parentType = expenseParent_(d.parentType);
+  var parentId = (parentType === 'none') ? '' : trim_(d.parentId);
+  if (parentType !== 'none' && !parentId) return { ok: false, error: 'Pick what this expense belongs to' };
+  var date = trim_(d.date) || new Date().toISOString().slice(0, 10);
+  // When the service spans dates of its own — a hotel over a month end, a year of insurance
+  // paid at once — the period is what the audit reads, not the day the card was charged.
+  var from = trim_(d.serviceFrom), to = trim_(d.serviceTo);
+  if (from && to && to < from) return { ok: false, error: 'The service ends before it starts' };
+  var currency = trim_(d.currency).toUpperCase() || 'USD';
+  var amount = num_(d.amount);
+  USD_RATE_CACHE = {};
+  var fx = computeFx_(currency, amount, date);
+
+  var projectId = trim_(d.projectId);
+  // A line under an activity belongs to whatever that is for, unless it says otherwise.
+  if (!projectId && parentType === 'activity') {
+    var a = findRow_(SHEETS.activities, 'ActivityID', parentId);
+    if (a) projectId = trim_(a.ProjectID);
+  }
+  if (parentType === 'project') projectId = parentId;
+
+  var f = {
+    Date: date, ServiceFrom: from, ServiceTo: to,
+    Category: trim_(d.category) || 'Other', Supplier: trim_(d.supplier),
+    Description: trim_(d.description), Amount: amount, Currency: currency,
+    AmountUSD: fx.AmountUSD, FxRate: fx.FxRate, FxAsOf: fx.FxAsOf,
+    PaidBy: paidBy_(d.paidBy), PaidByName: trim_(d.paidByName),
+    ParentType: parentType, ParentID: parentId, ProjectID: projectId
+  };
+  if (id) {
+    if (!findRow_(SHEETS.expenses, 'ExpenseID', id)) return { ok: false, error: 'Expense not found' };
+    updateRow_(SHEETS.expenses, 'ExpenseID', id, f);
+    return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', id) };
+  }
+  f.ExpenseID = Utilities.getUuid();
+  f.Source = 'manual';
+  f.CreatedAt = new Date().toISOString();
+  appendRow_(SHEETS.expenses, f);
+  return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', f.ExpenseID) };
 }
 
-// What a file proves is recorded apart from where it is stored: the attachment keeps its own
-// parent, and this says which lines it covers.
+// The line goes; the files it pointed at stay, since the same document often proves another
+// line as well. Only the pointers are cleared.
+function deleteExpense_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.expenseId);
+  if (!findRow_(SHEETS.expenses, 'ExpenseID', id)) return { ok: false, error: 'Expense not found' };
+  deleteRowsWhere_(SHEETS.expenseFiles, 'ExpenseID', id);
+  deleteRowsWhere_(SHEETS.expenses, 'ExpenseID', id);
+  return { ok: true };
+}
+
+// ── What proves what ─────────────────────────────────────────────────────────
 function linkExpenseFile_(d) {
   requireAdmin_(d);
   var expenseId = trim_(d.expenseId), attachmentId = trim_(d.attachmentId);
@@ -6381,135 +6593,4 @@ function unlinkExpenseFile_(d) {
   var id = trim_(d.linkId);
   if (!id) return { ok: false, error: 'Missing link' };
   return { ok: true, removed: deleteRowsWhere_(SHEETS.expenseFiles, 'LinkID', id) };
-}
-
-// ── Entering and editing trips and expense lines ─────────────────────────────
-// The reference is built the way the old app built it — the date the trip was raised and
-// where it went — because that is what the paper file and the Drive file names already use.
-function tripSlug_(s) {
-  return trim_(s).split(/[,;\/]+/).map(function (p) { return trim_(p).replace(/\s+/g, ''); })
-    .filter(function (p) { return !!p; }).join('-');
-}
-function makeTripRef_(dateStr, destinations, excludeId) {
-  var d = trim_(dateStr) || new Date().toISOString().slice(0, 10);
-  var slug = tripSlug_(destinations);
-  var base = d.replace(/-/g, '') + (slug ? '-' + slug : '');
-  var all = readAll_(SHEETS.trips), ref = base, n = 1;
-  var taken = function (candidate) {
-    return all.some(function (t) {
-      return trim_(t.Reference) === candidate && String(t.TripID) !== String(excludeId || '');
-    });
-  };
-  while (taken(ref)) { n++; ref = base + '-' + n; }
-  return ref;
-}
-
-function tripFields_(d) {
-  return {
-    Status: trim_(d.status) || 'Requested',
-    RequestedBy: trim_(d.requestedBy) || CONFIG.DEFAULT_SIGNATORY,
-    Purpose: trim_(d.purpose),
-    CounterpartyID: trim_(d.counterpartyId),
-    Counterparty: trim_(d.counterparty),
-    Destinations: trim_(d.destinations),
-    ProjectID: trim_(d.projectId),
-    StartDate: trim_(d.startDate), EndDate: trim_(d.endDate),
-    ActualStart: trim_(d.actualStart), ActualEnd: trim_(d.actualEnd),
-    EstimatedCost: (d.estimatedCost === '' || d.estimatedCost == null) ? '' : num_(d.estimatedCost),
-    Currency: trim_(d.currency).toUpperCase(),
-    ReportDate: trim_(d.reportDate),
-    Activities: trim_(d.activities), Meetings: trim_(d.meetings),
-    Notes: trim_(d.notes), ReportNotes: trim_(d.reportNotes),
-    NoPersonal: truthy_(d.noPersonal) ? 'yes' : ''
-  };
-}
-
-function saveTrip_(d) {
-  requireAdmin_(d);
-  var id = trim_(d.tripId), f = tripFields_(d);
-  if (id) {
-    var cur = findRow_(SHEETS.trips, 'TripID', id);
-    if (!cur) return { ok: false, error: 'Trip not found' };
-    f.Reference = trim_(d.reference) || trim_(cur.Reference) || makeTripRef_(f.StartDate, f.Destinations, id);
-    updateRow_(SHEETS.trips, 'TripID', id, f);
-    return { ok: true, trip: findRow_(SHEETS.trips, 'TripID', id) };
-  }
-  f.TripID = Utilities.getUuid();
-  f.Reference = trim_(d.reference) || makeTripRef_(f.StartDate, f.Destinations, '');
-  f.Source = 'manual';
-  f.CreatedAt = new Date().toISOString();
-  appendRow_(SHEETS.trips, f);
-  return { ok: true, trip: findRow_(SHEETS.trips, 'TripID', f.TripID) };
-}
-
-// Nothing is deleted from under a trip by deleting the trip: the lines and the files are the
-// evidence, and losing them to one mistaken click is not a trade worth making.
-function deleteTrip_(d) {
-  requireAdmin_(d);
-  var id = trim_(d.tripId);
-  if (!findRow_(SHEETS.trips, 'TripID', id)) return { ok: false, error: 'Trip not found' };
-  var lines = readAll_(SHEETS.expenses).filter(function (x) {
-    return trim_(x.ParentType) === 'trip' && String(x.ParentID) === String(id);
-  });
-  var files = readAll_(SHEETS.attachments).filter(function (a) {
-    return trim_(a.ParentType) === 'trip' && String(a.ParentID) === String(id);
-  });
-  if (lines.length || files.length) {
-    return { ok: false, error: 'This trip still holds ' + lines.length + ' expense line(s) and '
-             + files.length + ' file(s). Remove those first.' };
-  }
-  deleteRowsWhere_(SHEETS.trips, 'TripID', id);
-  return { ok: true };
-}
-
-function expenseParent_(t) { t = trim_(t).toLowerCase(); return (t === 'trip' || t === 'project') ? t : 'none'; }
-
-function saveExpense_(d) {
-  requireAdmin_(d);
-  var id = trim_(d.expenseId);
-  var parentType = expenseParent_(d.parentType);
-  var parentId = (parentType === 'none') ? '' : trim_(d.parentId);
-  if (parentType !== 'none' && !parentId) return { ok: false, error: 'Pick what this expense belongs to' };
-  var date = trim_(d.date) || new Date().toISOString().slice(0, 10);
-  var currency = trim_(d.currency).toUpperCase() || 'USD';
-  var amount = num_(d.amount);
-  USD_RATE_CACHE = {};
-  var fx = computeFx_(currency, amount, date);
-
-  var projectId = trim_(d.projectId);
-  // A line under a trip belongs to whatever the trip is for, unless it says otherwise itself.
-  if (!projectId && parentType === 'trip') {
-    var t = findRow_(SHEETS.trips, 'TripID', parentId);
-    if (t) projectId = trim_(t.ProjectID);
-  }
-  if (parentType === 'project') projectId = parentId;
-
-  var f = {
-    Date: date, Category: trim_(d.category) || 'Other', Supplier: trim_(d.supplier),
-    Description: trim_(d.description), Amount: amount, Currency: currency,
-    AmountUSD: fx.AmountUSD, FxRate: fx.FxRate, FxAsOf: fx.FxAsOf,
-    PaidBy: paidBy_(d.paidBy), PaidByName: trim_(d.paidByName),
-    ParentType: parentType, ParentID: parentId, ProjectID: projectId
-  };
-  if (id) {
-    if (!findRow_(SHEETS.expenses, 'ExpenseID', id)) return { ok: false, error: 'Expense not found' };
-    updateRow_(SHEETS.expenses, 'ExpenseID', id, f);
-    return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', id) };
-  }
-  f.ExpenseID = Utilities.getUuid();
-  f.Source = 'manual';
-  f.CreatedAt = new Date().toISOString();
-  appendRow_(SHEETS.expenses, f);
-  return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', f.ExpenseID) };
-}
-
-// The line goes; the files it pointed at stay, since the same document often proves another
-// line as well. Only the pointers are cleared.
-function deleteExpense_(d) {
-  requireAdmin_(d);
-  var id = trim_(d.expenseId);
-  if (!findRow_(SHEETS.expenses, 'ExpenseID', id)) return { ok: false, error: 'Expense not found' };
-  deleteRowsWhere_(SHEETS.expenseFiles, 'ExpenseID', id);
-  deleteRowsWhere_(SHEETS.expenses, 'ExpenseID', id);
-  return { ok: true };
 }

@@ -33,6 +33,9 @@
   .trvfiles input[type=checkbox]{width:18px;height:18px;min-width:18px;flex:0 0 18px;
                   padding:0;margin:0;border-radius:4px;accent-color:var(--accent)}
   .trvfiles a{flex:0 0 auto;font-size:12px;white-space:nowrap}
+  .trvrow td input,.trvrow td select{padding:6px 8px;font-size:13px;border-radius:8px}
+  .trvrow tr.trvedit td{background:#F7F9FB;vertical-align:top}
+  .trvrow td input[type=date]{min-width:120px}
   input[type=file].hiddenfile{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;padding:0;border:0}
   .filebox{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .filebox .fname{font-size:13px;color:var(--muted);word-break:break-all}
@@ -440,9 +443,9 @@
     <section id="view-travel" class="hidden">
       <div class="panel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-          <h2>Trips and expenses</h2>
-          <div class="acts"><span id="trvTools"></span>
-            <button class="btn sm" onclick="newTrip()">+ New trip</button>
+          <h2>Activities and expenses</h2>
+          <div class="acts">
+            <button class="btn sm" onclick="newActivity()">+ New trip</button>
             <button class="btn ghost sm" onclick="travelLoad(this)">Refresh</button></div>
         </div>
         <div id="trvErr"></div>
@@ -453,9 +456,8 @@
       <div class="panel">
         <h2>Destinations</h2>
         <p class="muted">However they were typed in the old app — semicolons, commas, or nothing at all.
-          The suggestion below separates them with commas; where the old record ran the names together
-          with spaces there is nothing safe to split on (Abu Dhabi is one place, not two), so fix those
-          by hand. Only the lines you change are written.</p>
+          The suggestion separates them with commas; where the old record ran the names together with
+          spaces there is nothing safe to split on, so fix those by hand. Only changed lines are written.</p>
         <div id="trvDestErr"></div>
         <div id="trvDest"></div>
         <div style="height:10px"></div>
@@ -465,13 +467,13 @@
       <div class="panel">
         <h2>Bring the old records over</h2>
         <p class="muted">Open the travel app, press <b>Export data</b>, and paste the file here. Nothing is
-          written until you press Migrate, and a trip already carried over is skipped — so this can be done
-          in pieces, or repeated after the old app gathers a few more records.</p>
+          written until you press Migrate, and a trip already carried over is skipped.</p>
         <div id="trvMigErr"></div>
         <textarea id="trvJson" rows="6" placeholder="paste the exported JSON here" style="width:100%"></textarea>
         <div style="height:8px"></div>
         <label style="display:flex;gap:8px;align-items:center;font-weight:400">
-          <input id="trvPrivate" type="checkbox" checked> Close public link access on the Drive files
+          <input id="trvPrivate" type="checkbox" checked style="width:18px;height:18px;flex:0 0 18px;padding:0;margin:0">
+          Close public link access on the Drive files
         </label>
         <div style="height:10px"></div>
         <div class="acts">
@@ -538,74 +540,34 @@
 </div></div>
 
 <!-- Report editor modal -->
-<div id="trModal" class="modal hidden"><div class="box">
-  <h2><span id="tr_title">Trip</span><button class="x" onclick="closeModal('trModal')">×</button></h2>
-  <div id="trFormErr"></div>
+<div id="acModal" class="modal hidden"><div class="box">
+  <h2><span id="ac_title">New trip</span><button class="x" onclick="closeModal('acModal')">×</button></h2>
+  <p class="muted" style="margin-top:0">The request: where, what for, roughly when, roughly how much.
+    What actually happened is filled in later, inside the trip.</p>
+  <div id="acFormErr"></div>
   <div class="row">
-    <div style="flex:1;min-width:200px"><label>Reference</label><input id="tr_ref" placeholder="left blank — built from the date and destinations"></div>
-    <div style="flex:0 0 150px"><label>Status</label><select id="tr_status">
-      <option value="Requested">Requested</option><option value="Reported">Reported</option></select></div>
+    <div style="flex:2;min-width:220px"><label>Destinations</label>
+      <input id="ac_dest" placeholder="Dubai, Amsterdam, Budapest"></div>
+    <div style="flex:1;min-width:180px"><label>Counterparty (optional)</label>
+      <input id="ac_cp" placeholder="who is being met"></div>
+  </div>
+  <div><label>Purpose</label><textarea id="ac_purpose" rows="3" placeholder="what the trip is for"></textarea></div>
+  <div class="row">
+    <div style="flex:1;min-width:150px"><label>Planned from</label><input id="ac_start" type="date"></div>
+    <div style="flex:1;min-width:150px"><label>Planned to</label><input id="ac_end" type="date"></div>
+    <div style="flex:0 0 150px"><label>Budget</label><input id="ac_est" type="number" step="0.01"></div>
+    <div style="flex:0 0 110px"><label>Currency</label><select id="ac_cur"></select></div>
   </div>
   <div class="row">
-    <div style="flex:2;min-width:220px"><label>Destinations</label><input id="tr_dest" placeholder="Dubai, Amsterdam, Budapest"></div>
-    <div style="flex:1;min-width:180px"><label>Counterparty</label><input id="tr_cp" placeholder="who was met"></div>
+    <div style="flex:1;min-width:200px"><label>Project</label><select id="ac_project"></select></div>
+    <div style="flex:1;min-width:200px"><label>Reference</label>
+      <input id="ac_ref" placeholder="left blank — built from the date and destinations"></div>
   </div>
-  <div><label>Purpose</label><textarea id="tr_purpose" rows="2"></textarea></div>
-  <div class="row">
-    <div style="flex:1;min-width:160px"><label>Project</label><select id="tr_project"></select></div>
-    <div style="flex:0 0 150px"><label>Estimate</label><input id="tr_est" type="number" step="0.01"></div>
-    <div style="flex:0 0 120px"><label>Currency</label><select id="tr_cur"></select></div>
-  </div>
-  <div class="row">
-    <div style="flex:1;min-width:150px"><label>Planned from</label><input id="tr_start" type="date"></div>
-    <div style="flex:1;min-width:150px"><label>Planned to</label><input id="tr_end" type="date"></div>
-    <div style="flex:1;min-width:150px"><label>Actually from</label><input id="tr_astart" type="date"></div>
-    <div style="flex:1;min-width:150px"><label>Actually to</label><input id="tr_aend" type="date"></div>
-  </div>
-  <div class="row">
-    <div style="flex:1;min-width:150px"><label>Report date</label><input id="tr_repdate" type="date"></div>
-    <div style="flex:2;min-width:200px"><label>Requested by</label><input id="tr_by"></div>
-  </div>
-  <div><label>What was done</label><textarea id="tr_act" rows="3"></textarea></div>
-  <div><label>Who was met</label><textarea id="tr_meet" rows="2"></textarea></div>
-  <div class="row">
-    <div style="flex:1;min-width:220px"><label>Notes on the request</label><textarea id="tr_notes" rows="2"></textarea></div>
-    <div style="flex:1;min-width:220px"><label>Notes on the report</label><textarea id="tr_rnotes" rows="2"></textarea></div>
-  </div>
-  <label style="display:flex;gap:8px;align-items:center;font-weight:400">
-    <input id="tr_nopers" type="checkbox" style="width:18px;height:18px;flex:0 0 18px;padding:0;margin:0"> No personal legs on this trip
-  </label>
+  <div><label>Notes (optional)</label><textarea id="ac_notes" rows="2"></textarea></div>
   <div style="height:12px"></div>
   <div class="acts">
-    <button class="btn sm" onclick="saveTripForm(this)">Save</button>
-    <button class="btn ghost sm" onclick="closeModal('trModal')">Cancel</button>
-  </div>
-</div></div>
-
-<div id="exModal" class="modal top hidden"><div class="box">
-  <h2><span id="ex_title">Expense</span><button class="x" onclick="closeModal('exModal')">×</button></h2>
-  <div id="exFormErr"></div>
-  <div id="ex_where" class="muted" style="font-size:13px;margin-bottom:8px"></div>
-  <div class="row">
-    <div style="flex:0 0 160px"><label>Date</label><input id="ex_date" type="date"></div>
-    <div style="flex:1;min-width:180px"><label>Category</label><select id="ex_cat"></select></div>
-    <div style="flex:1;min-width:180px"><label>Supplier</label><input id="ex_sup"></div>
-  </div>
-  <div class="row">
-    <div style="flex:0 0 160px"><label>Amount</label><input id="ex_amt" type="number" step="0.01"></div>
-    <div style="flex:0 0 120px"><label>Currency</label><select id="ex_cur"></select></div>
-    <div style="flex:0 0 160px"><label>Paid by</label><select id="ex_paid">
-      <option value="company">Company</option><option value="personal">Personally</option></select></div>
-    <div style="flex:1;min-width:160px"><label>Who paid (if personally)</label><input id="ex_paidname"></div>
-  </div>
-  <div class="row">
-    <div style="flex:1;min-width:180px"><label>Project</label><select id="ex_project"></select></div>
-    <div style="flex:2;min-width:220px"><label>Description</label><input id="ex_desc"></div>
-  </div>
-  <div style="height:12px"></div>
-  <div class="acts">
-    <button class="btn sm" onclick="saveExpenseForm(this)">Save</button>
-    <button class="btn ghost sm" onclick="closeModal('exModal')">Cancel</button>
+    <button class="btn sm" onclick="saveActivityForm(this)">Save</button>
+    <button class="btn ghost sm" onclick="closeModal('acModal')">Cancel</button>
   </div>
 </div></div>
 
@@ -1159,7 +1121,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.205';
+const BUILD = '2026-08-08.206';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5884,23 +5846,40 @@ async function loadData(){
   if(APPS_SCRIPT_URL.startsWith('PASTE')){ notice('gateErr','err','APPS_SCRIPT_URL is not configured in admin.html.'); }
   if(PIN){ enterApp(); }
 })();
-// ── Trips and expenses ───────────────────────────────────────────────────────
+// ── Activities and expenses ──────────────────────────────────────────────────
 // A line without a file is the thing to look for, so the list counts those first.
-let TRAVEL = { trips:[], expenses:[], links:[], files:[] }, TRV_OPEN = '', TRV_PICK = '';
+let TRAVEL = { activities:[], expenses:[], links:[], files:[] };
+let TRV_OPEN = '', TRV_PICK = '', TRV_EDIT_EXP = '', TRV_EDIT_ACT = '';
 const TRV_ROLES = ['ticket','boarding','invoice','receipt','statement','other'];
+const TRV_CURRENCIES = ['USD','EUR','AED','GBP','HKD','THB','SGD','CHF','CZK','HUF','KZT'];
+const TRV_CATEGORIES = ['Airfare / transport','Accommodation','Local transport / transfer',
+                        'Visa / insurance','Meals','Other'];
+
 // The travel records carry currencies the rest of the system never sees — baht, Hong Kong
 // dollars, sterling. A missing symbol used to fall back to '$', which turned 109,289 baht
 // into a figure that read as dollars; the code is printed instead.
 function trvAmt(c, n){ c = String(c||'').toUpperCase(); return (SYM[c] ? SYM[c] : (c ? c+' ' : '')) + money(n); }
+function trvOpts(list, sel, esca){
+  const s = String(sel||''), all = list.slice();
+  if(s && all.indexOf(s) < 0) all.push(s);
+  return all.map(v=>`<option value="${esca?esc(v):v}" ${s===v?'selected':''}>${esc(v)}</option>`).join('');
+}
+function trvCurOptions(sel){ return trvOpts(TRV_CURRENCIES, String(sel||'').toUpperCase(), false); }
+function trvCatOptions(sel){ return trvOpts(TRV_CATEGORIES, sel, true); }
+function trvProjOptions(sel){
+  return '<option value="">— none —</option>' + (PROJECTS||[]).map(p=>
+    `<option value="${esc(p.ProjectID)}" ${String(sel)===String(p.ProjectID)?'selected':''}>${esc(p.Name||'')}</option>`).join('');
+}
+function trvProjName(id){ const p=(PROJECTS||[]).find(x=>String(x.ProjectID)===String(id)); return p?(p.Name||''):''; }
 
-function travelInit(){ if(!TRAVEL.trips.length || stale('travel')) travelLoad(); else travelRender(); }
+function travelInit(){ if(!TRAVEL.activities.length || stale('travel')) travelLoad(); else travelRender(); }
 
 async function travelLoad(btn){
   const done = busy(btn);
   try{
     const r = await api('list_travel');
     if(!r.ok) throw new Error(r.error||'Could not load');
-    TRAVEL = { trips:r.trips||[], expenses:r.expenses||[], links:r.links||[], files:r.files||[] };
+    TRAVEL = { activities:r.activities||[], expenses:r.expenses||[], links:r.links||[], files:r.files||[] };
     LOADED['travel'] = Date.now();
     notice('trvErr','','');
     travelRender();
@@ -5908,103 +5887,298 @@ async function travelLoad(btn){
   finally{ done(); }
 }
 
-function trvLinesOf(tripId){
-  return TRAVEL.expenses.filter(x=>String(x.ParentType)==='trip' && String(x.ParentID)===String(tripId))
+function trvLinesOf(actId){
+  return TRAVEL.expenses.filter(x=>String(x.ParentType)==='activity' && String(x.ParentID)===String(actId))
     .sort((a,b)=>String(a.Date||'').localeCompare(String(b.Date||'')));
 }
-function trvFilesOf(tripId){
-  const ids = {}; trvLinesOf(tripId).forEach(x=>ids[String(x.ExpenseID)]=1);
+function trvFilesOf(actId){
+  const ids = {}; trvLinesOf(actId).forEach(x=>ids[String(x.ExpenseID)]=1);
   return TRAVEL.files.filter(f=>{
-    if(String(f.ParentType)==='trip' && String(f.ParentID)===String(tripId)) return true;
+    if(String(f.ParentType)==='activity' && String(f.ParentID)===String(actId)) return true;
     return String(f.ParentType)==='expense' && ids[String(f.ParentID)];
   });
 }
 function trvLinksFor(expenseId){ return TRAVEL.links.filter(l=>String(l.ExpenseID)===String(expenseId)); }
 function trvFile(id){ return TRAVEL.files.find(f=>String(f.AttachmentID)===String(id)) || null; }
+function fname(f){ return f.Description||f.FileName||'file'; }
 function trvTotals(lines){
   const by = {}; lines.forEach(x=>{ const c=String(x.Currency||'—'); by[c]=(by[c]||0)+(+x.Amount||0); });
   return Object.keys(by).sort().map(c=>trvAmt(c, by[c])).join(' · ') || '—';
 }
 
-// Semicolons, slashes and stray spacing become one separator. Repeats are kept: Bangkok →
-// Singapore → Bangkok is a route, not a typo.
-function trvNormDest(s){
-  return String(s||'').replace(/[;|\/]+/g, ',').split(',')
-    .map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean).join(', ');
-}
-function trvRenderDest(){
-  const box = $('trvDest'); if(!box) return;
-  const trips = TRAVEL.trips.slice().sort((x,y)=>String(x.Reference||'').localeCompare(String(y.Reference||'')));
-  if(!trips.length){ box.innerHTML = '<div class="muted">Nothing to tidy yet.</div>'; return; }
-  box.innerHTML = '<div class="scroll"><table><thead><tr><th>Reference</th><th>As stored</th>'
-    + '<th>Suggested</th></tr></thead><tbody>'
-    + trips.map(t=>{
-        const now = String(t.Destinations||''), next = trvNormDest(now);
-        const odd = next && next.indexOf(',') < 0 && /\s/.test(next);
-        return `<tr><td>${esc(t.Reference||'')}</td><td class="muted">${esc(now)||'—'}</td>`
-          + `<td><input id="trvDest_${esc(t.TripID)}" value="${esc(next)}" style="width:100%">`
-          + (odd?`<div class="muted" style="font-size:12px">nothing to split on — separate by hand if this is more than one place</div>`:'')
-          + `</td></tr>`;
-      }).join('')
-    + '</tbody></table></div>';
-}
-
-async function trvSaveDest(btn){
-  const done = busy(btn);
-  try{
-    notice('trvDestErr','','');
-    const changed = [];
-    TRAVEL.trips.forEach(t=>{
-      const el = $('trvDest_'+t.TripID); if(!el) return;
-      const value = el.value.trim();
-      if(value !== String(t.Destinations||'')) changed.push({ tripId: t.TripID, destinations: value });
-    });
-    if(!changed.length){ notice('trvDestErr','ok','Nothing changed.'); return; }
-    const r = await api('save_trip_destinations',{ trips: changed });
-    if(!r.ok) throw new Error(r.error||'Could not save');
-    changed.forEach(ch=>{ const t = TRAVEL.trips.find(x=>String(x.TripID)===String(ch.tripId)); if(t) t.Destinations = ch.destinations; });
-    notice('trvDestErr','ok', r.saved+' trip(s) updated.');
-    travelRender();
-  }catch(e){ notice('trvDestErr','err',esc(e.message)); }
-  finally{ done(); }
-}
-
 function travelRender(){
   const t = $('trvTable'); if(!t) return;
-  const trips = TRAVEL.trips.slice().sort((a,b)=>String(b.StartDate||b.CreatedAt||'').localeCompare(String(a.StartDate||a.CreatedAt||'')));
+  const acts = TRAVEL.activities.slice().sort((a,b)=>
+    String(b.StartDate||b.CreatedAt||'').localeCompare(String(a.StartDate||a.CreatedAt||'')));
   const linked = {}; TRAVEL.links.forEach(l=>linked[String(l.AttachmentID)]=1);
   let noFile = 0, loose = 0;
   TRAVEL.expenses.forEach(x=>{ if(!trvLinksFor(x.ExpenseID).length) noFile++; });
   TRAVEL.files.forEach(f=>{ if(!linked[String(f.AttachmentID)]) loose++; });
-  $('trvSummary').innerHTML = trips.length
-    ? `${trips.length} trip(s) · ${TRAVEL.expenses.length} expense line(s) · ${TRAVEL.files.length} file(s)`
+  $('trvSummary').innerHTML = acts.length
+    ? `${acts.length} activity(ies) · ${TRAVEL.expenses.length} expense line(s) · ${TRAVEL.files.length} file(s)`
       + ` — <b>${noFile}</b> line(s) with nothing attached, <b>${loose}</b> file(s) not assigned to a line`
-    : 'Nothing here yet — migrate the old records below.';
+    : 'Nothing here yet — raise a trip above, or migrate the old records below.';
 
-  if(!trips.length){ t.innerHTML = '<tbody><tr><td class="empty">No trips</td></tr></tbody>'; trvRenderDest(); return; }
+  if(!acts.length){ t.innerHTML = '<tbody><tr><td class="empty">No activities</td></tr></tbody>'; trvRenderDest(); return; }
   let h = '<thead><tr><th>Reference</th><th>Dates</th><th>Destinations</th><th>Status</th>'
         + '<th class="num">Lines</th><th class="num">Spent</th><th class="num">Files</th><th></th></tr></thead><tbody>';
-  trips.forEach(tr=>{
-    const id = String(tr.TripID), lines = trvLinesOf(id), files = trvFilesOf(id);
+  acts.forEach(a=>{
+    const id = String(a.ActivityID), lines = trvLinesOf(id), files = trvFilesOf(id);
     const missing = lines.filter(x=>!trvLinksFor(x.ExpenseID).length).length;
-    h += `<tr><td><b>${esc(tr.Reference||'—')}</b></td>`
-       + `<td>${esc(fmtDate(tr.StartDate))}${tr.EndDate?' → '+esc(fmtDate(tr.EndDate)):''}</td>`
-       + `<td>${esc(tr.Destinations||'')}</td><td>${esc(tr.Status||'')}</td>`
+    h += `<tr><td><b>${esc(a.Reference||'—')}</b>`
+       + (String(a.Type||'trip')!=='trip'?` <span class="muted" style="font-size:12px">${esc(a.Type)}</span>`:'')
+       + `</td>`
+       + `<td>${esc(fmtDate(a.StartDate))}${a.EndDate?' → '+esc(fmtDate(a.EndDate)):''}</td>`
+       + `<td>${esc(a.Destinations||'')}</td>`
+       + `<td>${esc(a.Status||'')}</td>`
        + `<td class="num">${lines.length}${missing?` <span style="color:#B4472E">(${missing} without a file)</span>`:''}</td>`
        + `<td class="num">${trvTotals(lines)}</td><td class="num">${files.length}</td>`
        + `<td class="num" style="white-space:nowrap">`
        + `<button class="btn ghost sm" onclick="trvToggle('${id}')">${TRV_OPEN===id?'Hide':'Open'}</button> `
-       + `<button class="btn ghost sm" onclick="editTrip('${id}')">Edit</button> `
-       + `<button class="btn ghost sm" onclick="delTrip('${id}')" title="delete this trip">×</button></td></tr>`;
-    if(TRV_OPEN===id) h += `<tr><td colspan="8">${trvDetail(tr, lines, files)}</td></tr>`;
+       + `<button class="btn ghost sm" onclick="delActivity('${id}')" title="delete">×</button></td></tr>`;
+    if(TRV_OPEN===id) h += `<tr><td colspan="8">${trvDetail(a, lines, files)}</td></tr>`;
   });
   t.innerHTML = h + '</tbody>';
   trvRenderDest();
 }
 
+function trvToggle(id){ TRV_OPEN = (TRV_OPEN===String(id)) ? '' : String(id); TRV_PICK=''; TRV_EDIT_EXP=''; travelRender(); }
+
+// ── One activity: the request, the report, the lines, the files ─────────────
+function trvDetail(a, lines, files){
+  const id = String(a.ActivityID);
+  let h = `<div style="padding:6px 2px 12px">`;
+
+  // The request, as raised
+  h += `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">`
+     + `<div style="flex:1 1 420px">`
+     + (a.Purpose?`<div style="margin-bottom:6px">${esc(a.Purpose)}</div>`:'<div class="muted" style="margin-bottom:6px">No purpose recorded</div>')
+     + `<div class="muted" style="font-size:13px">Planned ${esc(fmtDate(a.StartDate))||'—'}`
+     + `${a.EndDate?' → '+esc(fmtDate(a.EndDate)):''}`
+     + (a.EstimatedCost!==''&&a.EstimatedCost!=null?` · budget ${trvAmt(a.Currency, a.EstimatedCost)}`:'')
+     + (a.ProjectID?` · project ${esc(trvProjName(a.ProjectID))}`:'')
+     + (a.Counterparty?` · ${esc(a.Counterparty)}`:'')
+     + `</div>`
+     + (a.Notes?`<div class="muted" style="font-size:13px;margin-top:4px">${esc(a.Notes)}</div>`:'')
+     + `</div>`
+     + `<button class="btn ghost sm" onclick="editActivity('${id}')">Edit request</button></div>`;
+
+  // The report, filled in as it goes
+  h += `<div style="margin-top:14px;padding:12px;border:1px solid #DDE3EA;border-radius:10px">`
+     + `<b style="font-size:14px">Report</b>`
+     + `<div id="trvRepErr_${id}"></div>`
+     + `<div class="row" style="margin-top:8px">`
+     + `<div style="flex:1;min-width:150px"><label>Actually from</label>`
+     + `<input id="rep_astart_${id}" type="date" value="${esc(a.ActualStart?fmtDate(a.ActualStart):'')}"></div>`
+     + `<div style="flex:1;min-width:150px"><label>Actually to</label>`
+     + `<input id="rep_aend_${id}" type="date" value="${esc(a.ActualEnd?fmtDate(a.ActualEnd):'')}"></div>`
+     + `<div style="flex:1;min-width:150px"><label>Report date</label>`
+     + `<input id="rep_date_${id}" type="date" value="${esc(a.ReportDate?fmtDate(a.ReportDate):'')}"></div>`
+     + `<div style="flex:1;min-width:180px"><label>Reported by</label>`
+     + `<input id="rep_by_${id}" value="${esc(a.RequestedBy||'')}"></div></div>`
+     + `<div><label>What was done</label><textarea id="rep_act_${id}" rows="3">${esc(a.Activities||'')}</textarea></div>`
+     + `<div class="row"><div style="flex:1;min-width:220px"><label>Who was met</label>`
+     + `<textarea id="rep_meet_${id}" rows="2">${esc(a.Meetings||'')}</textarea></div>`
+     + `<div style="flex:1;min-width:220px"><label>Notes</label>`
+     + `<textarea id="rep_notes_${id}" rows="2">${esc(a.ReportNotes||'')}</textarea></div></div>`
+     + `<label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-top:6px">`
+     + `<input id="rep_nopers_${id}" type="checkbox" ${String(a.NoPersonal||'').toLowerCase()==='yes'?'checked':''} `
+     + `style="width:18px;height:18px;flex:0 0 18px;padding:0;margin:0"> No personal legs on this trip</label>`
+     + `<div style="height:10px"></div>`
+     + `<button class="btn sm" onclick="saveReport('${id}',this)">Save report</button></div>`;
+
+  // The lines
+  h += `<div style="margin-top:16px"><b style="font-size:14px">Expenses</b></div>`;
+  h += `<table class="trvrow" style="table-layout:auto;margin-top:6px"><thead><tr><th>Date</th><th>Service</th>`
+     + `<th>Category</th><th>Supplier</th><th class="num">Amount</th><th class="num">USD</th>`
+     + `<th>Paid by</th><th style="min-width:230px">Proof</th><th></th></tr></thead><tbody>`;
+  if(!lines.length) h += '<tr><td class="empty" colspan="9">Nothing yet — add the first line below</td></tr>';
+  lines.forEach(x=>{
+    if(String(x.ExpenseID)===TRV_EDIT_EXP){ h += trvExpForm(x, id, 'exe'); return; }
+    const ls = trvLinksFor(x.ExpenseID);
+    const proof = ls.length
+      ? ls.map(l=>{ const f=trvFile(l.AttachmentID);
+          const nm = f ? fname(f) : 'missing file';
+          const link = (f&&f.Url) ? `<a href="${esc(f.Url)}" target="_blank">${esc(nm)}</a>` : esc(nm);
+          return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">${link}`
+            + `<select onchange="trvRole('${esc(l.LinkID)}',this.value)" `
+            + `style="width:auto;max-width:130px;padding:4px 8px;font-size:13px">`
+            + TRV_ROLES.map(r=>`<option value="${r}" ${String(l.Role||'other')===r?'selected':''}>${r}</option>`).join('')
+            + `</select>`
+            + `<button class="btn ghost sm" onclick="trvUnlink('${esc(l.LinkID)}')" title="detach">×</button></div>`;
+        }).join('')
+      : `<span style="color:#B4472E">none</span>`;
+    const open = TRV_PICK === String(x.ExpenseID);
+    const picker = files.length
+      ? `<div style="margin-top:4px"><button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">`
+        + `${open?'Close':'Attach files ('+files.length+')'}</button></div>` : '';
+    h += `<tr><td>${esc(fmtDate(x.Date))}</td>`
+       + `<td class="muted" style="font-size:13px">${x.ServiceFrom?esc(fmtDate(x.ServiceFrom)):''}`
+       + `${x.ServiceTo?' → '+esc(fmtDate(x.ServiceTo)):''}${(!x.ServiceFrom&&!x.ServiceTo)?'—':''}</td>`
+       + `<td>${esc(x.Category||'')}</td><td>${esc(x.Supplier||'')}</td>`
+       + `<td class="num">${trvAmt(x.Currency, x.Amount)}</td>`
+       + `<td class="num">${x.AmountUSD===''||x.AmountUSD==null?'—':'$'+money(x.AmountUSD)}</td>`
+       + `<td>${esc(x.PaidBy||'company')}${x.PaidByName?' · '+esc(x.PaidByName):''}</td>`
+       + `<td>${proof}${picker}</td>`
+       + `<td class="num" style="white-space:nowrap">`
+       + `<button class="btn ghost sm" onclick="trvExpEdit('${esc(x.ExpenseID)}')">Edit</button> `
+       + `<button class="btn ghost sm" onclick="delExpense('${esc(x.ExpenseID)}')" title="delete">×</button></td></tr>`;
+    if(open && files.length) h += `<tr><td colspan="9" style="padding:8px 4px">${trvPickerPanel(x, files)}</td></tr>`;
+  });
+  if(!TRV_EDIT_EXP) h += trvExpForm(null, id, 'exn');
+  h += '</tbody></table>';
+
+  // The files
+  const own = files.filter(f=>String(f.ParentType)==='activity' && String(f.ParentID)===id);
+  h += `<div style="margin-top:16px"><b style="font-size:14px">Files</b>`
+     + `<div class="trvfiles" style="margin-top:8px">`
+     + (own.length ? own.map(f=>{
+         const used = TRAVEL.links.filter(l=>String(l.AttachmentID)===String(f.AttachmentID)).length;
+         return `<div class="f"><span style="flex:1 1 auto">${esc(fname(f))}`
+           + (used ? ` <span class="muted" style="font-size:12px">· on ${used} line(s)</span>`
+                   : ` <span style="color:#B4472E;font-size:12px">· not assigned</span>`)
+           + `</span>`
+           + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
+           + `<button class="btn ghost sm" onclick="trvDeleteFile('${esc(f.AttachmentID)}')" title="delete">×</button></div>`;
+       }).join('') : `<span class="muted" style="font-size:13px">No files yet</span>`)
+     + `</div>`
+     + `<div style="margin-top:8px"><input type="file" onchange="trvUpload('${id}',this)" `
+     + `style="width:auto;padding:6px"></div></div>`;
+
+  return h + `</div>`;
+}
+
+// One row of inputs, used both for the line being added and the line being corrected.
+function trvExpForm(x, actId, p){
+  const v = f => x ? (x[f]===0?0:(x[f]||'')) : '';
+  return `<tr class="trvedit"><td><input id="${p}_date_${actId}" type="date" value="${esc(x?fmtDate(x.Date):todayISO())}"></td>`
+    + `<td style="min-width:200px"><div style="display:flex;gap:4px">`
+    + `<input id="${p}_from_${actId}" type="date" value="${esc(x&&x.ServiceFrom?fmtDate(x.ServiceFrom):'')}" title="service from">`
+    + `<input id="${p}_to_${actId}" type="date" value="${esc(x&&x.ServiceTo?fmtDate(x.ServiceTo):'')}" title="service to">`
+    + `</div></td>`
+    + `<td><select id="${p}_cat_${actId}">${trvCatOptions(v('Category'))}</select></td>`
+    + `<td><input id="${p}_sup_${actId}" value="${esc(v('Supplier'))}" placeholder="supplier"></td>`
+    + `<td class="num"><div style="display:flex;gap:4px">`
+    + `<input id="${p}_amt_${actId}" type="number" step="0.01" value="${esc(v('Amount'))}" placeholder="0.00">`
+    + `<select id="${p}_cur_${actId}" style="width:auto">${trvCurOptions(v('Currency'))}</select></div></td>`
+    + `<td class="num muted" style="font-size:12px">on save</td>`
+    + `<td><select id="${p}_paid_${actId}" style="width:auto">`
+    + `<option value="company" ${String(v('PaidBy'))!=='personal'?'selected':''}>company</option>`
+    + `<option value="personal" ${String(v('PaidBy'))==='personal'?'selected':''}>personally</option></select></td>`
+    + `<td><input id="${p}_desc_${actId}" value="${esc(v('Description'))}" placeholder="note (optional)"></td>`
+    + `<td class="num" style="white-space:nowrap">`
+    + `<button class="btn sm" onclick="trvExpSave('${x?esc(x.ExpenseID):''}','${actId}','${p}',this)">${x?'Save':'Add'}</button>`
+    + (x?` <button class="btn ghost sm" onclick="trvExpCancel()">Cancel</button>`:'')
+    + `</td></tr>`;
+}
+
+function trvExpEdit(id){ TRV_EDIT_EXP = String(id); TRV_PICK=''; travelRender(); }
+function trvExpCancel(){ TRV_EDIT_EXP=''; travelRender(); }
+
+async function trvExpSave(expenseId, actId, p, btn){
+  const done = busy(btn);
+  const g = f => { const el = $(p+'_'+f+'_'+actId); return el ? el.value : ''; };
+  try{
+    if(!g('amt')) throw new Error('Put in an amount');
+    const r = await api('save_expense',{
+      expenseId, parentType:'activity', parentId:actId,
+      date:g('date'), serviceFrom:g('from'), serviceTo:g('to'),
+      category:g('cat'), supplier:g('sup'), amount:g('amt'), currency:g('cur'),
+      paidBy:g('paid'), description:g('desc')
+    });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    const i = TRAVEL.expenses.findIndex(e=>String(e.ExpenseID)===String(r.expense.ExpenseID));
+    if(i>=0) TRAVEL.expenses[i] = r.expense; else TRAVEL.expenses.push(r.expense);
+    TRV_EDIT_EXP = '';
+    notice('trvErr','','');
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); done(); }
+}
+
+async function delExpense(id){
+  if(!confirm('Delete this expense line? The files stay — only this line and its links go.')) return;
+  try{
+    const r = await api('delete_expense',{ expenseId:id });
+    if(!r.ok) throw new Error(r.error||'Could not delete');
+    TRAVEL.expenses = TRAVEL.expenses.filter(x=>String(x.ExpenseID)!==String(id));
+    TRAVEL.links = TRAVEL.links.filter(l=>String(l.ExpenseID)!==String(id));
+    if(TRV_PICK===String(id)) TRV_PICK='';
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
+}
+
+// ── The request form ─────────────────────────────────────────────────────────
+function newActivity(){ trvOpenActivity(null); }
+function editActivity(id){ trvOpenActivity(TRAVEL.activities.find(a=>String(a.ActivityID)===String(id))||null); }
+function trvOpenActivity(a){
+  TRV_EDIT_ACT = a ? String(a.ActivityID) : '';
+  $('ac_title').textContent = a ? ('Trip ' + (a.Reference||'')) : 'New trip';
+  notice('acFormErr','','');
+  $('ac_dest').value = a ? (a.Destinations||'') : '';
+  $('ac_cp').value = a ? (a.Counterparty||'') : '';
+  $('ac_purpose').value = a ? (a.Purpose||'') : '';
+  $('ac_start').value = a && a.StartDate ? fmtDate(a.StartDate) : todayISO();
+  $('ac_end').value = a && a.EndDate ? fmtDate(a.EndDate) : '';
+  $('ac_est').value = a && a.EstimatedCost!=='' && a.EstimatedCost!=null ? a.EstimatedCost : '';
+  $('ac_cur').innerHTML = trvCurOptions(a ? a.Currency : 'EUR');
+  $('ac_project').innerHTML = trvProjOptions(a ? a.ProjectID : '');
+  $('ac_ref').value = a ? (a.Reference||'') : '';
+  $('ac_notes').value = a ? (a.Notes||'') : '';
+  $('acModal').classList.remove('hidden');
+}
+
+async function saveActivityForm(btn){
+  const done = busy(btn);
+  try{
+    const r = await api('save_activity',{
+      activityId: TRV_EDIT_ACT, type:'trip', reference:$('ac_ref').value,
+      destinations:$('ac_dest').value, counterparty:$('ac_cp').value, purpose:$('ac_purpose').value,
+      startDate:$('ac_start').value, endDate:$('ac_end').value,
+      estimatedCost:$('ac_est').value, currency:$('ac_cur').value,
+      projectId:$('ac_project').value, notes:$('ac_notes').value
+    });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    const i = TRAVEL.activities.findIndex(a=>String(a.ActivityID)===String(r.activity.ActivityID));
+    if(i>=0) TRAVEL.activities[i] = r.activity; else TRAVEL.activities.push(r.activity);
+    $('acModal').classList.add('hidden');
+    if(!TRV_EDIT_ACT) TRV_OPEN = String(r.activity.ActivityID);
+    travelRender();
+  }catch(e){ notice('acFormErr','err',esc(e.message)); }
+  finally{ done(); }
+}
+
+async function saveReport(id, btn){
+  const done = busy(btn);
+  const g = f => { const el = $('rep_'+f+'_'+id); return el ? (el.type==='checkbox'?el.checked:el.value) : ''; };
+  try{
+    const r = await api('save_activity_report',{
+      activityId:id, actualStart:g('astart'), actualEnd:g('aend'), reportDate:g('date'),
+      requestedBy:g('by'), activities:g('act'), meetings:g('meet'),
+      reportNotes:g('notes'), noPersonal:g('nopers')
+    });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    const i = TRAVEL.activities.findIndex(a=>String(a.ActivityID)===String(id));
+    if(i>=0) TRAVEL.activities[i] = r.activity;
+    travelRender();
+  }catch(e){ notice('trvRepErr_'+id,'err',esc(e.message)); }
+  finally{ done(); }
+}
+
+async function delActivity(id){
+  const a = TRAVEL.activities.find(x=>String(x.ActivityID)===String(id));
+  if(!confirm('Delete '+((a&&a.Reference)||'this')+'?')) return;
+  try{
+    const r = await api('delete_activity',{ activityId:id });
+    if(!r.ok) throw new Error(r.error||'Could not delete');
+    TRAVEL.activities = TRAVEL.activities.filter(x=>String(x.ActivityID)!==String(id));
+    if(TRV_OPEN===String(id)) TRV_OPEN='';
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
+}
+
+// ── Files, and what they prove ───────────────────────────────────────────────
 function trvPickerPanel(x, files){
   const on = {}; trvLinksFor(x.ExpenseID).forEach(l=>on[String(l.AttachmentID)]=1);
-  const fname = f => (f.Description||f.FileName||'file');
   return `<div style="padding:12px;border:1px solid #DDE3EA;border-radius:10px;background:#FAFBFC">`
     + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">`
     + `<b>Files for ${esc(fmtDate(x.Date))} · ${esc(x.Category||'')}${x.Supplier?' · '+esc(x.Supplier):''}</b>`
@@ -6019,71 +6193,6 @@ function trvPickerPanel(x, files){
     + `</div></div>`;
 }
 
-function trvDetail(tr, lines, files){
-  const linked = {}; TRAVEL.links.forEach(l=>linked[String(l.AttachmentID)]=1);
-  const fname = f => (f.Description||f.FileName||'file');
-  let h = `<div style="padding:6px 2px 10px">`;
-  if(tr.Purpose) h += `<div class="muted" style="font-size:13px;margin-bottom:8px">${esc(tr.Purpose)}</div>`;
-  h += `<table style="table-layout:auto"><thead><tr><th>Date</th><th>Category</th><th>Supplier</th>`
-     + `<th class="num">Amount</th><th class="num">USD</th><th>Paid by</th>`
-     + `<th style="min-width:230px">Proof</th><th></th></tr></thead><tbody>`;
-  if(!lines.length) h += '<tr><td class="empty" colspan="8">No expense lines</td></tr>';
-  lines.forEach(x=>{
-    const ls = trvLinksFor(x.ExpenseID);
-    const proof = ls.length
-      ? ls.map(l=>{ const f=trvFile(l.AttachmentID);
-          const nm = f ? fname(f) : 'missing file';
-          const a = (f&&f.Url) ? `<a href="${esc(f.Url)}" target="_blank">${esc(nm)}</a>` : esc(nm);
-          return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">${a}`
-            + `<select onchange="trvRole('${esc(l.LinkID)}',this.value)" `
-            + `style="width:auto;max-width:130px;padding:4px 8px;font-size:13px">`
-            + TRV_ROLES.map(r=>`<option value="${r}" ${String(l.Role||'other')===r?'selected':''}>${r}</option>`).join('')
-            + `</select>`
-            + `<button class="btn ghost sm" onclick="trvUnlink('${esc(l.LinkID)}')" title="detach">×</button></div>`;
-        }).join('')
-      : `<span style="color:#B4472E">none</span>`;
-    const open = TRV_PICK === String(x.ExpenseID);
-    const picker = files.length
-      ? `<div style="margin-top:4px"><button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">`
-        + `${open?'Close':'Attach files ('+files.length+')'}</button></div>`
-      : '';
-    h += `<tr><td>${esc(fmtDate(x.Date))}</td><td>${esc(x.Category||'')}</td><td>${esc(x.Supplier||'')}</td>`
-       + `<td class="num">${trvAmt(x.Currency, x.Amount)}</td>`
-       + `<td class="num">${x.AmountUSD===''||x.AmountUSD==null?'—':'$'+money(x.AmountUSD)}</td>`
-       + `<td>${esc(x.PaidBy||'company')}${x.PaidByName?' · '+esc(x.PaidByName):''}</td>`
-       + `<td>${proof}${picker}</td>`
-       + `<td class="num" style="white-space:nowrap">`
-       + `<button class="btn ghost sm" onclick="editExpense('${esc(x.ExpenseID)}')">Edit</button> `
-       + `<button class="btn ghost sm" onclick="delExpense('${esc(x.ExpenseID)}')" title="delete this line">×</button></td></tr>`;
-    if(open && files.length) h += `<tr><td colspan="8" style="padding:8px 4px">${trvPickerPanel(x, files)}</td></tr>`;
-  });
-  h += '</tbody></table>';
-
-  h += `<div style="margin-top:10px"><button class="btn ghost sm" `
-     + `onclick="newExpense('trip','${esc(tr.TripID)}')">+ Add expense</button></div>`;
-
-  const own = files.filter(f=>String(f.ParentType)==='trip' && String(f.ParentID)===String(tr.TripID));
-  h += `<div style="margin-top:14px"><b style="font-size:14px">Files</b>`
-     + `<div class="trvfiles" style="margin-top:8px">`
-     + (own.length ? own.map(f=>{
-         const used = TRAVEL.links.filter(l=>String(l.AttachmentID)===String(f.AttachmentID)).length;
-         return `<div class="f"><span style="flex:1 1 auto">${esc(fname(f))}`
-           + (used ? ` <span class="muted" style="font-size:12px">· on ${used} line(s)</span>`
-                   : ` <span style="color:#B4472E;font-size:12px">· not assigned</span>`)
-           + `</span>`
-           + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
-           + `<button class="btn ghost sm" onclick="trvDeleteFile('${esc(f.AttachmentID)}')" title="delete">×</button></div>`;
-       }).join('') : `<span class="muted" style="font-size:13px">No files yet</span>`)
-     + `</div>`
-     + `<div style="margin-top:8px"><input type="file" id="trvUp_${esc(tr.TripID)}" `
-     + `onchange="trvUpload('${esc(tr.TripID)}',this)" style="width:auto;padding:6px"></div></div>`;
-
-  h += `</div>`;
-  return h;
-}
-
-function trvToggle(id){ TRV_OPEN = (TRV_OPEN===String(id)) ? '' : String(id); TRV_PICK = ''; travelRender(); }
-
 function trvPick(expenseId){ TRV_PICK = (TRV_PICK===String(expenseId)) ? '' : String(expenseId); travelRender(); }
 
 // The checkbox is the state of the link itself: ticking it attaches, unticking detaches, and
@@ -6097,7 +6206,7 @@ async function trvToggleFile(expenseId, attachmentId, box){
       if(!r.ok) throw new Error(r.error||'Could not attach');
       if(r.link && !TRAVEL.links.some(l=>String(l.LinkID)===String(r.link.LinkID))) TRAVEL.links.push(r.link);
     }else{
-      const l = TRAVEL.links.find(l=>String(l.ExpenseID)===String(expenseId) && String(l.AttachmentID)===String(attachmentId));
+      const l = TRAVEL.links.find(y=>String(y.ExpenseID)===String(expenseId) && String(y.AttachmentID)===String(attachmentId));
       if(l){
         const r = await api('unlink_expense_file',{ linkId: l.LinkID });
         if(!r.ok) throw new Error(r.error||'Could not detach');
@@ -6128,6 +6237,81 @@ async function trvUnlink(linkId){
   }catch(e){ notice('trvErr','err',esc(e.message)); }
 }
 
+// Files land on the activity; which line each one proves is said separately, with the boxes.
+async function trvUpload(actId, input){
+  const file = input.files[0];
+  if(!file) return;
+  if(file.size > 20*1024*1024){ notice('trvErr','err','File too large (max ~20 MB).'); input.value=''; return; }
+  notice('trvErr','','Uploading '+esc(file.name)+'…');
+  try{
+    const r = await api('add_attachment',{ parentType:'activity', parentId:actId, fileName:file.name,
+      description:file.name, docType:'other', mimeType:file.type||'application/octet-stream',
+      dataBase64: await fileToBase64(file) });
+    if(!r.ok) throw new Error(r.error||'Upload failed');
+    TRAVEL.files.push(r.attachment);
+    notice('trvErr','','');
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
+  finally{ input.value=''; }
+}
+
+async function trvDeleteFile(attachmentId){
+  if(!confirm('Delete this file? It goes to Trash in Drive, and any line it proved loses that link.')) return;
+  try{
+    const r = await api('delete_attachment',{ id: attachmentId });
+    if(!r.ok) throw new Error(r.error||'Could not delete');
+    TRAVEL.files = TRAVEL.files.filter(f=>String(f.AttachmentID)!==String(attachmentId));
+    TRAVEL.links = TRAVEL.links.filter(l=>String(l.AttachmentID)!==String(attachmentId));
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
+}
+
+// ── Destinations, as they came out of the old app ───────────────────────────
+// Semicolons, slashes and stray spacing become one separator. Repeats are kept: Bangkok →
+// Singapore → Bangkok is a route, not a typo.
+function trvNormDest(s){
+  return String(s||'').replace(/[;|\/]+/g, ',').split(',')
+    .map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean).join(', ');
+}
+function trvRenderDest(){
+  const box = $('trvDest'); if(!box) return;
+  const acts = TRAVEL.activities.slice().sort((x,y)=>String(x.Reference||'').localeCompare(String(y.Reference||'')));
+  if(!acts.length){ box.innerHTML = '<div class="muted">Nothing to tidy yet.</div>'; return; }
+  box.innerHTML = '<div class="scroll"><table><thead><tr><th>Reference</th><th>As stored</th>'
+    + '<th>Suggested</th></tr></thead><tbody>'
+    + acts.map(a=>{
+        const now = String(a.Destinations||''), next = trvNormDest(now);
+        const odd = next && next.indexOf(',') < 0 && /\s/.test(next);
+        return `<tr><td>${esc(a.Reference||'')}</td><td class="muted">${esc(now)||'—'}</td>`
+          + `<td><input id="trvDest_${esc(a.ActivityID)}" value="${esc(next)}" style="width:100%">`
+          + (odd?`<div class="muted" style="font-size:12px">nothing to split on — separate by hand if this is more than one place</div>`:'')
+          + `</td></tr>`;
+      }).join('')
+    + '</tbody></table></div>';
+}
+
+async function trvSaveDest(btn){
+  const done = busy(btn);
+  try{
+    notice('trvDestErr','','');
+    const changed = [];
+    TRAVEL.activities.forEach(a=>{
+      const el = $('trvDest_'+a.ActivityID); if(!el) return;
+      const value = el.value.trim();
+      if(value !== String(a.Destinations||'')) changed.push({ activityId: a.ActivityID, destinations: value });
+    });
+    if(!changed.length){ notice('trvDestErr','ok','Nothing changed.'); return; }
+    const r = await api('save_trip_destinations',{ trips: changed });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    changed.forEach(ch=>{ const a = TRAVEL.activities.find(x=>String(x.ActivityID)===String(ch.activityId));
+                          if(a) a.Destinations = ch.destinations; });
+    notice('trvDestErr','ok', r.saved+' record(s) updated.');
+    travelRender();
+  }catch(e){ notice('trvDestErr','err',esc(e.message)); }
+  finally{ done(); }
+}
+
+// ── Bringing the old records over ───────────────────────────────────────────
 async function trvScan(btn){
   const done = busy(btn);
   try{
@@ -6166,182 +6350,6 @@ async function trvMigrate(btn){
     await travelLoad();
   }catch(e){ notice('trvMigErr','err',esc(e.message)); }
   finally{ done(); }
-}
-
-// ── Entering and editing trips and expense lines ─────────────────────────────
-const TRV_CURRENCIES = ['USD','EUR','AED','GBP','HKD','THB','SGD','CHF','CZK','HUF','KZT'];
-const TRV_CATEGORIES = ['Airfare / transport','Accommodation','Local transport / transfer',
-                        'Visa / insurance','Meals','Other'];
-let TRV_EDIT_TRIP = '', TRV_EDIT_EXP = '', TRV_EXP_PARENT = null;
-
-function trvCurOptions(sel){
-  const list = TRV_CURRENCIES.slice();
-  const s = String(sel||'').toUpperCase();
-  if(s && list.indexOf(s) < 0) list.push(s);
-  return list.map(c=>`<option value="${c}" ${s===c?'selected':''}>${c}</option>`).join('');
-}
-function trvCatOptions(sel){
-  const list = TRV_CATEGORIES.slice();
-  const s = String(sel||'');
-  if(s && list.indexOf(s) < 0) list.push(s);
-  return list.map(c=>`<option value="${esc(c)}" ${s===c?'selected':''}>${esc(c)}</option>`).join('');
-}
-function trvProjOptions(sel){
-  return '<option value="">— none —</option>' + (PROJECTS||[]).map(p=>
-    `<option value="${esc(p.ProjectID)}" ${String(sel)===String(p.ProjectID)?'selected':''}>${esc(p.Name||'')}</option>`).join('');
-}
-function trvProjName(id){
-  const p = (PROJECTS||[]).find(x=>String(x.ProjectID)===String(id));
-  return p ? (p.Name||'') : '';
-}
-
-function newTrip(){ trvOpenTrip(null); }
-function editTrip(id){ trvOpenTrip(TRAVEL.trips.find(t=>String(t.TripID)===String(id)) || null); }
-function trvOpenTrip(t){
-  TRV_EDIT_TRIP = t ? String(t.TripID) : '';
-  $('tr_title').textContent = t ? ('Trip ' + (t.Reference||'')) : 'New trip';
-  notice('trFormErr','','');
-  $('tr_ref').value = t ? (t.Reference||'') : '';
-  $('tr_status').value = (t && t.Status==='Reported') ? 'Reported' : 'Requested';
-  $('tr_dest').value = t ? (t.Destinations||'') : '';
-  $('tr_cp').value = t ? (t.Counterparty||'') : '';
-  $('tr_purpose').value = t ? (t.Purpose||'') : '';
-  $('tr_project').innerHTML = trvProjOptions(t ? t.ProjectID : '');
-  $('tr_est').value = t && t.EstimatedCost!=='' && t.EstimatedCost!=null ? t.EstimatedCost : '';
-  $('tr_cur').innerHTML = trvCurOptions(t ? t.Currency : 'EUR');
-  $('tr_start').value = t && t.StartDate ? fmtDate(t.StartDate) : todayISO();
-  $('tr_end').value = t && t.EndDate ? fmtDate(t.EndDate) : '';
-  $('tr_astart').value = t && t.ActualStart ? fmtDate(t.ActualStart) : '';
-  $('tr_aend').value = t && t.ActualEnd ? fmtDate(t.ActualEnd) : '';
-  $('tr_repdate').value = t && t.ReportDate ? fmtDate(t.ReportDate) : '';
-  $('tr_by').value = t ? (t.RequestedBy||'') : 'Konstantin Maiorov';
-  $('tr_act').value = t ? (t.Activities||'') : '';
-  $('tr_meet').value = t ? (t.Meetings||'') : '';
-  $('tr_notes').value = t ? (t.Notes||'') : '';
-  $('tr_rnotes').value = t ? (t.ReportNotes||'') : '';
-  $('tr_nopers').checked = !!(t && String(t.NoPersonal||'').toLowerCase()==='yes');
-  $('trModal').classList.remove('hidden');
-}
-
-async function saveTripForm(btn){
-  const done = busy(btn);
-  try{
-    const r = await api('save_trip',{
-      tripId: TRV_EDIT_TRIP, reference: $('tr_ref').value, status: $('tr_status').value,
-      destinations: $('tr_dest').value, counterparty: $('tr_cp').value, purpose: $('tr_purpose').value,
-      projectId: $('tr_project').value, estimatedCost: $('tr_est').value, currency: $('tr_cur').value,
-      startDate: $('tr_start').value, endDate: $('tr_end').value,
-      actualStart: $('tr_astart').value, actualEnd: $('tr_aend').value,
-      reportDate: $('tr_repdate').value, requestedBy: $('tr_by').value,
-      activities: $('tr_act').value, meetings: $('tr_meet').value,
-      notes: $('tr_notes').value, reportNotes: $('tr_rnotes').value,
-      noPersonal: $('tr_nopers').checked
-    });
-    if(!r.ok) throw new Error(r.error||'Could not save');
-    const i = TRAVEL.trips.findIndex(t=>String(t.TripID)===String(r.trip.TripID));
-    if(i>=0) TRAVEL.trips[i] = r.trip; else TRAVEL.trips.push(r.trip);
-    $('trModal').classList.add('hidden');
-    travelRender();
-  }catch(e){ notice('trFormErr','err',esc(e.message)); }
-  finally{ done(); }
-}
-
-async function delTrip(id){
-  const t = TRAVEL.trips.find(x=>String(x.TripID)===String(id));
-  if(!confirm('Delete trip '+((t&&t.Reference)||'')+'?')) return;
-  try{
-    const r = await api('delete_trip',{ tripId:id });
-    if(!r.ok) throw new Error(r.error||'Could not delete');
-    TRAVEL.trips = TRAVEL.trips.filter(x=>String(x.TripID)!==String(id));
-    if(TRV_OPEN===String(id)) TRV_OPEN='';
-    travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
-}
-
-function newExpense(parentType, parentId){ trvOpenExpense(null, parentType, parentId); }
-function editExpense(id){
-  const x = TRAVEL.expenses.find(e=>String(e.ExpenseID)===String(id));
-  if(x) trvOpenExpense(x, x.ParentType, x.ParentID);
-}
-function trvOpenExpense(x, parentType, parentId){
-  TRV_EDIT_EXP = x ? String(x.ExpenseID) : '';
-  TRV_EXP_PARENT = { type: parentType||'none', id: parentId||'' };
-  notice('exFormErr','','');
-  $('ex_title').textContent = x ? 'Expense' : 'New expense';
-  const trip = TRAVEL.trips.find(t=>String(t.TripID)===String(TRV_EXP_PARENT.id));
-  $('ex_where').textContent = TRV_EXP_PARENT.type==='trip'
-    ? 'On trip ' + ((trip&&trip.Reference)||'')
-    : (TRV_EXP_PARENT.type==='project' ? 'On project ' + trvProjName(TRV_EXP_PARENT.id) : 'Not tied to a trip');
-  $('ex_date').value = x && x.Date ? fmtDate(x.Date) : (trip && trip.StartDate ? fmtDate(trip.StartDate) : todayISO());
-  $('ex_cat').innerHTML = trvCatOptions(x ? x.Category : '');
-  $('ex_sup').value = x ? (x.Supplier||'') : '';
-  $('ex_amt').value = x ? (x.Amount||'') : '';
-  $('ex_cur').innerHTML = trvCurOptions(x ? x.Currency : (trip ? trip.Currency : 'USD'));
-  $('ex_paid').value = (x && String(x.PaidBy||'')==='personal') ? 'personal' : 'company';
-  $('ex_paidname').value = x ? (x.PaidByName||'') : '';
-  $('ex_project').innerHTML = trvProjOptions(x ? x.ProjectID : (trip ? trip.ProjectID : ''));
-  $('ex_desc').value = x ? (x.Description||'') : '';
-  $('exModal').classList.remove('hidden');
-}
-
-async function saveExpenseForm(btn){
-  const done = busy(btn);
-  try{
-    const r = await api('save_expense',{
-      expenseId: TRV_EDIT_EXP, parentType: TRV_EXP_PARENT.type, parentId: TRV_EXP_PARENT.id,
-      date: $('ex_date').value, category: $('ex_cat').value, supplier: $('ex_sup').value,
-      amount: $('ex_amt').value, currency: $('ex_cur').value,
-      paidBy: $('ex_paid').value, paidByName: $('ex_paidname').value,
-      projectId: $('ex_project').value, description: $('ex_desc').value
-    });
-    if(!r.ok) throw new Error(r.error||'Could not save');
-    const i = TRAVEL.expenses.findIndex(e=>String(e.ExpenseID)===String(r.expense.ExpenseID));
-    if(i>=0) TRAVEL.expenses[i] = r.expense; else TRAVEL.expenses.push(r.expense);
-    $('exModal').classList.add('hidden');
-    travelRender();
-  }catch(e){ notice('exFormErr','err',esc(e.message)); }
-  finally{ done(); }
-}
-
-async function delExpense(id){
-  if(!confirm('Delete this expense line? The files stay — only this line and its links go.')) return;
-  try{
-    const r = await api('delete_expense',{ expenseId:id });
-    if(!r.ok) throw new Error(r.error||'Could not delete');
-    TRAVEL.expenses = TRAVEL.expenses.filter(x=>String(x.ExpenseID)!==String(id));
-    TRAVEL.links = TRAVEL.links.filter(l=>String(l.ExpenseID)!==String(id));
-    if(TRV_PICK===String(id)) TRV_PICK='';
-    travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
-}
-
-// Files land on the trip; which line each one proves is said separately, with the tick boxes.
-async function trvUpload(tripId, input){
-  const file = input.files[0];
-  if(!file) return;
-  if(file.size > 20*1024*1024){ notice('trvErr','err','File too large (max ~20 MB).'); input.value=''; return; }
-  notice('trvErr','','Uploading '+esc(file.name)+'…');
-  try{
-    const r = await api('add_attachment',{ parentType:'trip', parentId:tripId, fileName:file.name,
-      description:file.name, docType:'other', mimeType:file.type||'application/octet-stream',
-      dataBase64: await fileToBase64(file) });
-    if(!r.ok) throw new Error(r.error||'Upload failed');
-    TRAVEL.files.push(r.attachment);
-    notice('trvErr','','');
-    travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
-  finally{ input.value=''; }
-}
-
-async function trvDeleteFile(attachmentId){
-  if(!confirm('Delete this file? It goes to Trash in Drive, and any line it proved loses that link.')) return;
-  try{
-    const r = await api('delete_attachment',{ id: attachmentId });
-    if(!r.ok) throw new Error(r.error||'Could not delete');
-    TRAVEL.files = TRAVEL.files.filter(f=>String(f.AttachmentID)!==String(attachmentId));
-    TRAVEL.links = TRAVEL.links.filter(l=>String(l.AttachmentID)!==String(attachmentId));
-    travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
 }
 
 </script>
