@@ -1121,7 +1121,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.206';
+const BUILD = '2026-08-08.207';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5849,7 +5849,7 @@ async function loadData(){
 // ── Activities and expenses ──────────────────────────────────────────────────
 // A line without a file is the thing to look for, so the list counts those first.
 let TRAVEL = { activities:[], expenses:[], links:[], files:[] };
-let TRV_OPEN = '', TRV_PICK = '', TRV_EDIT_EXP = '', TRV_EDIT_ACT = '';
+let TRV_OPEN = '', TRV_PICK = '', TRV_EDIT_EXP = '', TRV_EDIT_ACT = '', TRV_READ = null;
 const TRV_ROLES = ['ticket','boarding','invoice','receipt','statement','other'];
 const TRV_CURRENCIES = ['USD','EUR','AED','GBP','HKD','THB','SGD','CHF','CZK','HUF','KZT'];
 const TRV_CATEGORIES = ['Airfare / transport','Accommodation','Local transport / transfer',
@@ -6039,11 +6039,17 @@ function trvDetail(a, lines, files){
                    : ` <span style="color:#B4472E;font-size:12px">· not assigned</span>`)
            + `</span>`
            + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
+           + `<button class="btn ghost sm" onclick="trvReadFile('${id}','${esc(f.AttachmentID)}',this)" `
+           + `title="read this document">read</button>`
            + `<button class="btn ghost sm" onclick="trvDeleteFile('${esc(f.AttachmentID)}')" title="delete">×</button></div>`;
        }).join('') : `<span class="muted" style="font-size:13px">No files yet</span>`)
      + `</div>`
      + `<div style="margin-top:8px"><input type="file" onchange="trvUpload('${id}',this)" `
-     + `style="width:auto;padding:6px"></div></div>`;
+     + `style="width:auto;padding:6px"></div>`
+     + `<div class="muted" style="font-size:12px;margin-top:4px">A PDF or a photograph is read on `
+     + `upload — it then offers to start a line or to join one that is already there.</div></div>`;
+
+  if(TRV_READ && String(TRV_READ.actId)===id) h += trvReadPanel(lines);
 
   return h + `</div>`;
 }
@@ -6251,6 +6257,7 @@ async function trvUpload(actId, input){
     TRAVEL.files.push(r.attachment);
     notice('trvErr','','');
     travelRender();
+    trvReadFile(actId, r.attachment.AttachmentID);
   }catch(e){ notice('trvErr','err',esc(e.message)); }
   finally{ input.value=''; }
 }
@@ -6265,6 +6272,119 @@ async function trvDeleteFile(attachmentId){
     travelRender();
   }catch(e){ notice('trvErr','err',esc(e.message)); }
 }
+
+// ── What the document turned out to be ──────────────────────────────────────
+// One flight is one expense with a ticket, a boarding pass and an invoice behind it, so a
+// document that has been read offers both roads: start a line, or join one already there.
+async function trvReadFile(actId, attachmentId, btn){
+  const done = busy(btn);
+  notice('trvErr','','Reading the document…');
+  try{
+    const r = await api('exp_read',{ attachmentId });
+    if(!r.ok) throw new Error(r.error||'Could not read it');
+    TRV_READ = { actId:String(actId), attachmentId:String(attachmentId), read:r.read };
+    notice('trvErr','','');
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); TRV_READ = null; }
+  finally{ done(); }
+}
+
+function trvReadDismiss(){ TRV_READ = null; travelRender(); }
+
+// Same money, near enough the same day, same name — each on its own is a coincidence, the
+// three together are the line this document belongs to. The score is shown, not hidden.
+function trvReadCandidates(lines){
+  if(!TRV_READ) return [];
+  const r = TRV_READ.read;
+  const norm = s => String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const sup = norm(r.supplier);
+  const dayDiff = (a,b) => (!a||!b) ? 99 : Math.abs((new Date(a) - new Date(b))/86400000);
+  return lines.map(x=>{
+    let score = 0; const why = [];
+    const amt = +x.Amount||0;
+    if(r.amount && amt && Math.abs(amt - r.amount) <= Math.max(0.01, r.amount*0.005)){ score += 3; why.push('same amount'); }
+    if(r.currency && String(x.Currency||'').toUpperCase()===r.currency && score){ score += 1; why.push('same currency'); }
+    const dd = dayDiff(fmtDate(x.Date), r.date);
+    if(dd <= 3){ score += 1; why.push(dd===0?'same date':'within '+Math.round(dd)+' day(s)'); }
+    const xs = norm(x.Supplier);
+    if(sup && xs && (xs.indexOf(sup)>=0 || sup.indexOf(xs)>=0)){ score += 2; why.push('same supplier'); }
+    return { x, score, why: why.join(', ') };
+  }).filter(c=>c.score >= 2).sort((a,b)=>b.score-a.score).slice(0,5);
+}
+
+function trvReadPanel(lines){
+  const r = TRV_READ.read, f = trvFile(TRV_READ.attachmentId);
+  const cands = trvReadCandidates(lines);
+  const bits = [r.supplier||'unnamed supplier'];
+  if(r.date) bits.push(fmtDate(r.date));
+  if(r.amount) bits.push(trvAmt(r.currency, r.amount));
+  if(r.serviceFrom) bits.push('service ' + r.serviceFrom + (r.serviceTo?' → '+r.serviceTo:''));
+  let h = `<div style="margin-top:14px;padding:12px;border:1px solid #C8D6E5;border-radius:10px;background:#F4F8FC">`
+    + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`
+    + `<b>${esc(f?fname(f):'Document')} — read as ${esc(r.docType)}</b>`
+    + `<button class="btn ghost sm" onclick="trvReadDismiss()">Dismiss</button></div>`
+    + `<div style="margin:6px 0 10px">${esc(bits.join(' · '))}`
+    + (r.description?` <span class="muted">— ${esc(r.description)}</span>`:'')
+    + (r.category?` <span class="muted">· ${esc(r.category)}</span>`:'') + `</div>`;
+
+  if(cands.length){
+    h += `<div style="margin-bottom:8px"><label>Attach to a line that is already here</label>`
+      + `<div style="display:flex;gap:8px;flex-wrap:wrap">`
+      + `<select id="trvReadPick" style="flex:1 1 340px;min-width:280px">`
+      + cands.map(c=>`<option value="${esc(c.x.ExpenseID)}">`
+          + `${esc(fmtDate(c.x.Date))} · ${esc(c.x.Category||'')} · ${esc(c.x.Supplier||'')} · `
+          + `${esc(trvAmt(c.x.Currency, c.x.Amount))} — ${esc(c.why)}</option>`).join('')
+      + `</select>`
+      + `<button class="btn sm" onclick="trvReadAttach(this)">Attach</button></div></div>`;
+  }else{
+    h += `<div class="muted" style="font-size:13px;margin-bottom:8px">Nothing here looks like the same expense.</div>`;
+  }
+
+  if(r.amount){
+    h += `<button class="btn ${cands.length?'ghost ':''}sm" onclick="trvReadCreate(this)">`
+      + `Start a new line from this</button>`;
+  }else{
+    h += `<div class="muted" style="font-size:13px">No amount is printed on this one — a boarding pass `
+      + `usually proves a line rather than starting one.</div>`;
+  }
+  return h + `</div>`;
+}
+
+async function trvReadAttach(btn){
+  if(!TRV_READ) return;
+  const sel = $('trvReadPick'); if(!sel || !sel.value) return;
+  const done = busy(btn);
+  try{
+    const r = await api('link_expense_file',{ expenseId: sel.value,
+      attachmentId: TRV_READ.attachmentId, role: TRV_READ.read.docType });
+    if(!r.ok) throw new Error(r.error||'Could not attach');
+    if(r.link && !TRAVEL.links.some(l=>String(l.LinkID)===String(r.link.LinkID))) TRAVEL.links.push(r.link);
+    TRV_READ = null;
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); done(); }
+}
+
+// The line is written from the reading, and the document that produced it is attached to it
+// in the same breath — with the role it was read as.
+async function trvReadCreate(btn){
+  if(!TRV_READ) return;
+  const done = busy(btn);
+  const r = TRV_READ.read, actId = TRV_READ.actId;
+  try{
+    const saved = await api('save_expense',{
+      parentType:'activity', parentId:actId, date:r.date, serviceFrom:r.serviceFrom, serviceTo:r.serviceTo,
+      category:r.category, supplier:r.supplier, amount:r.amount, currency:r.currency, description:r.description
+    });
+    if(!saved.ok) throw new Error(saved.error||'Could not save the line');
+    TRAVEL.expenses.push(saved.expense);
+    const link = await api('link_expense_file',{ expenseId: saved.expense.ExpenseID,
+      attachmentId: TRV_READ.attachmentId, role: r.docType });
+    if(link.ok && link.link) TRAVEL.links.push(link.link);
+    TRV_READ = null;
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); done(); }
+}
+
 
 // ── Destinations, as they came out of the old app ───────────────────────────
 // Semicolons, slashes and stray spacing become one separator. Repeats are kept: Bangkok →

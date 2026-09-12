@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.206';
+const BUILD = '2026-08-08.207';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -255,6 +255,7 @@ function route_(action, d) {
     case 'save_activity_report': return saveActivityReport_(d);
     case 'delete_activity':    return deleteActivity_(d);
     case 'save_expense':       return saveExpense_(d);
+    case 'exp_read':           return expRead_(d);
     case 'delete_expense':     return deleteExpense_(d);
     case 'fxexp_scan':         return fxexpScan_(d);
     case 'fxexp_migrate':      return fxexpMigrate_(d);
@@ -6594,3 +6595,97 @@ function unlinkExpenseFile_(d) {
   if (!id) return { ok: false, error: 'Missing link' };
   return { ok: true, removed: deleteRowsWhere_(SHEETS.expenseFiles, 'LinkID', id) };
 }
+
+// ── Reading a document that arrives with a trip ──────────────────────────────
+// A ticket, a boarding pass, a hotel folio or a till receipt. The model is given the file
+// itself rather than text scraped out of it: half of these are photographs, and a boarding
+// pass is mostly a barcode and a layout. Nothing is written here — the reading comes back as
+// a suggestion, and the page decides whether it becomes a new line or joins an existing one.
+var EXPENSE_DOC_MIME = /^(application\/pdf|image\/(jpeg|jpg|png|webp|heic|heif))$/i;
+
+function expRead_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var key = geminiKey_();
+  if (!key) return { ok: false, error: 'AI key is not configured (Script Properties → gemini_key)' };
+
+  var att = findRow_(SHEETS.attachments, 'AttachmentID', trim_(d.attachmentId));
+  if (!att) return { ok: false, error: 'File not found' };
+  var fileId = trim_(att.DriveFileID);
+  if (!fileId) return { ok: false, error: 'This record has no file behind it' };
+
+  var blob, mime, bytes;
+  try {
+    var file = DriveApp.getFileById(fileId);
+    blob = file.getBlob();
+    mime = String(blob.getContentType() || '');
+    bytes = blob.getBytes();
+  } catch (e) { return { ok: false, error: 'Could not open the file: ' + String(e).slice(0, 150) }; }
+
+  if (!EXPENSE_DOC_MIME.test(mime)) {
+    return { ok: false, error: 'Only PDFs and photographs can be read — this one is ' + (mime || 'of an unknown type') };
+  }
+  // Comfortably inside the request limit, and a receipt that needs more than this is a scan
+  // at a resolution nobody asked for.
+  if (bytes.length > 14 * 1024 * 1024) return { ok: false, error: 'Too large to read (over 14 MB)' };
+
+  var call = geminiCall_(key, JSON.stringify({
+    contents: [{ parts: [
+      { inline_data: { mime_type: mime.toLowerCase(), data: Utilities.base64Encode(bytes) } },
+      { text: EXPENSE_READ_PROMPT }
+    ] }],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+  }));
+  if (!call.ok) return { ok: false, error: 'The model could not be reached: ' + String(call.error).slice(0, 200) };
+
+  var o;
+  try {
+    var data = JSON.parse(call.body);
+    o = JSON.parse(String(data.candidates[0].content.parts[0].text).replace(/```json|```/g, '').trim());
+  } catch (e) { return { ok: false, error: 'The document could not be read' }; }
+
+  var iso = function (v) { v = trim_(v); return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : ''; };
+  var read = {
+    docType: fileRole_(o.docType),
+    date: iso(o.date),
+    amount: num_(o.amount),
+    currency: trim_(o.currency).toUpperCase(),
+    supplier: trim_(o.supplier),
+    category: expCategory_(o.category),
+    serviceFrom: iso(o.serviceFrom),
+    serviceTo: iso(o.serviceTo),
+    description: trim_(o.description).slice(0, 120)
+  };
+  if (read.serviceFrom && read.serviceTo && read.serviceTo < read.serviceFrom) read.serviceTo = '';
+  return { ok: true, read: read, attachmentId: String(att.AttachmentID), model: call.model };
+}
+
+var EXPENSE_CATEGORIES = ['Airfare / transport', 'Accommodation', 'Local transport / transfer',
+                          'Visa / insurance', 'Meals', 'Other'];
+function expCategory_(v) {
+  v = trim_(v);
+  for (var i = 0; i < EXPENSE_CATEGORIES.length; i++) {
+    if (EXPENSE_CATEGORIES[i].toLowerCase() === v.toLowerCase()) return EXPENSE_CATEGORIES[i];
+  }
+  return 'Other';
+}
+
+var EXPENSE_READ_PROMPT =
+  'This is a document from a business trip. Reply with ONE JSON object, nothing else:\n' +
+  '{"docType":"","date":"YYYY-MM-DD","amount":0,"currency":"","supplier":"","category":"",' +
+  '"serviceFrom":"","serviceTo":"","description":""}\n' +
+  '- docType: one of ticket, boarding, invoice, receipt, statement, other. A boarding pass is\n' +
+  '  "boarding" even when it shows a fare; an e-ticket or itinerary is "ticket"\n' +
+  '- date: the date the money was charged — the invoice or receipt date. For a ticket, the date\n' +
+  '  it was issued. "" when the document shows none\n' +
+  '- amount: the total actually paid, as a number, no thousands separators. 0 when the document\n' +
+  '  shows no amount, which is usual for a boarding pass\n' +
+  '- currency: three-letter code (USD, EUR, AED, THB, HKD…), "" when no amount\n' +
+  '- supplier: the airline, hotel or merchant, as written\n' +
+  '- category: one of "Airfare / transport", "Accommodation", "Local transport / transfer",\n' +
+  '  "Visa / insurance", "Meals", "Other"\n' +
+  '- serviceFrom / serviceTo: the dates the service itself covers — hotel check-in and check-out,\n' +
+  '  the flight date, the insurance period. "" when not stated. A single-day service may give\n' +
+  '  serviceFrom only\n' +
+  '- description: under 60 characters, e.g. "DXB-AMS 21 Aug" or "3 nights, Hyatt Amsterdam"\n' +
+  'Take what the document says. Never infer a figure that is not printed on it.';
