@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.208';
+const BUILD = '2026-08-08.209';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -6677,27 +6677,46 @@ function attachMove_(d) {
   return { ok: true, attachment: findRow_(SHEETS.attachments, 'AttachmentID', id) };
 }
 
+// Sheets hands a date back as a Date in one row and as text in the next, depending on how it
+// was written. Comparing those as strings quietly gives nonsense — "2026-09-05" against
+// "Tue Jun 23 2026 04:00:00 GMT+0400" is a comparison of 2 with T — so every date is brought
+// to YYYY-MM-DD before anything is decided about it.
+function isoDate_(v) {
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    if (isNaN(v.getTime())) return '';
+    var mm = v.getMonth() + 1, dd = v.getDate();
+    return v.getFullYear() + '-' + (mm < 10 ? '0' : '') + mm + '-' + (dd < 10 ? '0' : '') + dd;
+  }
+  var s = trim_(v);
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  var d = new Date(s);
+  return isNaN(d.getTime()) ? '' : isoDate_(d);
+}
+
 // Which trip a document belongs to is usually settled by its date falling inside one. Where
-// it falls in none, the nearest within a fortnight is offered — as a suggestion with its
-// reason, never as a decision.
+// it falls in none, the nearest within a fortnight is offered — as a suggestion carrying the
+// dates it was made on, so a wrong one is obvious rather than merely stated.
 function expActivityGuess_(dateStr) {
-  var date = trim_(dateStr);
+  var date = isoDate_(dateStr);
   if (!date) return { activityId: '', why: '' };
-  var acts = readAll_(SHEETS.activities), best = null;
-  acts.forEach(function (a) {
-    var s = trim_(a.ActualStart) || trim_(a.StartDate), e = trim_(a.ActualEnd) || trim_(a.EndDate) || s;
+  var best = null;
+  readAll_(SHEETS.activities).forEach(function (a) {
+    var s = isoDate_(a.ActualStart) || isoDate_(a.StartDate);
+    var e = isoDate_(a.ActualEnd) || isoDate_(a.EndDate) || s;
     if (!s) return;
-    if (date >= s && date <= e) {
-      if (!best || best.gap > 0) best = { id: String(a.ActivityID), gap: 0, ref: trim_(a.Reference) };
-      return;
-    }
-    var gap = Math.min(Math.abs(dayGap_(date, s)), Math.abs(dayGap_(date, e)));
-    if (gap <= 14 && (!best || gap < best.gap)) best = { id: String(a.ActivityID), gap: gap, ref: trim_(a.Reference) };
+    if (e < s) { var t = s; s = e; e = t; }
+    var gap = (date >= s && date <= e) ? 0
+      : Math.min(Math.abs(dayGap_(date, s)), Math.abs(dayGap_(date, e)));
+    if (gap > 14) return;
+    if (!best || gap < best.gap) best = { id: String(a.ActivityID), gap: gap, ref: trim_(a.Reference), from: s, to: e };
   });
   if (!best) return { activityId: '', why: '' };
+  var span = best.from + (best.to && best.to !== best.from ? ' → ' + best.to : '');
   return { activityId: best.id,
-           why: best.gap === 0 ? 'the date falls inside ' + best.ref
-                               : best.ref + ' is ' + best.gap + ' day(s) away' };
+           why: best.gap === 0
+             ? date + ' falls inside ' + best.ref + ' (' + span + ')'
+             : best.ref + ' (' + span + ') is the nearest — ' + best.gap + ' day(s) off' };
 }
 function dayGap_(a, b) {
   return Math.round((new Date(a).getTime() - new Date(b).getTime()) / 86400000);

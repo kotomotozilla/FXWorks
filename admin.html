@@ -1111,7 +1111,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.208';
+const BUILD = '2026-08-08.209';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6339,6 +6339,12 @@ function trvInboxCard(f){
     + (f.Url?`<a class="btn ghost sm" href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
     + `<button class="btn ghost sm" onclick="trvReadAgain('${id}',this)">Read again</button>`
     + `<button class="btn ghost sm" onclick="trvDeleteFile('${id}')" title="delete">×</button></div></div>`;
+  const twin = trvSameNamed(f);
+  if(twin){
+    const on = twin.ParentType==='activity' ? trvAct(twin.ParentID) : null;
+    h += `<div class="notice warn" style="margin-top:8px">The same file name is already filed`
+       + (on?` on ${esc(on.Reference||'')}`:'') + ` — this may be a second copy.</div>`;
+  }
   if(!got){
     return h + `<div class="muted" style="font-size:13px;margin-top:6px">Not read yet.</div></div>`;
   }
@@ -6385,6 +6391,15 @@ function trvInboxCard(f){
       + `proves a line rather than starting one.</div>`;
   }
   return h + `</div></div>`;
+}
+
+// The same invoice often arrives twice — once by hand, once out of a mailbox. Names are not
+// proof, so this warns rather than blocks.
+function trvSameNamed(f){
+  const name = String(f.FileName||'').toLowerCase();
+  if(!name) return null;
+  return TRAVEL.files.find(x=>String(x.AttachmentID)!==String(f.AttachmentID)
+    && String(x.ParentType)!=='inbox' && String(x.FileName||'').toLowerCase()===name) || null;
 }
 
 function trvInboxActChange(attachmentId, actId){
