@@ -1196,7 +1196,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.222';
+const BUILD = '2026-08-08.223';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6917,19 +6917,30 @@ async function tmpDelete(attachmentId){
 let TRV_SVC = null;
 
 async function trvServiceApply(actId, btn){
-  const label = btn ? btn.textContent : '';
-  if(btn) btn.textContent = 'Reading…';
+  // The window opens first and empty. It used to open only once the reading came back, so a
+  // slow answer looked like a dead button and an error landed in a panel hidden behind the
+  // trip window — on screen, nothing at all happened.
+  const a = trvAct(actId);
+  TRV_SVC = null;
+  $('svcTitle').textContent = 'Service dates · ' + ((a && (a.Destinations||a.Reference)) || '');
+  $('svcSummary').innerHTML = 'Reading the documents on this trip — this can take half a minute…';
+  $('svcBody').innerHTML = '<div class="muted" style="padding:12px 0"><span class="spin dark"></span></div>';
+  $('svcSaveBtn').classList.add('hidden');
+  notice('svcErr','','');
+  $('svcModal').classList.remove('hidden');
+
   const done = busy(btn);
-  notice('trvErr','','Reading the documents on this trip — this can take half a minute…');
   try{
     const r = await api('exp_service_scan',{ activityId: actId });
     if(!r.ok) throw new Error(r.error||'Could not read them');
     TRV_SVC = { actId: String(actId), lines: r.lines||[], read: r.read, skipped: r.skipped };
-    notice('trvErr','','');
     trvSvcRender(r);
-    $('svcModal').classList.remove('hidden');
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
-  finally{ done(); if(btn) btn.textContent = label; }
+  }catch(e){
+    $('svcSummary').innerHTML = '';
+    $('svcBody').innerHTML = '';
+    notice('svcErr','err','Could not read the documents: ' + esc(e.message));
+  }
+  finally{ done(); }
 }
 
 function trvSvcRender(r){
