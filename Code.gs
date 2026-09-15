@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.215';
+const BUILD = '2026-08-08.216';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -267,6 +267,7 @@ function route_(action, d) {
     case 'exp_read':           return expRead_(d);
     case 'attach_move':        return attachMove_(d);
     case 'attach_rename':      return attachRename_(d);
+    case 'tmp_list':           return tmpList_(d);
     case 'inbox_list':         return inboxList_(d);
     case 'inbox_add_read':     return inboxAddRead_(d);
     case 'inbox_reread':       return inboxReread_(d);
@@ -452,6 +453,7 @@ function adminAddAttachment_(d) {
   var parentId = trim_(d.parentId);
   if (!parentId) return { ok: false, error: 'Missing parent record' };
   var fileName = trim_(d.fileName) || 'attachment';
+  if (parentType === 'tmp') fileName = tmpName_(fileName);
   var mime = trim_(d.mimeType) || 'application/octet-stream';
   var b64 = d.dataBase64 || '';
   if (!b64) return { ok: false, error: 'No file data' };
@@ -473,9 +475,24 @@ function adminAddAttachment_(d) {
 }
 function attachType_(t) {
   t = trim_(t);
-  // 'inbox' is a file that has been uploaded and read but not yet said to belong anywhere.
-  return (t === 'invoice' || t === 'counterparty' || t === 'activity' || t === 'expense' || t === 'inbox')
-    ? t : 'contract';
+  // 'inbox' is a file that has been read but not yet said to belong anywhere; 'tmp' is one
+  // that belongs nowhere on purpose — somewhere to put a document while it is being worked on.
+  return (t === 'invoice' || t === 'counterparty' || t === 'activity' || t === 'expense'
+          || t === 'inbox' || t === 'tmp') ? t : 'contract';
+}
+
+// The prefix is the point: in the PDF list, among reports and invoices, TMP_ says at a glance
+// that this one is nobody's evidence and can go when it stops being useful.
+function tmpName_(name) {
+  name = trim_(name) || 'file';
+  return /^TMP_/i.test(name) ? name : 'TMP_' + name;
+}
+
+function tmpList_(d) {
+  requireAdmin_(d);
+  return { ok: true, files: readAll_(SHEETS.attachments).filter(function (r) {
+    return trim_(r.ParentType) === 'tmp';
+  }) };
 }
 var DOC_TYPES = ['signed', 'draft', 'annex', 'amendment', 'other'];
 function attachDocType_(t) { t = trim_(t).toLowerCase(); return DOC_TYPES.indexOf(t) >= 0 ? t : 'other'; }
@@ -6719,6 +6736,7 @@ function attachRename_(d) {
   var a = findRow_(SHEETS.attachments, 'AttachmentID', id);
   if (!a) return { ok: false, error: 'File not found' };
   var name = trim_(d.fileName), desc = trim_(d.description);
+  if (name && trim_(a.ParentType) === 'tmp') name = tmpName_(name);
   var upd = {};
   if (name && name !== trim_(a.FileName)) {
     upd.FileName = name;

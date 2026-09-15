@@ -368,6 +368,20 @@
     <!-- DATA -->
     <section id="view-pdf" class="hidden">
       <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2>Temporary files</h2>
+          <div class="acts">
+            <button class="btn sm" onclick="$('tmpFile').click()">Upload</button>
+            <input id="tmpFile" type="file" class="hiddenfile" multiple onchange="tmpUpload(this)">
+            <button class="btn ghost sm" onclick="tmpLoad(this)">Refresh</button></div>
+        </div>
+        <p class="muted" style="margin-top:0">Somewhere to put a document that belongs to nothing —
+          no contract, no trip, no invoice. Each is filed as <b>TMP_</b> and its own name, and shows up
+          in the list below like any other PDF. Delete them when they stop being useful.</p>
+        <div id="tmpErr"></div>
+        <div id="tmpList"></div>
+      </div>
+      <div class="panel">
         <h2>PDF check</h2>
         <p class="muted">What a file says about itself — the dates written inside it, not the ones a file
           manager shows. Pick a document the system holds, or open any PDF from this device.</p>
@@ -1170,7 +1184,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.215';
+const BUILD = '2026-08-08.216';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5159,6 +5173,7 @@ async function pdfTidyRun(btn){
 }
 
 async function pdfCheckInit(){
+  tmpLoad();
   const sel = $('pdfCheckPick'); if(!sel) return;
   sel.innerHTML = '<option>Loading…</option>';
   try{
@@ -6781,6 +6796,92 @@ function trvSameNamed(f){
   if(!name) return null;
   return TRAVEL.files.find(x=>String(x.AttachmentID)!==String(f.AttachmentID)
     && String(x.ParentType)!=='inbox' && String(x.FileName||'').toLowerCase()===name) || null;
+}
+
+// ── Temporary files ──────────────────────────────────────────────────────────
+// No parent, on purpose. Uploaded, listed, renamed, deleted — and visible in the PDF list
+// below, which is where they are usually wanted.
+let TMP_FILES = [];
+
+async function tmpLoad(btn){
+  const done = busy(btn);
+  try{
+    const r = await api('tmp_list');
+    if(!r.ok) throw new Error(r.error||'Could not load');
+    TMP_FILES = r.files||[];
+    notice('tmpErr','','');
+    tmpRender();
+  }catch(e){ notice('tmpErr','err',esc(e.message)); }
+  finally{ done(); }
+}
+
+function tmpRender(){
+  const box = $('tmpList'); if(!box) return;
+  if(!TMP_FILES.length){ box.innerHTML = '<div class="muted" style="font-size:13px">Nothing here.</div>'; return; }
+  box.innerHTML = '<div class="scroll"><table><thead><tr><th>File</th><th>Description</th>'
+    + '<th>Added</th><th class="num"></th></tr></thead><tbody>'
+    + TMP_FILES.slice().sort((x,y)=>String(y.CreatedAt||'').localeCompare(String(x.CreatedAt||'')))
+      .map(f=>{
+        const id = String(f.AttachmentID);
+        return `<tr><td>${esc(f.FileName||'')}</td>`
+          + `<td class="muted">${esc(f.Description||'')}</td>`
+          + `<td style="white-space:nowrap">${esc(String(f.CreatedAt||'').slice(0,10))}</td>`
+          + `<td class="num" style="white-space:nowrap"><span class="acts">`
+          + (f.Url?`<a class="btn ghost sm" href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
+          + `<button class="btn ghost sm" title="rename or describe" onclick="tmpRename('${id}',this)">✎</button>`
+          + `<button class="btn ghost sm" title="delete" onclick="tmpDelete('${id}')">×</button>`
+          + `</span></td></tr>`;
+      }).join('')
+    + '</tbody></table></div>';
+}
+
+async function tmpUpload(input){
+  const files = Array.from(input.files||[]);
+  input.value = '';
+  for(let i=0;i<files.length;i++){
+    const file = files[i], step = `(${i+1} of ${files.length})`;
+    if(file.size > 20*1024*1024){ notice('tmpErr','err',esc(file.name)+' is over 20 MB and was skipped.'); continue; }
+    try{
+      notice('tmpErr','','Uploading '+esc(file.name)+' '+step+'…');
+      const b64 = await trvShrink(file);
+      const r = await api('add_attachment',{ parentType:'tmp', parentId:'tmp', fileName:file.name,
+        description:'', docType:'other',
+        mimeType:/^image\//i.test(file.type||'')?'image/jpeg':(file.type||'application/octet-stream'),
+        dataBase64: b64 });
+      if(!r.ok) throw new Error(r.error||'Upload failed');
+      TMP_FILES.push(r.attachment);
+      tmpRender();
+      notice('tmpErr','','');
+    }catch(e){ notice('tmpErr','err',esc(file.name)+': '+esc(e.message)); }
+  }
+}
+
+async function tmpRename(attachmentId, btn){
+  const f = TMP_FILES.find(x=>String(x.AttachmentID)===String(attachmentId));
+  if(!f) return;
+  const name = prompt('File name', f.FileName||'');
+  if(name === null) return;
+  const desc = prompt('Description', f.Description||'');
+  if(desc === null) return;
+  const done = busy(btn);
+  try{
+    const r = await api('attach_rename',{ attachmentId, fileName:name, description:desc });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    const i = TMP_FILES.findIndex(x=>String(x.AttachmentID)===String(attachmentId));
+    if(i>=0) TMP_FILES[i] = r.attachment;
+    tmpRender();
+  }catch(e){ notice('tmpErr','err',esc(e.message)); }
+  finally{ done(); }
+}
+
+async function tmpDelete(attachmentId){
+  if(!confirm('Delete this file? It goes to Trash in Drive.')) return;
+  try{
+    const r = await api('delete_attachment',{ id: attachmentId });
+    if(!r.ok) throw new Error(r.error||'Could not delete');
+    TMP_FILES = TMP_FILES.filter(f=>String(f.AttachmentID)!==String(attachmentId));
+    tmpRender();
+  }catch(e){ notice('tmpErr','err',esc(e.message)); }
 }
 
 // ── Sorting, for any table that has not got its own ──────────────────────────
