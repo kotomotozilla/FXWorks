@@ -544,6 +544,45 @@
   <div id="trDetail"></div>
 </div></div>
 
+<div id="exModal" class="modal top hidden"><div class="box">
+  <h2><span id="ex_title">Expense</span><button class="x" onclick="closeModal('exModal')">×</button></h2>
+  <div id="ex_where" class="muted" style="font-size:13px;margin-bottom:8px"></div>
+  <div id="exFormErr"></div>
+  <div class="row">
+    <div style="flex:0 0 160px"><label>Date paid</label><input id="ex_date" type="date"></div>
+    <div style="flex:0 0 160px"><label>Service from</label><input id="ex_from" type="date"></div>
+    <div style="flex:0 0 160px"><label>Service to</label><input id="ex_to" type="date"></div>
+  </div>
+  <div class="row">
+    <div style="flex:1;min-width:200px"><label>Category</label><select id="ex_cat"></select></div>
+    <div style="flex:1;min-width:200px"><label>Supplier</label><input id="ex_sup"></div>
+  </div>
+  <div class="row">
+    <div style="flex:0 0 160px"><label>Amount</label><input id="ex_amt" type="number" step="0.01"></div>
+    <div style="flex:0 0 120px"><label>Currency</label><select id="ex_cur"></select></div>
+    <div style="flex:0 0 150px"><label>Paid by</label><select id="ex_paid">
+      <option value="company">Company</option><option value="personal">Personally</option></select></div>
+    <div style="flex:1;min-width:160px"><label>Who paid (if personally)</label><input id="ex_paidname"></div>
+  </div>
+  <div class="row">
+    <div style="flex:1;min-width:180px"><label>Project</label><select id="ex_project"></select></div>
+    <div style="flex:2;min-width:220px"><label>Note</label><input id="ex_desc"></div>
+  </div>
+  <div style="height:12px"></div>
+  <div class="acts">
+    <button class="btn sm" onclick="trvExpSave(this)">Save</button>
+    <button class="btn ghost sm" onclick="closeModal('exModal')">Cancel</button>
+  </div>
+</div></div>
+
+<div id="docsModal" class="modal top hidden"><div class="box">
+  <h2><span id="docsTitle">Documents</span><button class="x" onclick="trvDocsClose()">×</button></h2>
+  <div id="docsErr"></div>
+  <div id="docsBody"></div>
+  <div style="height:12px"></div>
+  <div class="acts"><button class="btn ghost sm" onclick="trvDocsClose()">Done</button></div>
+</div></div>
+
 <div id="acModal" class="modal top hidden"><div class="box">
   <h2><span id="ac_title">New trip</span><button class="x" onclick="closeModal('acModal')">×</button></h2>
   <p class="muted" style="margin-top:0">The request: where, what for, roughly when, roughly how much.
@@ -1125,7 +1164,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.211';
+const BUILD = '2026-08-08.212';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5854,7 +5893,7 @@ async function loadData(){
 // The list stays a list; one activity opens in a window of its own. Documents arrive in
 // their own queue, are read on the way in, and wait until somebody says where they belong.
 let TRAVEL = { activities:[], expenses:[], links:[], files:[], inbox:[] };
-let TRV_OPEN = '', TRV_PICK = '', TRV_EDIT_EXP = '', TRV_EDIT_ACT = '';
+let TRV_OPEN = '', TRV_EDIT_EXP = '', TRV_EDIT_ACT = '', TRV_EXP_ACT = '', TRV_DOCS = null;
 const TRV_ROLES = ['ticket','boarding','invoice','receipt','statement','other'];
 const TRV_CURRENCIES = ['USD','EUR','AED','GBP','HKD','THB','SGD','CHF','CZK','HUF','KZT'];
 const TRV_CATEGORIES = ['Airfare / transport','Accommodation','Local transport / transfer',
@@ -5996,11 +6035,11 @@ function travelRender(){
 
 // ── One activity, in a window of its own ─────────────────────────────────────
 function trvOpen(id){
-  TRV_OPEN = String(id); TRV_PICK = ''; TRV_EDIT_EXP = '';
+  TRV_OPEN = String(id); TRV_EDIT_EXP = '';
   $('trDetailModal').classList.remove('hidden');
   trvRenderDetail();
 }
-function trvClose(){ TRV_OPEN=''; TRV_PICK=''; TRV_EDIT_EXP=''; $('trDetailModal').classList.add('hidden'); travelRender(); }
+function trvClose(){ TRV_OPEN=''; TRV_EDIT_EXP=''; $('trDetailModal').classList.add('hidden'); travelRender(); }
 
 function trvRenderDetail(){
   const a = trvAct(TRV_OPEN);
@@ -6013,6 +6052,8 @@ function trvRenderDetail(){
 
 function trvDetail(a, lines, files){
   const id = String(a.ActivityID);
+  // The service period earns its column only when something is in it.
+  const hasService = lines.some(x=>x.ServiceFrom || x.ServiceTo);
   let h = '';
 
   // The request, as raised
@@ -6055,115 +6096,81 @@ function trvDetail(a, lines, files){
      + `<button class="btn sm" onclick="saveReport('${id}',this)">Save report</button></div>`;
 
   // The lines
-  h += `<div style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;gap:10px">`
+  h += `<div style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`
      + `<b style="font-size:14px">Expenses</b>`
-     + `<span class="muted" style="font-size:13px">${trvTotals(lines)} · ${trvUsd(lines)}</span></div>`;
-  h += `<div class="scroll"><table class="trvrow" style="table-layout:auto;margin-top:6px"><thead><tr><th>Date</th><th>Service</th>`
+     + `<div class="acts"><span class="muted" style="font-size:13px">${trvTotals(lines)} · ${trvUsd(lines)}</span>`
+     + `<button class="btn sm" onclick="trvExpOpen('${id}','')">+ Add expense</button>`
+     + `<button class="btn ghost sm" onclick="trvDocsOpen('activity','${id}')">Documents (${files.length})</button>`
+     + `</div></div>`;
+  h += `<div class="scroll"><table style="table-layout:auto;margin-top:6px"><thead><tr><th>Date</th>`
+     + (hasService?`<th>Service</th>`:'')
      + `<th>Category</th><th>Supplier</th><th class="num">Amount</th><th class="num">USD</th>`
-     + `<th>Paid by</th><th style="min-width:210px">Proof</th><th></th></tr></thead><tbody>`;
-  if(!lines.length) h += '<tr><td class="empty" colspan="9">Nothing yet — add the first line below</td></tr>';
+     + `<th>Paid</th><th>Docs</th><th></th></tr></thead><tbody>`;
+  if(!lines.length) h += `<tr><td class="empty" colspan="${hasService?9:8}">Nothing yet — add the first line</td></tr>`;
   lines.forEach(x=>{
-    if(String(x.ExpenseID)===TRV_EDIT_EXP){ h += trvExpForm(x, id, 'exe'); return; }
-    const ls = trvLinksFor(x.ExpenseID);
-    const proof = ls.length
-      ? ls.map(l=>{ const f=trvFile(l.AttachmentID);
-          const nm = f ? fname(f) : 'missing file';
-          const link = (f&&f.Url) ? `<a href="${esc(f.Url)}" target="_blank">${esc(nm)}</a>` : esc(nm);
-          return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:3px">${link}`
-            + `<select onchange="trvRole('${esc(l.LinkID)}',this.value)" `
-            + `style="width:auto;max-width:130px;padding:4px 8px;font-size:13px">`
-            + TRV_ROLES.map(r=>`<option value="${r}" ${String(l.Role||'other')===r?'selected':''}>${r}</option>`).join('')
-            + `</select>`
-            + `<button class="btn ghost sm" onclick="trvUnlink('${esc(l.LinkID)}')" title="detach">×</button></div>`;
-        }).join('')
-      : `<span style="color:#B4472E">none</span>`;
-    const open = TRV_PICK === String(x.ExpenseID);
-    const picker = files.length
-      ? `<div style="margin-top:4px"><button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">`
-        + `${open?'Close':'Attach files ('+files.length+')'}</button></div>` : '';
+    const n = trvLinksFor(x.ExpenseID).length;
     h += `<tr><td style="white-space:nowrap">${esc(trvDay(x.Date))}</td>`
-       + `<td class="muted" style="font-size:13px;white-space:nowrap">`
-       + `${esc(trvRange(x.ServiceFrom, x.ServiceTo))||'—'}</td>`
+       + (hasService?`<td class="muted" style="font-size:13px;white-space:nowrap">`
+                     + `${esc(trvRange(x.ServiceFrom, x.ServiceTo))||'—'}</td>`:'')
        + `<td>${esc(x.Category||'')}</td><td>${esc(x.Supplier||'')}</td>`
-       + `<td class="num">${trvAmt(x.Currency, x.Amount)}</td>`
+       + `<td class="num" style="white-space:nowrap">${trvAmt(x.Currency, x.Amount)}</td>`
        + `<td class="num">${x.AmountUSD===''||x.AmountUSD==null?'—':'$'+money(x.AmountUSD)}</td>`
-       + `<td>${esc(x.PaidBy||'company')}${x.PaidByName?' · '+esc(x.PaidByName):''}</td>`
-       + `<td>${proof}${picker}</td>`
+       + `<td>${esc(x.PaidBy||'company')==='personal'?'<b>personal</b>':'company'}</td>`
+       + `<td style="white-space:nowrap"><button class="btn ghost sm" `
+       + `onclick="trvDocsOpen('line','${esc(x.ExpenseID)}')">`
+       + (n?`${n} doc(s)`:`<span style="color:#B4472E">none</span>`) + `</button></td>`
        + `<td class="num" style="white-space:nowrap">`
-       + `<button class="btn ghost sm" onclick="trvExpEdit('${esc(x.ExpenseID)}')">Edit</button> `
+       + `<button class="btn ghost sm" onclick="trvExpOpen('${id}','${esc(x.ExpenseID)}')">Edit</button> `
        + `<button class="btn ghost sm" onclick="delExpense('${esc(x.ExpenseID)}')" title="delete">×</button></td></tr>`;
-    if(open && files.length) h += `<tr><td colspan="9" style="padding:8px 4px">${trvPickerPanel(x, files)}</td></tr>`;
   });
-  if(!TRV_EDIT_EXP) h += trvExpForm(null, id, 'exn');
   h += '</tbody></table></div>';
-
-  // The files
-  const own = files.filter(f=>String(f.ParentType)==='activity' && String(f.ParentID)===id);
-  h += `<div style="margin-top:16px"><b style="font-size:14px">Files</b>`
-     + `<div class="trvfiles" style="margin-top:8px">`
-     + (own.length ? own.map(f=>{
-         const used = TRAVEL.links.filter(l=>String(l.AttachmentID)===String(f.AttachmentID)).length;
-         return `<div class="f"><span style="flex:1 1 auto">${esc(fname(f))}`
-           + (used ? ` <span class="muted" style="font-size:12px">· on ${used} line(s)</span>`
-                   : ` <span style="color:#B4472E;font-size:12px">· not assigned</span>`)
-           + `</span>`
-           + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
-           + `<button class="btn ghost sm" onclick="trvReadHere('${id}','${esc(f.AttachmentID)}',this)" `
-           + `title="read this document">read</button>`
-           + `<button class="btn ghost sm" onclick="trvDeleteFile('${esc(f.AttachmentID)}')" title="delete">×</button></div>`;
-       }).join('') : `<span class="muted" style="font-size:13px">No files yet</span>`)
-     + `</div>`
-     + `<div style="margin-top:8px"><input type="file" multiple accept="application/pdf,image/*" `
-     + `onchange="trvUpload('${id}',this)" style="width:auto;padding:6px"></div></div>`;
-
   return h;
 }
 
-// One row of inputs, used both for the line being added and the line being corrected.
-function trvExpForm(x, actId, p){
-  const v = f => x ? (x[f]===0?0:(x[f]||'')) : '';
-  return `<tr class="trvedit"><td><input id="${p}_date_${actId}" type="date" value="${esc(x?fmtDate(x.Date):todayISO())}"></td>`
-    + `<td style="min-width:200px"><div style="display:flex;gap:4px">`
-    + `<input id="${p}_from_${actId}" type="date" value="${esc(x&&x.ServiceFrom?fmtDate(x.ServiceFrom):'')}" title="service from">`
-    + `<input id="${p}_to_${actId}" type="date" value="${esc(x&&x.ServiceTo?fmtDate(x.ServiceTo):'')}" title="service to">`
-    + `</div></td>`
-    + `<td><select id="${p}_cat_${actId}">${trvCatOptions(v('Category'))}</select></td>`
-    + `<td><input id="${p}_sup_${actId}" value="${esc(v('Supplier'))}" placeholder="supplier"></td>`
-    + `<td class="num"><div style="display:flex;gap:4px">`
-    + `<input id="${p}_amt_${actId}" type="number" step="0.01" value="${esc(v('Amount'))}" placeholder="0.00">`
-    + `<select id="${p}_cur_${actId}" style="width:auto">${trvCurOptions(v('Currency'))}</select></div></td>`
-    + `<td class="num muted" style="font-size:12px">on save</td>`
-    + `<td><select id="${p}_paid_${actId}" style="width:auto">`
-    + `<option value="company" ${String(v('PaidBy'))!=='personal'?'selected':''}>company</option>`
-    + `<option value="personal" ${String(v('PaidBy'))==='personal'?'selected':''}>personally</option></select></td>`
-    + `<td><input id="${p}_desc_${actId}" value="${esc(v('Description'))}" placeholder="note (optional)"></td>`
-    + `<td class="num" style="white-space:nowrap">`
-    + `<button class="btn sm" onclick="trvExpSave('${x?esc(x.ExpenseID):''}','${actId}','${p}',this)">${x?'Save':'Add'}</button>`
-    + (x?` <button class="btn ghost sm" onclick="trvExpCancel()">Cancel</button>`:'')
-    + `</td></tr>`;
+// ── One expense, in a form ───────────────────────────────────────────────────
+// Editing in the table itself looked compact and was miserable to use on a touch screen:
+// fields the width of a thumbnail, and a stray tap losing what was typed.
+function trvExpOpen(actId, expenseId){
+  const x = expenseId ? TRAVEL.expenses.find(e=>String(e.ExpenseID)===String(expenseId)) : null;
+  const a = trvAct(actId);
+  TRV_EXP_ACT = String(actId); TRV_EDIT_EXP = x ? String(x.ExpenseID) : '';
+  notice('exFormErr','','');
+  $('ex_title').textContent = x ? 'Expense' : 'New expense';
+  $('ex_where').textContent = a ? ((a.Reference||'') + (a.Destinations?' · '+a.Destinations:'')) : '';
+  $('ex_date').value = x && x.Date ? fmtDate(x.Date) : (a && a.StartDate ? fmtDate(a.StartDate) : todayISO());
+  $('ex_from').value = x && x.ServiceFrom ? fmtDate(x.ServiceFrom) : '';
+  $('ex_to').value = x && x.ServiceTo ? fmtDate(x.ServiceTo) : '';
+  $('ex_cat').innerHTML = trvCatOptions(x ? x.Category : '');
+  $('ex_sup').value = x ? (x.Supplier||'') : '';
+  $('ex_amt').value = x ? (x.Amount||'') : '';
+  $('ex_cur').innerHTML = trvCurOptions(x ? x.Currency : (a ? a.Currency : 'USD'));
+  $('ex_paid').value = (x && String(x.PaidBy||'')==='personal') ? 'personal' : 'company';
+  $('ex_paidname').value = x ? (x.PaidByName||'') : '';
+  $('ex_project').innerHTML = trvProjOptions(x ? x.ProjectID : (a ? a.ProjectID : ''));
+  $('ex_desc').value = x ? (x.Description||'') : '';
+  $('exModal').classList.remove('hidden');
 }
 
-function trvExpEdit(id){ TRV_EDIT_EXP = String(id); TRV_PICK=''; trvRenderDetail(); }
-function trvExpCancel(){ TRV_EDIT_EXP=''; trvRenderDetail(); }
-
-async function trvExpSave(expenseId, actId, p, btn){
+async function trvExpSave(btn){
   const done = busy(btn);
-  const g = f => { const el = $(p+'_'+f+'_'+actId); return el ? el.value : ''; };
   try{
-    if(!g('amt')) throw new Error('Put in an amount');
+    if(!$('ex_amt').value) throw new Error('Put in an amount');
     const r = await api('save_expense',{
-      expenseId, parentType:'activity', parentId:actId,
-      date:g('date'), serviceFrom:g('from'), serviceTo:g('to'),
-      category:g('cat'), supplier:g('sup'), amount:g('amt'), currency:g('cur'),
-      paidBy:g('paid'), description:g('desc')
+      expenseId: TRV_EDIT_EXP, parentType:'activity', parentId: TRV_EXP_ACT,
+      date:$('ex_date').value, serviceFrom:$('ex_from').value, serviceTo:$('ex_to').value,
+      category:$('ex_cat').value, supplier:$('ex_sup').value,
+      amount:$('ex_amt').value, currency:$('ex_cur').value,
+      paidBy:$('ex_paid').value, paidByName:$('ex_paidname').value,
+      projectId:$('ex_project').value, description:$('ex_desc').value
     });
     if(!r.ok) throw new Error(r.error||'Could not save');
     const i = TRAVEL.expenses.findIndex(e=>String(e.ExpenseID)===String(r.expense.ExpenseID));
     if(i>=0) TRAVEL.expenses[i] = r.expense; else TRAVEL.expenses.push(r.expense);
     TRV_EDIT_EXP = '';
-    notice('trvErr','','');
+    $('exModal').classList.add('hidden');
     travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); done(); }
+  }catch(e){ notice('exFormErr','err',esc(e.message)); }
+  finally{ done(); }
 }
 
 async function delExpense(id){
@@ -6173,7 +6180,6 @@ async function delExpense(id){
     if(!r.ok) throw new Error(r.error||'Could not delete');
     TRAVEL.expenses = TRAVEL.expenses.filter(x=>String(x.ExpenseID)!==String(id));
     TRAVEL.links = TRAVEL.links.filter(l=>String(l.ExpenseID)!==String(id));
-    if(TRV_PICK===String(id)) TRV_PICK='';
     travelRender();
   }catch(e){ notice('trvErr','err',esc(e.message)); }
 }
@@ -6247,27 +6253,120 @@ async function delActivity(id){
   }catch(e){ notice('trvErr','err',esc(e.message)); }
 }
 
-// ── Files, and what they prove ───────────────────────────────────────────────
-function trvPickerPanel(x, files){
-  const on = {}; trvLinksFor(x.ExpenseID).forEach(l=>on[String(l.AttachmentID)]=1);
-  return `<div style="padding:12px;border:1px solid #DDE3EA;border-radius:10px;background:#FAFBFC">`
-    + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">`
-    + `<b>Files for ${esc(trvDay(x.Date))} · ${esc(x.Category||'')}${x.Supplier?' · '+esc(x.Supplier):''}</b>`
-    + `<button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">Done</button></div>`
-    + `<div class="trvfiles">`
-    + files.map(f=>`<div class="f"><label>`
-        + `<input type="checkbox" ${on[String(f.AttachmentID)]?'checked':''} `
-        + `onchange="trvToggleFile('${esc(x.ExpenseID)}','${esc(f.AttachmentID)}',this)">`
-        + `<span>${esc(fname(f))}</span></label>`
-        + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener" title="open in a new tab">open</a>`:'')
-        + `</div>`).join('')
-    + `</div></div>`;
+// ── Documents, in a form of their own ────────────────────────────────────────
+// Everything about files lives here: what proves this line, what else is on the trip, what
+// each document is, and what arrives next. Opened against one line, or against the trip.
+function trvDocsOpen(mode, id){
+  TRV_DOCS = { mode: mode, id: String(id) };
+  $('docsModal').classList.remove('hidden');
+  trvDocsRender();
+}
+function trvDocsClose(){ TRV_DOCS = null; $('docsModal').classList.add('hidden'); travelRender(); }
+
+function trvDocsContext(){
+  if(!TRV_DOCS) return null;
+  if(TRV_DOCS.mode==='line'){
+    const x = TRAVEL.expenses.find(e=>String(e.ExpenseID)===String(TRV_DOCS.id));
+    if(!x) return null;
+    return { line: x, actId: String(x.ParentID) };
+  }
+  return { line: null, actId: String(TRV_DOCS.id) };
 }
 
-function trvPick(expenseId){ TRV_PICK = (TRV_PICK===String(expenseId)) ? '' : String(expenseId); trvRenderDetail(); }
+function trvDocsRender(){
+  const ctx = trvDocsContext();
+  if(!ctx){ trvDocsClose(); return; }
+  const files = trvFilesOf(ctx.actId), a = trvAct(ctx.actId);
+  $('docsTitle').textContent = ctx.line
+    ? `Documents for ${trvDay(ctx.line.Date)} · ${ctx.line.Category||''} · ${ctx.line.Supplier||''}`
+    : `Documents · ${(a&&(a.Destinations||a.Reference))||''}`;
 
-// The checkbox is the state of the link itself: ticking it attaches, unticking detaches, and
-// the list stays open so several files can be ticked off against one line in a row.
+  let h = '';
+  if(ctx.line){
+    const ls = trvLinksFor(ctx.line.ExpenseID);
+    h += `<b style="font-size:14px">Proving this line</b>`;
+    h += ls.length ? `<div class="trvfiles" style="margin-top:8px">` + ls.map(l=>{
+        const f = trvFile(l.AttachmentID);
+        const nm = f ? fname(f) : 'missing file';
+        return `<div class="f"><span style="flex:1 1 auto">${esc(nm)}</span>`
+          + `<select onchange="trvRole('${esc(l.LinkID)}',this.value)" `
+          + `style="width:auto;padding:4px 8px;font-size:13px">`
+          + TRV_ROLES.map(r=>`<option value="${r}" ${String(l.Role||'other')===r?'selected':''}>${r}</option>`).join('')
+          + `</select>`
+          + (f&&f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
+          + `<button class="btn ghost sm" onclick="trvUnlink('${esc(l.LinkID)}')" title="detach">×</button></div>`;
+      }).join('') + `</div>`
+      : `<div style="color:#B4472E;font-size:13px;margin-top:6px">Nothing attached yet.</div>`;
+
+    const rest = files.filter(f=>!ls.some(l=>String(l.AttachmentID)===String(f.AttachmentID)));
+    h += `<div style="margin-top:16px"><b style="font-size:14px">Also on this trip</b>`;
+    h += rest.length ? `<div class="trvfiles" style="margin-top:8px">` + rest.map(f=>
+        `<div class="f"><label><input type="checkbox" `
+        + `onchange="trvToggleFile('${esc(ctx.line.ExpenseID)}','${esc(f.AttachmentID)}',this)">`
+        + `<span>${esc(fname(f))}</span></label>`
+        + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
+        + `</div>`).join('') + `</div>`
+      : `<div class="muted" style="font-size:13px;margin-top:6px">Everything on the trip is already here.</div>`;
+    h += `</div>`;
+  }else{
+    h += `<b style="font-size:14px">Everything filed on this trip</b>`;
+    h += files.length ? `<div class="trvfiles" style="margin-top:8px">` + files.map(f=>{
+        const used = TRAVEL.links.filter(l=>String(l.AttachmentID)===String(f.AttachmentID)).length;
+        return `<div class="f"><span style="flex:1 1 auto">${esc(fname(f))}`
+          + (used?` <span class="muted" style="font-size:12px">· on ${used} line(s)</span>`
+                 :` <span style="color:#B4472E;font-size:12px">· not assigned</span>`)
+          + `</span>`
+          + (f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
+          + `<button class="btn ghost sm" onclick="trvReadHere('${esc(ctx.actId)}','${esc(f.AttachmentID)}',this)">read</button>`
+          + `<button class="btn ghost sm" onclick="trvDeleteFile('${esc(f.AttachmentID)}')" title="delete">×</button></div>`;
+      }).join('') + `</div>`
+      : `<div class="muted" style="font-size:13px;margin-top:6px">No files yet.</div>`;
+  }
+
+  h += `<div style="margin-top:16px"><label>Add documents</label>`
+     + `<input type="file" multiple accept="application/pdf,image/*" `
+     + `onchange="trvDocsUpload(this)" style="width:auto;padding:6px">`
+     + `<div class="muted" style="font-size:12px;margin-top:4px">`
+     + (ctx.line ? 'Filed on the trip, attached to this line, and read — the reading turns up in the waiting list.'
+                 : 'Filed on the trip and read; where each one belongs is settled in the waiting list.')
+     + `</div></div>`;
+  $('docsBody').innerHTML = h;
+}
+
+// Uploaded from here: onto the trip, attached to the line if there is one, and read.
+async function trvDocsUpload(input){
+  const ctx = trvDocsContext(); if(!ctx) return;
+  const files = Array.from(input.files||[]);
+  input.value = '';
+  for(let i=0;i<files.length;i++){
+    const file = files[i], step = `(${i+1} of ${files.length})`;
+    if(file.size > 20*1024*1024){ notice('docsErr','err',esc(file.name)+' is over 20 MB and was skipped.'); continue; }
+    try{
+      notice('docsErr','','Uploading '+esc(file.name)+' '+step+'…');
+      const b64 = await trvShrink(file);
+      const up = await api('add_attachment',{ parentType:'activity', parentId:ctx.actId,
+        fileName:file.name, description:file.name, docType:'other',
+        mimeType:/^image\//i.test(file.type||'')?'image/jpeg':(file.type||'application/octet-stream'),
+        dataBase64: b64 });
+      if(!up.ok) throw new Error(up.error||'Upload failed');
+      TRAVEL.files.push(up.attachment);
+      if(ctx.line){
+        const link = await api('link_expense_file',{ expenseId: ctx.line.ExpenseID,
+          attachmentId: up.attachment.AttachmentID });
+        if(link.ok && link.link) TRAVEL.links.push(link.link);
+      }
+      trvDocsRender();
+      notice('docsErr','','Reading '+esc(file.name)+' '+step+'…');
+      const got = await api('inbox_add_read',{ attachmentId: up.attachment.AttachmentID });
+      if(got.row) trvInboxPut(got.row);
+      if(!got.ok && got.error) notice('docsErr','warn',esc(file.name)+': '+esc(got.error));
+      else notice('docsErr','','');
+      trvDocsRender();
+    }catch(e){ notice('docsErr','err',esc(file.name)+': '+esc(e.message)); }
+  }
+  travelRender();
+}
+
 async function trvToggleFile(expenseId, attachmentId, box){
   const want = box.checked;
   box.disabled = true;
@@ -6284,8 +6383,8 @@ async function trvToggleFile(expenseId, attachmentId, box){
         TRAVEL.links = TRAVEL.links.filter(y=>String(y.LinkID)!==String(l.LinkID));
       }
     }
-    travelRender();
-  }catch(e){ box.checked = !want; notice('trvErr','err',esc(e.message)); }
+    trvDocsRender();
+  }catch(e){ box.checked = !want; notice('docsErr','err',esc(e.message)); }
   finally{ box.disabled = false; }
 }
 
@@ -6295,8 +6394,8 @@ async function trvRole(linkId, role){
     if(!r.ok) throw new Error(r.error||'Could not change that');
     const l = TRAVEL.links.find(y=>String(y.LinkID)===String(linkId));
     if(l) l.Role = r.role;
-    travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
+    trvDocsRender();
+  }catch(e){ notice('docsErr','err',esc(e.message)); }
 }
 
 async function trvUnlink(linkId){
@@ -6304,8 +6403,8 @@ async function trvUnlink(linkId){
     const r = await api('unlink_expense_file',{ linkId });
     if(!r.ok) throw new Error(r.error||'Could not detach');
     TRAVEL.links = TRAVEL.links.filter(l=>String(l.LinkID)!==String(linkId));
-    travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
+    trvDocsRender();
+  }catch(e){ notice('docsErr','err',esc(e.message)); }
 }
 
 async function trvDeleteFile(attachmentId){
@@ -6316,6 +6415,7 @@ async function trvDeleteFile(attachmentId){
     TRAVEL.files = TRAVEL.files.filter(f=>String(f.AttachmentID)!==String(attachmentId));
     TRAVEL.links = TRAVEL.links.filter(l=>String(l.AttachmentID)!==String(attachmentId));
     TRAVEL.inbox = TRAVEL.inbox.filter(r=>String(r.AttachmentID)!==String(attachmentId));
+    if(TRV_DOCS) trvDocsRender();
     travelRender();
   }catch(e){ notice('trvErr','err',esc(e.message)); }
 }
