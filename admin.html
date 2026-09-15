@@ -1196,7 +1196,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.223';
+const BUILD = '2026-08-08.224';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6926,6 +6926,8 @@ async function trvServiceApply(actId, btn){
   $('svcSummary').innerHTML = 'Reading the documents on this trip — this can take half a minute…';
   $('svcBody').innerHTML = '<div class="muted" style="padding:12px 0"><span class="spin dark"></span></div>';
   $('svcSaveBtn').classList.add('hidden');
+  $('svcSaveBtn').disabled = false;
+  $('svcSaveBtn').innerHTML = 'Save';
   notice('svcErr','','');
   $('svcModal').classList.remove('hidden');
 
@@ -6992,6 +6994,8 @@ function trvSvcTable(lines){
 
 async function trvServiceSave(btn){
   if(!TRV_SVC) return;
+  // The button lives in the window and outlives the save, so it has to be handed back in every
+  // case. Restoring it only on failure left it spinning and disabled for the next trip.
   const done = busy(btn);
   try{
     const lines = TRV_SVC.lines.filter(trvSvcChanges)
@@ -7007,7 +7011,8 @@ async function trvServiceSave(btn){
     $('svcModal').classList.add('hidden');
     notice('trvErr','ok', `${(r.changed||[]).length} line(s) updated.`);
     travelRender();
-  }catch(e){ notice('svcErr','err',esc(e.message)); done(); }
+  }catch(e){ notice('svcErr','err',esc(e.message)); }
+  finally{ done(); }
 }
 
 // ── Sorting, for any table that has not got its own ──────────────────────────
