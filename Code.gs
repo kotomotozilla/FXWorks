@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.224';
+const BUILD = '2026-08-08.225';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -6492,6 +6492,9 @@ function saveActivityReport_(d) {
     ReportDate: trim_(d.reportDate),
     Activities: trim_(d.activities), Meetings: trim_(d.meetings),
     ReportNotes: trim_(d.reportNotes),
+    // Set when the trip's claim holds business expenses only. It does not say there were
+    // no private days: a gap between two meetings does not make the flight private, and
+    // what is not claimed is not accounted for.
     NoPersonal: truthy_(d.noPersonal) ? 'yes' : '',
     RequestedBy: trim_(d.requestedBy) || trim_(cur.RequestedBy) || CONFIG.DEFAULT_SIGNATORY
   };

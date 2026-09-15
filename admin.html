@@ -1196,7 +1196,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.224';
+const BUILD = '2026-08-08.225';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6140,7 +6140,8 @@ function trvDetail(a, lines, files){
      + `<textarea id="rep_notes_${id}" rows="2">${esc(a.ReportNotes||'')}</textarea></div></div>`
      + `<label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-top:6px">`
      + `<input id="rep_nopers_${id}" type="checkbox" ${String(a.NoPersonal||'').toLowerCase()==='yes'?'checked':''} `
-     + `style="width:18px;height:18px;flex:0 0 18px;padding:0;margin:0"> No personal legs on this trip</label>`
+     + `style="width:18px;height:18px;flex:0 0 18px;padding:0;margin:0"> `
+     + `Only business expenses are claimed on this trip</label>`
      + `<div style="height:10px"></div>`
      + `<button class="btn sm" onclick="saveReport('${id}',this)">Save report</button></div>`;
 
