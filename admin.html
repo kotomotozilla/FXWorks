@@ -500,7 +500,7 @@
         <div id="trvSvcErr"></div>
         <div class="row" style="align-items:flex-end">
           <div style="flex:1;min-width:260px"><label>Trip</label><select id="trvSvcAct"></select></div>
-          <button class="btn sm" onclick="trvServiceScan(this)">Estimate service dates</button>
+          <div style="flex:0 0 auto"><button class="btn sm" onclick="trvServiceScan(this)">Estimate service dates</button></div>
         </div>
         <div id="trvSvc" style="margin-top:12px"></div>
       </div>
@@ -1198,7 +1198,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.219';
+const BUILD = '2026-08-08.220';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6951,9 +6951,12 @@ function trvSvcTable(r){
           + `<td class="muted" style="white-space:nowrap">${esc(now)||'—'}</td>`
           + `<td style="white-space:nowrap${changed?';color:#2E7D4F;font-weight:600':''}">${esc(next)||'—'}</td>`
           + `<td>` + (x.docs.length ? x.docs.map(d=>
-              `<div style="font-size:13px">${esc(d.name)}`
+              `<div style="font-size:13px">`
+              + (d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.name)}</a>`:esc(d.name))
               + (d.docType?` <span class="muted">· ${esc(d.docType)}</span>`:'')
               + (d.dates && d.dates.length?` — ${esc(d.dates.join(', '))}`:'')
+              + (d.yearAdded?` <span class="muted" title="the document printed no year; taken from the line">`
+                             + `· year added</span>`:'')
               + (d.what?` <span class="muted">(${esc(d.what)})</span>`:'')
               + (d.note?` <span style="color:#B4472E">${esc(d.note)}</span>`:'')
               + (!d.note && (!d.dates || !d.dates.length)?` <span class="muted">— no service date on it</span>`:'')

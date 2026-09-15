@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.219';
+const BUILD = '2026-08-08.220';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -6796,16 +6796,40 @@ var SERVICE_SCAN_MAX = 14;
 
 var SERVICE_READ_PROMPT =
   'This document belongs to a business trip. Reply with ONE JSON object, nothing else:\n' +
-  '{"docType":"","dates":["YYYY-MM-DD"],"what":""}\n' +
+  '{"docType":"","dates":["YYYY-MM-DD"],"datesNoYear":["MM-DD"],"what":""}\n' +
   '- docType: one of ticket, boarding, invoice, receipt, statement, other\n' +
-  '- dates: every date on which the service itself is delivered, in order. A hotel folio gives\n' +
-  '  check-in and check-out; a boarding pass gives the day of that flight; a return ticket gives\n' +
-  '  the outbound and the return date; a restaurant receipt gives the day of the meal. Do NOT\n' +
-  '  include the invoice date, the issue date, the payment date or a booking date unless the\n' +
-  '  service happened on that day too. Empty list when the document shows no such date\n' +
+  '- dates: every date on which the service itself is delivered, in order, where the document\n' +
+  '  shows the year. A hotel folio gives check-in and check-out; a boarding pass gives the day\n' +
+  '  of that flight; a return ticket gives the outbound and the return date; a restaurant\n' +
+  '  receipt gives the day of the meal\n' +
+  '- datesNoYear: the same kind of dates where the document prints no year at all — a boarding\n' +
+  '  pass usually shows "14SEP" or "26AUG" and nothing more. Put those here as MM-DD. Never\n' +
+  '  guess the year; leaving it out is the point of this field\n' +
+  '- Do NOT include the invoice date, the issue date, the payment date or a booking date unless\n' +
+  '  the service happened on that day too. Both lists may be empty\n' +
   '- what: under 50 characters saying which dates these are, e.g. "check-in / check-out" or\n' +
   '  "DXB-AMS flight"\n' +
   'Take only what is printed. Never infer a date that is not on the document.';
+
+// "14SEP" on a boarding pass is a real date with a missing year, and the year is not a guess:
+// the line it belongs to, or the trip around it, pins it down. The candidate nearest that
+// anchor wins, which handles a trip running across New Year as well.
+function yearFrom_(mmdd, anchor) {
+  var m = String(mmdd || '').match(/^(\d{1,2})-(\d{1,2})$/);
+  if (!m) return '';
+  var a = isoDate_(anchor);
+  if (!a) return '';
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var month = pad(+m[1]), day = pad(+m[2]), base = +a.slice(0, 4), best = '', bestGap = 1e9;
+  [base - 1, base, base + 1].forEach(function (y) {
+    var cand = y + '-' + month + '-' + day;
+    var gap = Math.abs(dayGap_(cand, a));
+    if (gap < bestGap) { bestGap = gap; best = cand; }
+  });
+  // With three candidate years there is always one within half a year, so a loose limit would
+  // accept anything. Four months out, the document is not about this line: report nothing.
+  return bestGap <= 120 ? best : '';
+}
 
 function expServiceScan_(d) {
   requireAdmin_(d);
@@ -6827,17 +6851,24 @@ function expServiceScan_(d) {
     mine.forEach(function (l) {
       var f = files.filter(function (a) { return String(a.AttachmentID) === String(l.AttachmentID); })[0];
       if (!f) return;
-      if (read >= SERVICE_SCAN_MAX) { skipped++; docs.push({ name: trim_(f.FileName), note: 'not read — limit reached' }); return; }
+      if (read >= SERVICE_SCAN_MAX) { skipped++; docs.push({ name: trim_(f.FileName), url: trim_(f.Url), note: 'not read — limit reached' }); return; }
       read++;
       var got = docAsk_(String(f.AttachmentID), SERVICE_READ_PROMPT);
-      if (!got.ok) { docs.push({ name: trim_(f.FileName), note: String(got.error).slice(0, 120) }); return; }
-      var found = [];
+      if (!got.ok) { docs.push({ name: trim_(f.FileName), url: trim_(f.Url), note: String(got.error).slice(0, 120) }); return; }
+      var found = [], guessed = 0;
       (Array.isArray(got.json.dates) ? got.json.dates : []).forEach(function (v) {
         var iso = isoDate_(v);
         if (iso) { found.push(iso); dates.push(iso); }
       });
-      docs.push({ name: trim_(f.FileName), role: trim_(l.Role), docType: trim_(got.json.docType),
-                  what: trim_(got.json.what).slice(0, 60), dates: found });
+      // The anchor for a yearless date: the line's own date, else the trip around it.
+      var anchor = isoDate_(x.Date) || isoDate_(act.ActualStart) || isoDate_(act.StartDate);
+      (Array.isArray(got.json.datesNoYear) ? got.json.datesNoYear : []).forEach(function (v) {
+        var iso = yearFrom_(v, anchor);
+        if (iso) { found.push(iso); dates.push(iso); guessed++; }
+      });
+      docs.push({ name: trim_(f.FileName), url: trim_(f.Url), role: trim_(l.Role),
+                  docType: trim_(got.json.docType), what: trim_(got.json.what).slice(0, 60),
+                  dates: found, yearAdded: guessed });
     });
     if (!mine.length) return;
     dates.sort();
