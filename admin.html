@@ -449,6 +449,8 @@
             <button class="btn sm" onclick="$('trvInboxFile').click()">Upload documents</button>
             <input id="trvInboxFile" type="file" class="hiddenfile" multiple
                    accept="application/pdf,image/*" onchange="trvInboxUpload(this)">
+            <button class="btn ghost sm" onclick="trvCheckMail(this)"
+                    title="read mail with fxdoc.in in the subject">Check mail</button>
             <button class="btn ghost sm" onclick="travelLoad(this)">Refresh</button></div>
         </div>
         <div id="trvErr"></div>
@@ -461,11 +463,23 @@
           <h2>Documents waiting</h2>
           <div class="acts"><span id="trvInboxCount" class="muted" style="font-size:13px"></span></div>
         </div>
-        <p class="muted" style="margin-top:0">Read on arrival. Each one either starts an expense line or
-          joins one that is already there — a flight is one expense with a ticket, a boarding pass and an
-          invoice behind it.</p>
+        <p class="muted" style="margin-top:0">Read on arrival — uploaded here, or forwarded to the mailbox
+          with <b>fxdoc.in</b> in the subject. Nothing is recorded until you place it: each one either starts
+          an expense line or joins one already there, since a flight is one expense with a ticket, a boarding
+          pass and an invoice behind it.</p>
         <div id="trvInboxErr"></div>
         <div id="trvInbox"></div>
+      </div>
+
+      <div class="panel hidden" id="trvLoosePanel">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2>Files nothing points at</h2>
+          <div class="acts"><span id="trvLooseCount" class="muted" style="font-size:13px"></span></div>
+        </div>
+        <p class="muted" style="margin-top:0">Filed, but proving no expense line. Most came over from the old
+          app, where receipts and figures were kept in separate lists.</p>
+        <div id="trvLooseErr"></div>
+        <div id="trvLoose"></div>
       </div>
     </section>
 
@@ -1111,7 +1125,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.209';
+const BUILD = '2026-08-08.211';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5839,9 +5853,8 @@ async function loadData(){
 // ── Activities and expenses ──────────────────────────────────────────────────
 // The list stays a list; one activity opens in a window of its own. Documents arrive in
 // their own queue, are read on the way in, and wait until somebody says where they belong.
-let TRAVEL = { activities:[], expenses:[], links:[], files:[] };
+let TRAVEL = { activities:[], expenses:[], links:[], files:[], inbox:[] };
 let TRV_OPEN = '', TRV_PICK = '', TRV_EDIT_EXP = '', TRV_EDIT_ACT = '';
-let TRV_READS = {};          // attachmentId -> what the model made of it
 const TRV_ROLES = ['ticket','boarding','invoice','receipt','statement','other'];
 const TRV_CURRENCIES = ['USD','EUR','AED','GBP','HKD','THB','SGD','CHF','CZK','HUF','KZT'];
 const TRV_CATEGORIES = ['Airfare / transport','Accommodation','Local transport / transfer',
@@ -5862,6 +5875,38 @@ function trvProjOptions(sel){
   return '<option value="">— none —</option>' + (PROJECTS||[]).map(p=>
     `<option value="${esc(p.ProjectID)}" ${String(sel)===String(p.ProjectID)?'selected':''}>${esc(p.Name||'')}</option>`).join('');
 }
+// 2026-08-25 → 25.08.26, and a pair of them to the shortest thing that still reads as an
+// interval: same month keeps one month, same year keeps one year.
+function trvDay(v){
+  const s = fmtDate(v); if(!s) return '';
+  const p = s.split('-'); return p.length===3 ? `${p[2]}.${p[1]}.${p[0].slice(2)}` : s;
+}
+function trvRange(from, to){
+  const a = fmtDate(from), b = fmtDate(to);
+  if(!a) return '';
+  if(!b || a===b) return trvDay(a);
+  const [ay,am,ad] = a.split('-'), [by,bm,bd] = b.split('-');
+  if(ay===by && am===bm) return `${ad}–${bd}.${bm}.${by.slice(2)}`;
+  if(ay===by) return `${ad}.${am}–${bd}.${bm}.${by.slice(2)}`;
+  return `${trvDay(a)}–${trvDay(b)}`;
+}
+
+// Dubai, Amsterdam, Budapest, Bangkok → DUB·AMS·BUD·BGK. A route needs to be recognised at a
+// glance, not read.
+function trvRoute(s){
+  return String(s||'').split(/[,;]+/).map(x=>x.trim()).filter(Boolean)
+    .map(x=>x.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase()).join('·');
+}
+
+// The lines carry a figure in USD each, worked out at the rate of their own date; the sum of
+// those is the only total that means anything across four currencies.
+function trvUsd(lines){
+  let sum = 0, gaps = 0;
+  lines.forEach(x=>{ const v = x.AmountUSD; if(v==='' || v==null) gaps++; else sum += (+v||0); });
+  if(!lines.length) return '—';
+  return (gaps?'≈ ':'') + '$' + money(sum);
+}
+
 function trvProjName(id){ const p=(PROJECTS||[]).find(x=>String(x.ProjectID)===String(id)); return p?(p.Name||''):''; }
 function trvAct(id){ return TRAVEL.activities.find(a=>String(a.ActivityID)===String(id)) || null; }
 
@@ -5872,7 +5917,8 @@ async function travelLoad(btn){
   try{
     const r = await api('list_travel');
     if(!r.ok) throw new Error(r.error||'Could not load');
-    TRAVEL = { activities:r.activities||[], expenses:r.expenses||[], links:r.links||[], files:r.files||[] };
+    TRAVEL = { activities:r.activities||[], expenses:r.expenses||[], links:r.links||[],
+               files:r.files||[], inbox:r.inbox||[] };
     LOADED['travel'] = Date.now();
     notice('trvErr','','');
     travelRender();
@@ -5912,22 +5958,32 @@ function travelRender(){
   $('trvSummary').innerHTML = acts.length
     ? `${acts.length} activity(ies) · ${TRAVEL.expenses.length} expense line(s)`
       + ` — <b>${noFile}</b> line(s) with nothing attached, <b>${loose}</b> file(s) not assigned to a line`
+      + (TRAVEL.inbox.length?`, <b style="color:#B4651A">${TRAVEL.inbox.length}</b> document(s) waiting to be placed`:'')
     : 'Nothing here yet — raise a trip, or upload the documents and let them find their place.';
 
   if(!acts.length){ t.innerHTML = '<tbody><tr><td class="empty">No activities</td></tr></tbody>'; }
   else{
-    let h = '<thead><tr><th>Reference</th><th>Dates</th><th>Destinations</th><th>Status</th>'
-          + '<th class="num">Lines</th><th class="num">Spent</th><th class="num">Files</th><th></th></tr></thead><tbody>';
+    let h = '<thead><tr><th>Trip</th><th>Dates</th><th title="R raised · D reported">St</th>'
+          + '<th class="num" title="lines / lines with no document">Lines</th>'
+          + '<th class="num">Spent, USD</th><th></th></tr></thead><tbody>';
     acts.forEach(a=>{
       const id = String(a.ActivityID), lines = trvLinesOf(id), files = trvFilesOf(id);
       const missing = lines.filter(x=>!trvLinksFor(x.ExpenseID).length).length;
-      h += `<tr><td><b>${esc(a.Reference||'—')}</b>`
+      const waiting = trvInboxFor(id).length;
+      const done = String(a.Status||'')==='Reported';
+      h += `<tr><td style="white-space:nowrap"><b title="${esc(a.Reference||'')}">`
+         + `${esc(trvRoute(a.Destinations)||a.Reference||'—')}</b>`
          + (String(a.Type||'trip')!=='trip'?` <span class="muted" style="font-size:12px">${esc(a.Type)}</span>`:'')
+         + (waiting?` <span style="color:#B4651A;font-size:12px" title="${waiting} document(s) waiting to be placed">`
+                  + `●${waiting}</span>`:'')
          + `</td>`
-         + `<td>${esc(fmtDate(a.StartDate))}${a.EndDate?' → '+esc(fmtDate(a.EndDate)):''}</td>`
-         + `<td>${esc(a.Destinations||'')}</td><td>${esc(a.Status||'')}</td>`
-         + `<td class="num">${lines.length}${missing?` <span style="color:#B4472E">(${missing} without a file)</span>`:''}</td>`
-         + `<td class="num">${trvTotals(lines)}</td><td class="num">${files.length}</td>`
+         + `<td style="white-space:nowrap">${esc(trvRange(a.StartDate, a.EndDate))||'—'}</td>`
+         + `<td title="${esc(a.Status||'')}" style="color:${done?'#2E7D4F':'#8A94A6'};font-weight:600">`
+         + `${done?'D':'R'}</td>`
+         + `<td class="num" style="white-space:nowrap">${lines.length}`
+         + (missing?` / <span style="color:#B4472E" title="${missing} line(s) with no document">${missing}</span>`:'')
+         + `</td>`
+         + `<td class="num" title="${esc(trvTotals(lines))}">${trvUsd(lines)}</td>`
          + `<td class="num" style="white-space:nowrap">`
          + `<button class="btn ghost sm" onclick="trvOpen('${id}')">Open</button> `
          + `<button class="btn ghost sm" onclick="delActivity('${id}')" title="delete">×</button></td></tr>`;
@@ -5950,7 +6006,8 @@ function trvRenderDetail(){
   const a = trvAct(TRV_OPEN);
   if(!a){ trvClose(); return; }
   const id = String(a.ActivityID);
-  $('trDetailTitle').textContent = (a.Reference||'Trip') + (a.Destinations?' · '+a.Destinations:'');
+  $('trDetailTitle').textContent = (a.Destinations||a.Reference||'Trip')
+    + (a.StartDate?' · '+trvRange(a.StartDate, a.EndDate):'');
   $('trDetail').innerHTML = trvDetail(a, trvLinesOf(id), trvFilesOf(id));
 }
 
@@ -5963,8 +6020,8 @@ function trvDetail(a, lines, files){
      + `<div style="flex:1 1 420px">`
      + (a.Purpose?`<div style="margin-bottom:6px">${esc(a.Purpose)}</div>`
                  :'<div class="muted" style="margin-bottom:6px">No purpose recorded</div>')
-     + `<div class="muted" style="font-size:13px">Planned ${esc(fmtDate(a.StartDate))||'—'}`
-     + `${a.EndDate?' → '+esc(fmtDate(a.EndDate)):''}`
+     + `<div class="muted" style="font-size:13px">${esc(a.Reference||'')} · planned `
+     + `${esc(trvRange(a.StartDate, a.EndDate))||'—'}`
      + (a.EstimatedCost!==''&&a.EstimatedCost!=null?` · budget ${trvAmt(a.Currency, a.EstimatedCost)}`:'')
      + (a.ProjectID?` · project ${esc(trvProjName(a.ProjectID))}`:'')
      + (a.Counterparty?` · ${esc(a.Counterparty)}`:'')
@@ -6000,8 +6057,8 @@ function trvDetail(a, lines, files){
   // The lines
   h += `<div style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;gap:10px">`
      + `<b style="font-size:14px">Expenses</b>`
-     + `<span class="muted" style="font-size:13px">${trvTotals(lines)}</span></div>`;
-  h += `<table class="trvrow" style="table-layout:auto;margin-top:6px"><thead><tr><th>Date</th><th>Service</th>`
+     + `<span class="muted" style="font-size:13px">${trvTotals(lines)} · ${trvUsd(lines)}</span></div>`;
+  h += `<div class="scroll"><table class="trvrow" style="table-layout:auto;margin-top:6px"><thead><tr><th>Date</th><th>Service</th>`
      + `<th>Category</th><th>Supplier</th><th class="num">Amount</th><th class="num">USD</th>`
      + `<th>Paid by</th><th style="min-width:210px">Proof</th><th></th></tr></thead><tbody>`;
   if(!lines.length) h += '<tr><td class="empty" colspan="9">Nothing yet — add the first line below</td></tr>';
@@ -6024,9 +6081,9 @@ function trvDetail(a, lines, files){
     const picker = files.length
       ? `<div style="margin-top:4px"><button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">`
         + `${open?'Close':'Attach files ('+files.length+')'}</button></div>` : '';
-    h += `<tr><td>${esc(fmtDate(x.Date))}</td>`
-       + `<td class="muted" style="font-size:13px">${x.ServiceFrom?esc(fmtDate(x.ServiceFrom)):''}`
-       + `${x.ServiceTo?' → '+esc(fmtDate(x.ServiceTo)):''}${(!x.ServiceFrom&&!x.ServiceTo)?'—':''}</td>`
+    h += `<tr><td style="white-space:nowrap">${esc(trvDay(x.Date))}</td>`
+       + `<td class="muted" style="font-size:13px;white-space:nowrap">`
+       + `${esc(trvRange(x.ServiceFrom, x.ServiceTo))||'—'}</td>`
        + `<td>${esc(x.Category||'')}</td><td>${esc(x.Supplier||'')}</td>`
        + `<td class="num">${trvAmt(x.Currency, x.Amount)}</td>`
        + `<td class="num">${x.AmountUSD===''||x.AmountUSD==null?'—':'$'+money(x.AmountUSD)}</td>`
@@ -6038,7 +6095,7 @@ function trvDetail(a, lines, files){
     if(open && files.length) h += `<tr><td colspan="9" style="padding:8px 4px">${trvPickerPanel(x, files)}</td></tr>`;
   });
   if(!TRV_EDIT_EXP) h += trvExpForm(null, id, 'exn');
-  h += '</tbody></table>';
+  h += '</tbody></table></div>';
 
   // The files
   const own = files.filter(f=>String(f.ParentType)==='activity' && String(f.ParentID)===id);
@@ -6195,7 +6252,7 @@ function trvPickerPanel(x, files){
   const on = {}; trvLinksFor(x.ExpenseID).forEach(l=>on[String(l.AttachmentID)]=1);
   return `<div style="padding:12px;border:1px solid #DDE3EA;border-radius:10px;background:#FAFBFC">`
     + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">`
-    + `<b>Files for ${esc(fmtDate(x.Date))} · ${esc(x.Category||'')}${x.Supplier?' · '+esc(x.Supplier):''}</b>`
+    + `<b>Files for ${esc(trvDay(x.Date))} · ${esc(x.Category||'')}${x.Supplier?' · '+esc(x.Supplier):''}</b>`
     + `<button class="btn ghost sm" onclick="trvPick('${esc(x.ExpenseID)}')">Done</button></div>`
     + `<div class="trvfiles">`
     + files.map(f=>`<div class="f"><label>`
@@ -6258,7 +6315,7 @@ async function trvDeleteFile(attachmentId){
     if(!r.ok) throw new Error(r.error||'Could not delete');
     TRAVEL.files = TRAVEL.files.filter(f=>String(f.AttachmentID)!==String(attachmentId));
     TRAVEL.links = TRAVEL.links.filter(l=>String(l.AttachmentID)!==String(attachmentId));
-    delete TRV_READS[String(attachmentId)];
+    TRAVEL.inbox = TRAVEL.inbox.filter(r=>String(r.AttachmentID)!==String(attachmentId));
     travelRender();
   }catch(e){ notice('trvErr','err',esc(e.message)); }
 }
@@ -6269,128 +6326,288 @@ async function trvDeleteFile(attachmentId){
 async function trvInboxUpload(input){ await trvUploadQueue(input, 'inbox', 'inbox'); }
 async function trvUpload(actId, input){ await trvUploadQueue(input, 'activity', actId); }
 
+// A photograph off a phone is four megabytes of detail no reader needs. Shrunk before it goes
+// anywhere: faster upload, and well inside what the request can carry.
+async function trvShrink(file){
+  if(!/^image\//i.test(file.type||'')) return await fileToBase64(file);
+  try{
+    const url = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
+    const img = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=url; });
+    const max = 2000, scale = Math.min(1, max/Math.max(img.width, img.height));
+    if(scale >= 1 && file.size < 1500000) return String(url).split(',')[1];
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.width*scale); c.height = Math.round(img.height*scale);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.7).split(',')[1];
+  }catch(e){ return await fileToBase64(file); }
+}
+
 async function trvUploadQueue(input, parentType, parentId){
   const files = Array.from(input.files||[]);
   input.value = '';
   if(!files.length) return;
   const where = parentType==='inbox' ? 'trvInboxErr' : 'trvErr';
-  if(parentType==='inbox') $('trvInboxPanel').classList.remove('hidden');
   for(let i=0;i<files.length;i++){
     const file = files[i], step = `(${i+1} of ${files.length})`;
     if(file.size > 20*1024*1024){ notice(where,'err',esc(file.name)+' is over 20 MB and was skipped.'); continue; }
     try{
       notice(where,'','Uploading '+esc(file.name)+' '+step+'…');
+      const b64 = await trvShrink(file);
       const up = await api('add_attachment',{ parentType, parentId, fileName:file.name,
-        description:file.name, docType:'other', mimeType:file.type||'application/octet-stream',
-        dataBase64: await fileToBase64(file) });
+        description:file.name, docType:'other',
+        mimeType:/^image\//i.test(file.type||'')?'image/jpeg':(file.type||'application/octet-stream'),
+        dataBase64: b64 });
       if(!up.ok) throw new Error(up.error||'Upload failed');
       TRAVEL.files.push(up.attachment);
       travelRender();
       notice(where,'','Reading '+esc(file.name)+' '+step+'…');
-      await trvRead(up.attachment.AttachmentID, where);
+      const got = await api('inbox_add_read',{ attachmentId: up.attachment.AttachmentID });
+      if(got.row) trvInboxPut(got.row);
+      if(!got.ok && got.error) notice(where,'warn',esc(file.name)+': '+esc(got.error));
+      travelRender();
     }catch(e){ notice(where,'err',esc(file.name)+': '+esc(e.message)); }
   }
-  notice(where,'','');
+  if(!$(where).innerHTML.includes('notice err')) notice(where,'','');
   travelRender();
 }
 
-// The reading is a suggestion held in the page, not a record: nothing is written until it is
-// accepted, and "read" can be pressed again on anything already filed.
-async function trvRead(attachmentId, where){
-  try{
-    const r = await api('exp_read',{ attachmentId });
-    if(!r.ok) throw new Error(r.error||'Could not read it');
-    TRV_READS[String(attachmentId)] = { read:r.read, activityId:r.activityId||'', why:r.activityWhy||'' };
-    return true;
-  }catch(e){ notice(where||'trvInboxErr','err',esc(e.message)); return false; }
+function trvInboxPut(row){
+  const i = TRAVEL.inbox.findIndex(r=>String(r.InboxID)===String(row.InboxID));
+  if(i>=0) TRAVEL.inbox[i] = row; else TRAVEL.inbox.push(row);
+}
+function trvInboxFor(actId){
+  return TRAVEL.inbox.filter(r=>String(r.SuggestActivityID)===String(actId));
 }
 
+// Reading a file that is already filed: same road, and the card that comes back sits in the
+// waiting list until it is placed on a line.
 async function trvReadHere(actId, attachmentId, btn){
   const done = busy(btn);
   notice('trvErr','','Reading the document…');
-  if(await trvRead(attachmentId, 'trvErr')){
-    // Read from inside a trip: it already belongs there, so only the line is open.
-    TRV_READS[String(attachmentId)].activityId = String(actId);
-    notice('trvErr','','');
-  }
-  done();
-  travelRender();
+  try{
+    const r = await api('inbox_add_read',{ attachmentId });
+    if(r.row) trvInboxPut(r.row);
+    notice('trvErr', r.ok?'':'warn', r.ok?'':esc(r.error||'Could not read it'));
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
+  finally{ done(); }
 }
 
+async function trvCheckMail(btn){
+  const done = busy(btn);
+  notice('trvInboxErr','','Checking the mailbox…');
+  try{
+    const r = await api('mail_tick');
+    if(!r.ok) throw new Error(r.error||'Could not check the mail');
+    let msg = r.taken ? `${r.taken} document(s) taken from ${r.threads} message thread(s).`
+                      : `Nothing new — ${r.threads} thread(s) matched the keyword.`;
+    if(r.left) msg += ` ${r.left} left for the next pass.`;
+    if((r.skippedSender||[]).length) msg += ` Ignored mail from: ${r.skippedSender.join(', ')}.`;
+    if((r.skippedType||[]).length) msg += ` Not a PDF or photograph: ${r.skippedType.join(', ')}.`;
+    if((r.failed||[]).length) msg += ` Could not read: ${r.failed.join('; ')}.`;
+    notice('trvInboxErr', (r.failed||[]).length?'warn':'ok', esc(msg));
+    LOADED['travel'] = 0;
+    await travelLoad();
+  }catch(e){ notice('trvInboxErr','err',esc(e.message)); }
+  finally{ done(); }
+}
+
+// ── Waiting documents ────────────────────────────────────────────────────────
 function trvInboxRender(){
   const box = $('trvInbox'); if(!box) return;
-  const waiting = trvInboxFiles();
-  const readHere = Object.keys(TRV_READS).filter(id=>{
-    const f = trvFile(id);
-    return f && String(f.ParentType)!=='inbox' && TRV_READS[id];
-  }).map(id=>trvFile(id));
-  const all = waiting.concat(readHere);
-  $('trvInboxPanel').classList.toggle('hidden', !all.length);
-  $('trvInboxCount').textContent = all.length ? all.length + ' document(s)' : '';
-  if(!all.length){ box.innerHTML=''; return; }
-  box.innerHTML = all.map(f=>trvInboxCard(f)).join('');
+  const rows = TRAVEL.inbox.slice().sort((a,b)=>String(b.CreatedAt||'').localeCompare(String(a.CreatedAt||'')));
+  $('trvInboxPanel').classList.toggle('hidden', !rows.length);
+  $('trvInboxCount').textContent = rows.length ? rows.length + ' document(s)' : '';
+  box.innerHTML = rows.map(trvInboxCard).join('');
+  trvLooseRender();
 }
 
-function trvInboxCard(f){
-  const id = String(f.AttachmentID), got = TRV_READS[id];
+function trvInboxCard(r){
+  const id = String(r.InboxID), f = trvFile(r.AttachmentID);
+  const actId = String(r.SuggestActivityID||'');
   let h = `<div style="padding:12px;border:1px solid #DDE3EA;border-radius:10px;margin-bottom:10px">`
     + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`
-    + `<b>${esc(fname(f))}</b><div class="acts">`
-    + (f.Url?`<a class="btn ghost sm" href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
-    + `<button class="btn ghost sm" onclick="trvReadAgain('${id}',this)">Read again</button>`
-    + `<button class="btn ghost sm" onclick="trvDeleteFile('${id}')" title="delete">×</button></div></div>`;
-  const twin = trvSameNamed(f);
+    + `<b>${esc(r.FileName||'document')}</b><div class="acts">`
+    + `<span class="muted" style="font-size:12px">${r.Source==='mail'?'by mail':'uploaded'}`
+    + `${r.MailFrom?' · '+esc(String(r.MailFrom).replace(/.*</,'').replace(/>.*/,'')):''}</span>`
+    + (f&&f.Url?`<a class="btn ghost sm" href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
+    + `<button class="btn ghost sm" onclick="trvInboxReread('${id}',this)">Read again</button>`
+    + `<button class="btn ghost sm" onclick="trvInboxDismiss('${id}',this)">Not now</button>`
+    + `</div></div>`;
+
+  const twin = f ? trvSameNamed(f) : null;
   if(twin){
     const on = twin.ParentType==='activity' ? trvAct(twin.ParentID) : null;
     h += `<div class="notice warn" style="margin-top:8px">The same file name is already filed`
        + (on?` on ${esc(on.Reference||'')}`:'') + ` — this may be a second copy.</div>`;
   }
-  if(!got){
-    return h + `<div class="muted" style="font-size:13px;margin-top:6px">Not read yet.</div></div>`;
-  }
-  const r = got.read;
-  const bits = [r.supplier||'unnamed supplier'];
-  if(r.date) bits.push(fmtDate(r.date));
-  if(r.amount) bits.push(trvAmt(r.currency, r.amount));
-  if(r.serviceFrom) bits.push('service ' + r.serviceFrom + (r.serviceTo?' → '+r.serviceTo:''));
-  h += `<div style="margin:6px 0 10px">read as <b>${esc(r.docType)}</b> — ${esc(bits.join(' · '))}`
-     + (r.description?` <span class="muted">— ${esc(r.description)}</span>`:'')
-     + (r.category?` <span class="muted">· ${esc(r.category)}</span>`:'') + `</div>`;
 
-  const actId = got.activityId || '';
-  h += `<div class="row" style="align-items:flex-end">`
-     + `<div style="flex:1;min-width:240px"><label>Trip</label>`
-     + `<select id="inb_act_${id}" onchange="trvInboxActChange('${id}',this.value)">`
+  if(String(r.Status)!=='read'){
+    return h + `<div class="notice err" style="margin-top:8px">Could not be read`
+      + (r.Error?`: ${esc(r.Error)}`:'') + `</div></div>`;
+  }
+
+  const bits = [r.Supplier||'unnamed supplier'];
+  if(r.DocDate) bits.push(trvDay(r.DocDate));
+  if(+r.Amount) bits.push(trvAmt(r.Currency, r.Amount));
+  if(r.ServiceFrom) bits.push('service ' + trvRange(r.ServiceFrom, r.ServiceTo));
+  h += `<div style="margin:6px 0 10px">read as <b>${esc(r.DocType||'other')}</b> — ${esc(bits.join(' · '))}`
+     + (r.Description?` <span class="muted">— ${esc(r.Description)}</span>`:'')
+     + (r.Category?` <span class="muted">· ${esc(r.Category)}</span>`:'') + `</div>`;
+
+  h += `<div class="row" style="align-items:flex-end"><div style="flex:1;min-width:260px"><label>Activity</label>`
+     + `<select id="inb_act_${id}" onchange="trvInboxRender()">`
      + `<option value="">— pick one —</option>`
      + TRAVEL.activities.slice().sort((a,b)=>String(b.StartDate||'').localeCompare(String(a.StartDate||'')))
-        .map(a=>`<option value="${esc(a.ActivityID)}" ${String(actId)===String(a.ActivityID)?'selected':''}>`
+        .map(a=>`<option value="${esc(a.ActivityID)}" ${actId===String(a.ActivityID)?'selected':''}>`
           + `${esc(a.Reference||'')}${a.Destinations?' · '+esc(a.Destinations):''}</option>`).join('')
      + `</select>`
-     + (got.why?`<div class="muted" style="font-size:12px;margin-top:4px">${esc(got.why)}</div>`:'')
+     + (r.SuggestWhy?`<div class="muted" style="font-size:12px;margin-top:4px">${esc(r.SuggestWhy)}</div>`:'')
      + `</div></div>`;
 
-  if(!actId) return h + `<div class="muted" style="font-size:13px;margin-top:8px">Pick the trip it belongs to.</div></div>`;
+  if(!actId) return h + `<div class="muted" style="font-size:13px;margin-top:8px">Pick the activity, then place it on a line.</div></div>`;
 
-  const cands = trvReadCandidates(trvLinesOf(actId), r);
+  const lines = trvLinesOf(actId);
   h += `<div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">`;
-  if(cands.length){
-    h += `<div style="flex:1 1 360px;min-width:300px"><label>Attach to a line already there</label>`
+  if(lines.length){
+    h += `<div style="flex:1 1 380px;min-width:300px"><label>Put it on a line</label>`
       + `<select id="inb_line_${id}">`
-      + cands.map(c=>`<option value="${esc(c.x.ExpenseID)}">${esc(fmtDate(c.x.Date))} · ${esc(c.x.Category||'')}`
-          + ` · ${esc(c.x.Supplier||'')} · ${esc(trvAmt(c.x.Currency, c.x.Amount))} — ${esc(c.why)}</option>`).join('')
-      + `</select></div>`
-      + `<button class="btn sm" onclick="trvInboxAttach('${id}',this)">Attach</button>`;
-  }else{
-    h += `<div class="muted" style="font-size:13px;flex:1 1 300px">No line there looks like the same expense.</div>`;
+      + lines.map(x=>`<option value="${esc(x.ExpenseID)}" ${String(r.SuggestExpenseID)===String(x.ExpenseID)?'selected':''}>`
+          + `${esc(trvDay(x.Date))} · ${esc(x.Category||'')} · ${esc(x.Supplier||'')} · `
+          + `${esc(trvAmt(x.Currency, x.Amount))}${String(r.SuggestExpenseID)===String(x.ExpenseID)?' ← suggested':''}`
+          + `</option>`).join('')
+      + `</select>`
+      + (r.SuggestWhyLine?`<div class="muted" style="font-size:12px;margin-top:4px">suggested because: ${esc(r.SuggestWhyLine)}</div>`:'')
+      + `</div>`
+      + `<button class="btn sm" onclick="trvInboxAccept('${id}',true,this)">Attach to this line</button>`;
   }
-  if(r.amount){
-    h += `<button class="btn ${cands.length?'ghost ':''}sm" onclick="trvInboxCreate('${id}',this)">`
+  if(+r.Amount){
+    h += `<button class="btn ${lines.length?'ghost ':''}sm" onclick="trvInboxAccept('${id}',false,this)">`
       + `Start a new line</button>`;
-  }else{
-    h += `<div class="muted" style="font-size:13px;flex:1 1 260px">No amount printed — a boarding pass `
-      + `proves a line rather than starting one.</div>`;
+  }else if(!lines.length){
+    h += `<div class="muted" style="font-size:13px">No amount printed and no lines yet — add the line, then attach this.</div>`;
   }
   return h + `</div></div>`;
+}
+
+async function trvInboxAccept(inboxId, onLine, btn){
+  const done = busy(btn);
+  const act = $('inb_act_'+inboxId), line = $('inb_line_'+inboxId);
+  try{
+    const r = await api('inbox_accept',{ inboxId, activityId: act?act.value:'',
+      expenseId: onLine && line ? line.value : '' });
+    if(!r.ok) throw new Error(r.error||'Could not place it');
+    TRAVEL.inbox = TRAVEL.inbox.filter(x=>String(x.InboxID)!==String(inboxId));
+    if(r.expense) TRAVEL.expenses.push(r.expense);
+    if(r.link && !TRAVEL.links.some(l=>String(l.LinkID)===String(r.link.LinkID))) TRAVEL.links.push(r.link);
+    if(r.attachment){
+      const i = TRAVEL.files.findIndex(x=>String(x.AttachmentID)===String(r.attachment.AttachmentID));
+      if(i>=0) TRAVEL.files[i] = r.attachment;
+    }
+    notice('trvInboxErr','','');
+    travelRender();
+  }catch(e){ notice('trvInboxErr','err',esc(e.message)); done(); }
+}
+
+async function trvInboxDismiss(inboxId, btn){
+  const done = busy(btn);
+  try{
+    const r = await api('inbox_dismiss',{ inboxId });
+    if(!r.ok) throw new Error(r.error||'Could not dismiss it');
+    TRAVEL.inbox = TRAVEL.inbox.filter(x=>String(x.InboxID)!==String(inboxId));
+    travelRender();
+  }catch(e){ notice('trvInboxErr','err',esc(e.message)); done(); }
+}
+
+async function trvInboxReread(inboxId, btn){
+  const done = busy(btn);
+  notice('trvInboxErr','','Reading again…');
+  try{
+    const r = await api('inbox_reread',{ inboxId });
+    if(r.row) trvInboxPut(r.row);
+    notice('trvInboxErr', r.ok?'':'warn', r.ok?'':esc(r.error||'Could not read it'));
+    travelRender();
+  }catch(e){ notice('trvInboxErr','err',esc(e.message)); }
+  finally{ done(); }
+}
+
+// ── Files nothing points at ──────────────────────────────────────────────────
+// Filed against an activity but proving no line — most of them came over from the old app,
+// where the receipts and the figures were kept in separate lists.
+function trvLooseFiles(){
+  const linked = {}; TRAVEL.links.forEach(l=>linked[String(l.AttachmentID)]=1);
+  const waiting = {}; TRAVEL.inbox.forEach(r=>waiting[String(r.AttachmentID)]=1);
+  return TRAVEL.files.filter(f=>{
+    const id = String(f.AttachmentID);
+    if(linked[id] || waiting[id]) return false;
+    return String(f.ParentType)==='activity' || String(f.ParentType)==='inbox';
+  });
+}
+
+function trvLooseRender(){
+  const box = $('trvLoose'); if(!box) return;
+  const loose = trvLooseFiles();
+  $('trvLoosePanel').classList.toggle('hidden', !loose.length);
+  $('trvLooseCount').textContent = loose.length ? loose.length + ' file(s)' : '';
+  if(!loose.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="scroll"><table><thead><tr><th>File</th><th>Activity</th>'
+    + '<th>Put it on a line</th><th></th></tr></thead><tbody>'
+    + loose.map(f=>{
+        const id = String(f.AttachmentID);
+        const own = String(f.ParentType)==='activity' ? String(f.ParentID) : '';
+        const lines = own ? trvLinesOf(own) : [];
+        return `<tr><td>${esc(fname(f))}`
+          + (f.Url?` <a href="${esc(f.Url)}" target="_blank" rel="noopener" style="font-size:12px">open</a>`:'')
+          + `</td>`
+          + `<td><select id="loose_act_${id}" onchange="trvLooseRender()">`
+          + `<option value="">— waiting —</option>`
+          + TRAVEL.activities.slice().sort((a,b)=>String(b.StartDate||'').localeCompare(String(a.StartDate||'')))
+             .map(a=>`<option value="${esc(a.ActivityID)}" ${own===String(a.ActivityID)?'selected':''}>`
+               + `${esc(a.Reference||'')}</option>`).join('')
+          + `</select></td>`
+          + `<td>` + (lines.length
+              ? `<select id="loose_line_${id}">` + lines.map(x=>`<option value="${esc(x.ExpenseID)}">`
+                  + `${esc(trvDay(x.Date))} · ${esc(x.Category||'')} · ${esc(x.Supplier||'')} · `
+                  + `${esc(trvAmt(x.Currency, x.Amount))}</option>`).join('') + `</select>`
+              : `<span class="muted" style="font-size:13px">no lines on that activity yet</span>`) + `</td>`
+          + `<td class="num" style="white-space:nowrap">`
+          + (lines.length?`<button class="btn sm" onclick="trvLooseAttach('${id}',this)">Attach</button> `:'')
+          + `<button class="btn ghost sm" onclick="trvReadLoose('${id}',this)">Read</button> `
+          + `<button class="btn ghost sm" onclick="trvDeleteFile('${id}')" title="delete">×</button></td></tr>`;
+      }).join('')
+    + '</tbody></table></div>';
+}
+
+async function trvLooseAttach(attachmentId, btn){
+  const act = $('loose_act_'+attachmentId), line = $('loose_line_'+attachmentId);
+  if(!act || !act.value || !line || !line.value) return;
+  const done = busy(btn);
+  try{
+    const f = trvFile(attachmentId);
+    if(f && String(f.ParentType)!=='activity' || (f && String(f.ParentID)!==String(act.value))){
+      const moved = await api('attach_move',{ attachmentId, parentType:'activity', parentId:act.value });
+      if(!moved.ok) throw new Error(moved.error||'Could not file it');
+      const i = TRAVEL.files.findIndex(x=>String(x.AttachmentID)===String(attachmentId));
+      if(i>=0) TRAVEL.files[i] = moved.attachment;
+    }
+    const r = await api('link_expense_file',{ expenseId: line.value, attachmentId });
+    if(!r.ok) throw new Error(r.error||'Could not attach');
+    if(r.link && !TRAVEL.links.some(l=>String(l.LinkID)===String(r.link.LinkID))) TRAVEL.links.push(r.link);
+    notice('trvLooseErr','','');
+    travelRender();
+  }catch(e){ notice('trvLooseErr','err',esc(e.message)); done(); }
+}
+
+async function trvReadLoose(attachmentId, btn){
+  const done = busy(btn);
+  notice('trvLooseErr','','Reading…');
+  try{
+    const r = await api('inbox_add_read',{ attachmentId });
+    if(r.row) trvInboxPut(r.row);
+    notice('trvLooseErr', r.ok?'':'warn', r.ok?'':esc(r.error||'Could not read it'));
+    travelRender();
+  }catch(e){ notice('trvLooseErr','err',esc(e.message)); }
+  finally{ done(); }
 }
 
 // The same invoice often arrives twice — once by hand, once out of a mailbox. Names are not
@@ -6400,91 +6617,6 @@ function trvSameNamed(f){
   if(!name) return null;
   return TRAVEL.files.find(x=>String(x.AttachmentID)!==String(f.AttachmentID)
     && String(x.ParentType)!=='inbox' && String(x.FileName||'').toLowerCase()===name) || null;
-}
-
-function trvInboxActChange(attachmentId, actId){
-  const got = TRV_READS[String(attachmentId)];
-  if(got){ got.activityId = String(actId||''); got.why = ''; }
-  trvInboxRender();
-}
-
-async function trvReadAgain(attachmentId, btn){
-  const done = busy(btn);
-  notice('trvInboxErr','','Reading…');
-  await trvRead(attachmentId, 'trvInboxErr');
-  notice('trvInboxErr','','');
-  done();
-  travelRender();
-}
-
-// Same money, near enough the same day, same name — each on its own is a coincidence, the
-// three together are the line this document belongs to. The score is shown, not hidden.
-function trvReadCandidates(lines, r){
-  if(!r) return [];
-  const norm = s => String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-  const sup = norm(r.supplier);
-  const dayDiff = (a,b) => (!a||!b) ? 99 : Math.abs((new Date(a) - new Date(b))/86400000);
-  return lines.map(x=>{
-    let score = 0; const why = [];
-    const amt = +x.Amount||0;
-    if(r.amount && amt && Math.abs(amt - r.amount) <= Math.max(0.01, r.amount*0.005)){ score += 3; why.push('same amount'); }
-    if(r.currency && String(x.Currency||'').toUpperCase()===r.currency && score){ score += 1; why.push('same currency'); }
-    const dd = dayDiff(fmtDate(x.Date), r.date);
-    if(dd <= 3){ score += 1; why.push(dd===0?'same date':'within '+Math.round(dd)+' day(s)'); }
-    const xs = norm(x.Supplier);
-    if(sup && xs && (xs.indexOf(sup)>=0 || sup.indexOf(xs)>=0)){ score += 2; why.push('same supplier'); }
-    return { x, score, why: why.join(', ') };
-  }).filter(c=>c.score >= 2).sort((a,b)=>b.score-a.score).slice(0,5);
-}
-
-// Accepting the reading is also what files the document: it moves out of the inbox onto the
-// trip, so nothing is uploaded twice.
-async function trvInboxPlace(attachmentId, actId){
-  const f = trvFile(attachmentId);
-  if(f && String(f.ParentType)==='inbox'){
-    const moved = await api('attach_move',{ attachmentId, parentType:'activity', parentId:actId });
-    if(!moved.ok) throw new Error(moved.error||'Could not file the document');
-    const i = TRAVEL.files.findIndex(x=>String(x.AttachmentID)===String(attachmentId));
-    if(i>=0) TRAVEL.files[i] = moved.attachment;
-  }
-}
-
-async function trvInboxAttach(attachmentId, btn){
-  const got = TRV_READS[String(attachmentId)];
-  const sel = $('inb_line_'+attachmentId);
-  if(!got || !sel || !sel.value) return;
-  const done = busy(btn);
-  try{
-    await trvInboxPlace(attachmentId, got.activityId);
-    const r = await api('link_expense_file',{ expenseId: sel.value, attachmentId, role: got.read.docType });
-    if(!r.ok) throw new Error(r.error||'Could not attach');
-    if(r.link && !TRAVEL.links.some(l=>String(l.LinkID)===String(r.link.LinkID))) TRAVEL.links.push(r.link);
-    delete TRV_READS[String(attachmentId)];
-    notice('trvInboxErr','','');
-    travelRender();
-  }catch(e){ notice('trvInboxErr','err',esc(e.message)); done(); }
-}
-
-async function trvInboxCreate(attachmentId, btn){
-  const got = TRV_READS[String(attachmentId)];
-  if(!got) return;
-  const done = busy(btn);
-  const r = got.read;
-  try{
-    await trvInboxPlace(attachmentId, got.activityId);
-    const saved = await api('save_expense',{
-      parentType:'activity', parentId:got.activityId, date:r.date,
-      serviceFrom:r.serviceFrom, serviceTo:r.serviceTo, category:r.category,
-      supplier:r.supplier, amount:r.amount, currency:r.currency, description:r.description
-    });
-    if(!saved.ok) throw new Error(saved.error||'Could not save the line');
-    TRAVEL.expenses.push(saved.expense);
-    const link = await api('link_expense_file',{ expenseId: saved.expense.ExpenseID, attachmentId, role: r.docType });
-    if(link.ok && link.link) TRAVEL.links.push(link.link);
-    delete TRV_READS[String(attachmentId)];
-    notice('trvInboxErr','','');
-    travelRender();
-  }catch(e){ notice('trvInboxErr','err',esc(e.message)); done(); }
 }
 
 </script>

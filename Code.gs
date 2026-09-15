@@ -27,13 +27,14 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.209';
+const BUILD = '2026-08-08.211';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
                  queue: 'ParseQueue', queueText: 'ParseQueueText', queueFile: 'ParseQueueFile',
                  signatures: 'Signatures', invoiceQueue: 'InvoiceQueue', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries',
-                 activities: 'Activities', expenses: 'Expenses', expenseFiles: 'ExpenseFiles' };
+                 activities: 'Activities', expenses: 'Expenses', expenseFiles: 'ExpenseFiles',
+                 inbox: 'Inbox' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt', 'OrgID'],
@@ -115,7 +116,15 @@ const HEADERS = {
                 'Source', 'CreatedAt', 'OrgID'],
   // Which file proves which line. Kept apart from the attachment's own parent: one folio
   // covers several lines, and a line can be proved by more than one document.
-  expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'Role', 'CreatedAt', 'OrgID']
+  expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'Role', 'CreatedAt', 'OrgID'],
+  // A document that has been read but not yet placed. It arrives by upload or by mail, and
+  // the reading has to outlive the page that was open at the time — or a document that came
+  // in overnight would have to be read again in the morning.
+  inbox:       ['InboxID', 'AttachmentID', 'Status', 'Source', 'MailId', 'MailFrom', 'MailSubject',
+                'MailDate', 'FileName', 'DocType', 'DocDate', 'Amount', 'Currency', 'Supplier',
+                'Category', 'ServiceFrom', 'ServiceTo', 'Description', 'SuggestActivityID',
+                'SuggestWhy', 'SuggestExpenseID', 'SuggestWhyLine', 'SuggestScore', 'Error',
+                'CreatedAt', 'ReadAt', 'OrgID']
 };
 
 const CURRENCIES = ['USD', 'EUR', 'AED', 'SGD'];
@@ -257,6 +266,12 @@ function route_(action, d) {
     case 'save_expense':       return saveExpense_(d);
     case 'exp_read':           return expRead_(d);
     case 'attach_move':        return attachMove_(d);
+    case 'inbox_list':         return inboxList_(d);
+    case 'inbox_add_read':     return inboxAddRead_(d);
+    case 'inbox_reread':       return inboxReread_(d);
+    case 'inbox_accept':       return inboxAccept_(d);
+    case 'inbox_dismiss':      return inboxDismiss_(d);
+    case 'mail_tick':          return mailTick(d);
     case 'delete_expense':     return deleteExpense_(d);
     case 'fxexp_scan':         return fxexpScan_(d);
     case 'fxexp_migrate':      return fxexpMigrate_(d);
@@ -6154,6 +6169,7 @@ function testFx() {
 }
 
 function setup() {
+  getSheet_(SHEETS.activities); getSheet_(SHEETS.expenses); getSheet_(SHEETS.expenseFiles); getSheet_(SHEETS.inbox);
   getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.documents); getSheet_(SHEETS.blocks); getSheet_(SHEETS.terms); getSheet_(SHEETS.payments); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
   ensureCounterparties_();
   SpreadsheetApp.getActive().toast('Sheets created.');
@@ -6388,7 +6404,7 @@ function travelList_(d) {
     return p === 'activity' || p === 'expense' || p === 'inbox';
   });
   return { ok: true, activities: readAll_(SHEETS.activities), expenses: readAll_(SHEETS.expenses),
-           links: readAll_(SHEETS.expenseFiles), files: files };
+           links: readAll_(SHEETS.expenseFiles), files: files, inbox: readAll_(SHEETS.inbox) };
 }
 
 // ── Raising an activity, then reporting on it ────────────────────────────────
@@ -6751,3 +6767,281 @@ var EXPENSE_READ_PROMPT =
   '  serviceFrom only\n' +
   '- description: under 60 characters, e.g. "DXB-AMS 21 Aug" or "3 nights, Hyatt Amsterdam"\n' +
   'Take what the document says. Never infer a figure that is not printed on it.';
+
+// ── Documents that arrive on their own ───────────────────────────────────────
+// A file can now turn up while nobody is looking — forwarded to the mailbox with fxdoc.in in
+// the subject — so what the model made of it has to survive somewhere other than an open
+// page. The Inbox sheet holds the reading and the suggestion; the suggestion becomes a record
+// only when it is accepted, because a wrong guess filed quietly is worse than no guess.
+var MAIL_SUBJECT_KEY = 'fxdoc.in';
+var MAIL_LABEL = 'FXWorks/processed';
+var MAIL_MAX_PER_TICK = 6;
+
+function inboxList_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  return { ok: true, inbox: readAll_(SHEETS.inbox) };
+}
+
+// The reading and the guess in one place, so the page and the mail run write the same row.
+function inboxRecord_(attachmentId, fileName, read, source, mail) {
+  var guess = read ? expActivityGuess_(read.date) : { activityId: '', why: '' };
+  var line = (read && guess.activityId) ? expLineGuess_(guess.activityId, read) : { expenseId: '', why: '', score: 0 };
+  var row = {
+    InboxID: Utilities.getUuid(), AttachmentID: String(attachmentId),
+    Status: read ? 'read' : 'failed', Source: source || 'upload',
+    MailId: (mail && mail.id) || '', MailFrom: (mail && mail.from) || '',
+    MailSubject: (mail && mail.subject) || '', MailDate: (mail && mail.date) || '',
+    FileName: trim_(fileName),
+    DocType: read ? read.docType : '', DocDate: read ? read.date : '',
+    Amount: read ? read.amount : '', Currency: read ? read.currency : '',
+    Supplier: read ? read.supplier : '', Category: read ? read.category : '',
+    ServiceFrom: read ? read.serviceFrom : '', ServiceTo: read ? read.serviceTo : '',
+    Description: read ? read.description : '',
+    SuggestActivityID: guess.activityId, SuggestWhy: guess.why,
+    SuggestExpenseID: line.expenseId, SuggestWhyLine: line.why, SuggestScore: line.score || '',
+    Error: '', CreatedAt: new Date().toISOString(), ReadAt: read ? new Date().toISOString() : ''
+  };
+  appendRow_(SHEETS.inbox, row);
+  return row;
+}
+
+function inboxRowOf_(attachmentId) {
+  return readAll_(SHEETS.inbox).filter(function (r) {
+    return String(r.AttachmentID) === String(attachmentId);
+  })[0] || null;
+}
+
+// Same money, near enough the same day, same name. Each alone is a coincidence; together they
+// are the line this document belongs to — and the reason travels with the suggestion.
+function expLineGuess_(activityId, read) {
+  var norm = function (s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); };
+  var sup = norm(read.supplier), best = { expenseId: '', why: '', score: 0 };
+  readAll_(SHEETS.expenses).forEach(function (x) {
+    if (trim_(x.ParentType) !== 'activity' || String(x.ParentID) !== String(activityId)) return;
+    var score = 0, why = [];
+    var amt = num_(x.Amount);
+    if (read.amount && amt && Math.abs(amt - read.amount) <= Math.max(0.01, read.amount * 0.005)) {
+      score += 3; why.push('same amount');
+    }
+    if (read.currency && trim_(x.Currency).toUpperCase() === read.currency && score) { score += 1; why.push('same currency'); }
+    var xd = isoDate_(x.Date);
+    if (xd && read.date) {
+      var gap = Math.abs(dayGap_(read.date, xd));
+      if (gap <= 3) { score += 1; why.push(gap === 0 ? 'same date' : 'within ' + gap + ' day(s)'); }
+    }
+    var xs = norm(x.Supplier);
+    if (sup && xs && (xs.indexOf(sup) >= 0 || sup.indexOf(xs) >= 0)) { score += 2; why.push('same supplier'); }
+    if (score >= 2 && score > best.score) {
+      best = { expenseId: String(x.ExpenseID), why: why.join(', '), score: score };
+    }
+  });
+  return best;
+}
+
+// Accepting is the one moment anything is written: the file is filed on the activity, and it
+// either joins the line that was suggested or starts the line the document describes.
+function inboxAccept_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var row = findRow_(SHEETS.inbox, 'InboxID', trim_(d.inboxId));
+  if (!row) return { ok: false, error: 'This document is no longer waiting' };
+  var activityId = trim_(d.activityId) || trim_(row.SuggestActivityID);
+  if (!activityId) return { ok: false, error: 'Pick the activity it belongs to' };
+  if (!findRow_(SHEETS.activities, 'ActivityID', activityId)) return { ok: false, error: 'Activity not found' };
+
+  var attachmentId = trim_(row.AttachmentID);
+  var att = findRow_(SHEETS.attachments, 'AttachmentID', attachmentId);
+  if (!att) return { ok: false, error: 'The file behind this is gone' };
+  updateRow_(SHEETS.attachments, 'AttachmentID', attachmentId,
+             { ParentType: 'activity', ParentID: activityId });
+
+  var expenseId = trim_(d.expenseId), created = null;
+  if (!expenseId) {
+    var saved = saveExpense_({
+      passcode: d.passcode, parentType: 'activity', parentId: activityId,
+      date: trim_(row.DocDate), serviceFrom: trim_(row.ServiceFrom), serviceTo: trim_(row.ServiceTo),
+      category: trim_(row.Category), supplier: trim_(row.Supplier),
+      amount: num_(row.Amount), currency: trim_(row.Currency), description: trim_(row.Description)
+    });
+    if (!saved.ok) return saved;
+    created = saved.expense;
+    expenseId = String(created.ExpenseID);
+  } else if (!findRow_(SHEETS.expenses, 'ExpenseID', expenseId)) {
+    return { ok: false, error: 'Expense line not found' };
+  }
+
+  var link = linkExpenseFile_({ passcode: d.passcode, expenseId: expenseId,
+                                attachmentId: attachmentId, role: trim_(row.DocType) });
+  deleteRowsWhere_(SHEETS.inbox, 'InboxID', trim_(row.InboxID));
+  return { ok: true, expense: created, link: link.link || null,
+           attachment: findRow_(SHEETS.attachments, 'AttachmentID', attachmentId) };
+}
+
+// Dismissed means "not now": the suggestion goes, the file stays where it is and turns up in
+// the list of files nothing points at, to be sorted out by hand.
+function inboxDismiss_(d) {
+  requireAdmin_(d);
+  var row = findRow_(SHEETS.inbox, 'InboxID', trim_(d.inboxId));
+  if (!row) return { ok: false, error: 'This document is no longer waiting' };
+  deleteRowsWhere_(SHEETS.inbox, 'InboxID', trim_(row.InboxID));
+  return { ok: true, attachmentId: String(row.AttachmentID) };
+}
+
+// Reading again, on demand: the model may have had a bad day, or the trips it is matched
+// against may have changed since.
+function inboxReread_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var row = findRow_(SHEETS.inbox, 'InboxID', trim_(d.inboxId));
+  if (!row) return { ok: false, error: 'This document is no longer waiting' };
+  var got = expRead_({ passcode: d.passcode, attachmentId: trim_(row.AttachmentID) });
+  if (!got.ok) {
+    updateRow_(SHEETS.inbox, 'InboxID', row.InboxID, { Status: 'failed', Error: String(got.error).slice(0, 250) });
+    return got;
+  }
+  var read = got.read;
+  var guess = expActivityGuess_(read.date);
+  var line = guess.activityId ? expLineGuess_(guess.activityId, read) : { expenseId: '', why: '', score: 0 };
+  updateRow_(SHEETS.inbox, 'InboxID', row.InboxID, {
+    Status: 'read', Error: '',
+    DocType: read.docType, DocDate: read.date, Amount: read.amount, Currency: read.currency,
+    Supplier: read.supplier, Category: read.category, ServiceFrom: read.serviceFrom,
+    ServiceTo: read.serviceTo, Description: read.description,
+    SuggestActivityID: guess.activityId, SuggestWhy: guess.why,
+    SuggestExpenseID: line.expenseId, SuggestWhyLine: line.why, SuggestScore: line.score || '',
+    ReadAt: new Date().toISOString()
+  });
+  return { ok: true, row: findRow_(SHEETS.inbox, 'InboxID', row.InboxID) };
+}
+
+// A file uploaded from the page takes the same road as one that arrived by mail: stored,
+// read, and left waiting with its suggestion.
+function inboxAddRead_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var attachmentId = trim_(d.attachmentId);
+  if (!findRow_(SHEETS.attachments, 'AttachmentID', attachmentId)) return { ok: false, error: 'File not found' };
+  var existing = inboxRowOf_(attachmentId);
+  if (existing) return inboxReread_({ passcode: d.passcode, inboxId: existing.InboxID });
+  var got = expRead_({ passcode: d.passcode, attachmentId: attachmentId });
+  var att = findRow_(SHEETS.attachments, 'AttachmentID', attachmentId);
+  var row = inboxRecord_(attachmentId, trim_(att.FileName), got.ok ? got.read : null, 'upload', null);
+  if (!got.ok) {
+    updateRow_(SHEETS.inbox, 'InboxID', row.InboxID, { Error: String(got.error).slice(0, 250) });
+    return { ok: false, error: got.error, row: findRow_(SHEETS.inbox, 'InboxID', row.InboxID) };
+  }
+  return { ok: true, row: row };
+}
+
+// ── The mailbox ──────────────────────────────────────────────────────────────
+// Only mail whose subject carries the keyword, only from addresses we know, and each thread
+// is labelled once it has been taken — so nothing is read twice and nothing else is read at
+// all. Run on a timer; the button in the page runs the same pass.
+function mailSenders_() {
+  var raw = trim_(PropertiesService.getScriptProperties().getProperty('fxdoc_senders'));
+  var list = raw ? raw.split(/[,;\s]+/) : [];
+  if (!list.length) {
+    list = [trim_(CONFIG.ADMIN_EMAIL)];
+    try { list.push(trim_(Session.getEffectiveUser().getEmail())); } catch (e) {}
+  }
+  return list.filter(function (x) { return !!x; }).map(function (x) { return x.toLowerCase(); });
+}
+
+function mailTick(d) {
+  if (d) requireAdmin_(d);
+  ensureActivities_();
+  var out = { ok: true, threads: 0, taken: 0, skippedSender: [], skippedType: [], failed: [], left: 0 };
+  var label;
+  try {
+    label = GmailApp.getUserLabelByName(MAIL_LABEL) || GmailApp.createLabel(MAIL_LABEL);
+  } catch (e) { return { ok: false, error: 'No access to the mailbox: ' + String(e).slice(0, 150) }; }
+
+  var query = 'subject:(' + MAIL_SUBJECT_KEY + ') has:attachment newer_than:60d -label:"' + MAIL_LABEL + '"';
+  var threads;
+  try { threads = GmailApp.search(query, 0, 20); }
+  catch (e) { return { ok: false, error: 'Could not search the mailbox: ' + String(e).slice(0, 150) }; }
+  out.threads = threads.length;
+
+  var allowed = mailSenders_();
+  var seen = {};
+  readAll_(SHEETS.inbox).forEach(function (r) { if (trim_(r.MailId)) seen[trim_(r.MailId)] = true; });
+
+  for (var t = 0; t < threads.length; t++) {
+    var msgs = threads[t].getMessages(), handledThread = true;
+    for (var m = 0; m < msgs.length; m++) {
+      var msg = msgs[m], id = msg.getId();
+      if (seen[id]) continue;
+      if (String(msg.getSubject() || '').toLowerCase().indexOf(MAIL_SUBJECT_KEY) < 0) continue;
+      var from = String(msg.getFrom() || '').toLowerCase();
+      if (!allowed.some(function (a) { return from.indexOf(a) >= 0; })) {
+        out.skippedSender.push(msg.getFrom());
+        continue;
+      }
+      var mail = { id: id, from: msg.getFrom(), subject: msg.getSubject(),
+                   date: isoDate_(msg.getDate()) };
+      var atts = msg.getAttachments({ includeInlineImages: true, includeAttachments: true });
+      for (var i = 0; i < atts.length; i++) {
+        if (out.taken >= MAIL_MAX_PER_TICK) { handledThread = false; break; }
+        var blob = atts[i], mime = String(blob.getContentType() || '');
+        if (!EXPENSE_DOC_MIME.test(mime)) { out.skippedType.push(blob.getName()); continue; }
+        try {
+          var file = attachmentsFolder_().createFile(blob);
+          var att = {
+            AttachmentID: Utilities.getUuid(), ParentType: 'inbox', ParentID: 'inbox',
+            FileName: blob.getName(), Description: blob.getName(), DocType: 'other',
+            DocDate: mail.date, IsCurrent: 'no', DriveFileID: file.getId(), Url: file.getUrl(),
+            CreatedAt: new Date().toISOString()
+          };
+          appendRow_(SHEETS.attachments, att);
+          var got = expRead_({ passcode: (d && d.passcode) || CONFIG.ADMIN_PASSCODE,
+                               attachmentId: att.AttachmentID });
+          var row = inboxRecord_(att.AttachmentID, att.FileName, got.ok ? got.read : null, 'mail', mail);
+          if (!got.ok) {
+            updateRow_(SHEETS.inbox, 'InboxID', row.InboxID, { Error: String(got.error).slice(0, 250) });
+            out.failed.push(blob.getName() + ': ' + got.error);
+          }
+          out.taken++;
+        } catch (e) {
+          out.failed.push(blob.getName() + ': ' + String(e).slice(0, 150));
+        }
+      }
+      if (!handledThread) break;
+    }
+    // The label is what stops a thread being read again, so it goes on only once every
+    // attachment in it has been taken.
+    if (handledThread) { try { threads[t].addLabel(label); } catch (e) {} }
+    else { out.left++; }
+    if (out.taken >= MAIL_MAX_PER_TICK) { out.left += threads.length - t - 1; break; }
+  }
+  if (out.taken) notifyInbox_(out);
+  return out;
+}
+
+// Run by the timer. Kept separate so the trigger has nothing to pass in.
+function travelMailPoll() { return mailTick(null); }
+
+function installTravelMailTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'travelMailPoll') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('travelMailPoll').timeBased().everyMinutes(15).create();
+  return 'Mail will be checked every 15 minutes.';
+}
+
+function notifyInbox_(out) {
+  var to = trim_(CONFIG.ADMIN_EMAIL);
+  if (!to) return;
+  var rows = readAll_(SHEETS.inbox).filter(function (r) { return trim_(r.Source) === 'mail'; });
+  var lines = rows.slice(-out.taken).map(function (r) {
+    var what = [trim_(r.Supplier) || trim_(r.FileName), trim_(r.DocDate),
+                (num_(r.Amount) ? trim_(r.Currency) + ' ' + r.Amount : '')]
+      .filter(function (x) { return !!x; }).join(' · ');
+    return '• ' + what + (trim_(r.SuggestWhy) ? ' — ' + r.SuggestWhy : ' — no trip matched')
+      + (trim_(r.SuggestExpenseID) ? ' (a line there looks like the same expense)' : '');
+  });
+  var body = out.taken + ' document(s) arrived and were read. Nothing has been recorded yet —\n'
+    + 'open FXWorks, Activities, and confirm or correct each one:\n\n' + lines.join('\n')
+    + '\n\n' + CONFIG.ADMIN_BASE_URL + '\n';
+  try { MailApp.sendEmail(to, 'FXWorks: ' + out.taken + ' document(s) waiting', body); } catch (e) {}
+}
