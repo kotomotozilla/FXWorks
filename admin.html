@@ -491,20 +491,6 @@
         <div id="trvInbox"></div>
       </div>
 
-      <div class="panel" id="trvSvcPanel">
-        <h2>Service dates from the documents <span class="muted" style="font-size:13px">· experimental</span></h2>
-        <p class="muted" style="margin-top:0">Reads the documents attached to a trip's expense lines again,
-          asking only when the service was delivered — check-in and check-out on a folio, the flight date on
-          a boarding pass, both legs on a return ticket. Where a line has several, the period runs from the
-          earliest date found to the latest. <b>Nothing is written</b>: this only reports what it would propose.</p>
-        <div id="trvSvcErr"></div>
-        <div class="row" style="align-items:flex-end">
-          <div style="flex:1;min-width:260px"><label>Trip</label><select id="trvSvcAct"></select></div>
-          <div style="flex:0 0 auto"><button class="btn sm" onclick="trvServiceScan(this)">Estimate service dates</button></div>
-        </div>
-        <div id="trvSvc" style="margin-top:12px"></div>
-      </div>
-
       <div class="panel hidden" id="trvLoosePanel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Files nothing points at</h2>
@@ -606,6 +592,18 @@
   <div class="acts">
     <button class="btn sm" onclick="trvExpSave(this)">Save</button>
     <button class="btn ghost sm" onclick="closeModal('exModal')">Cancel</button>
+  </div>
+</div></div>
+
+<div id="svcModal" class="modal top hidden"><div class="box wide">
+  <h2><span id="svcTitle">Service dates</span><button class="x" onclick="closeModal('svcModal')">×</button></h2>
+  <div id="svcErr"></div>
+  <div id="svcSummary" class="muted" style="font-size:13px;margin-bottom:8px"></div>
+  <div id="svcBody"></div>
+  <div style="height:12px"></div>
+  <div class="acts">
+    <button id="svcSaveBtn" class="btn sm" onclick="trvServiceSave(this)">Save</button>
+    <button class="btn ghost sm" onclick="closeModal('svcModal')">Cancel</button>
   </div>
 </div></div>
 
@@ -1198,7 +1196,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.221';
+const BUILD = '2026-08-08.222';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6081,7 +6079,6 @@ function travelRender(){
     t.innerHTML = h + '</tbody>';
   }
   trvInboxRender();
-  trvSvcActs();
   if(TRV_OPEN) trvRenderDetail();
 }
 
@@ -6913,72 +6910,60 @@ async function tmpDelete(attachmentId){
   }catch(e){ notice('tmpErr','err',esc(e.message)); }
 }
 
-// Reading the documents of one trip and writing the periods they give. The dry run lives in
-// the panel below the list; this is the same reading, kept.
+// ── Service dates: shown first, written on request ───────────────────────────
+// The documents are read once. What comes back is displayed, and the same figures are what
+// get saved — reading them again on save would be another half-minute for an answer already
+// given.
+let TRV_SVC = null;
+
 async function trvServiceApply(actId, btn){
-  if(!confirm('Read the documents on this trip and fill in the service periods they show?\n'
-    + 'Lines whose documents give no period are left alone.')) return;
+  const label = btn ? btn.textContent : '';
+  if(btn) btn.textContent = 'Reading…';
   const done = busy(btn);
-  notice('trvErr','','Reading the documents — a few seconds each…');
+  notice('trvErr','','Reading the documents on this trip — this can take half a minute…');
   try{
-    const r = await api('exp_service_apply',{ activityId: actId });
+    const r = await api('exp_service_scan',{ activityId: actId });
     if(!r.ok) throw new Error(r.error||'Could not read them');
-    (r.changed||[]).forEach(ch=>{
-      const i = TRAVEL.expenses.findIndex(x=>String(x.ExpenseID)===String(ch.expenseId));
-      if(i>=0 && ch.expense) TRAVEL.expenses[i] = ch.expense;
-    });
-    let msg = r.changed.length
-      ? `${r.changed.length} line(s) updated: ` + r.changed.map(ch=>
-          `${esc(ch.supplier||'')} ${esc(trvRange(ch.from, ch.to))}`
-          + (ch.was?` <span class="muted">(was ${esc(ch.was)})</span>`:'')).join('; ')
-      : 'Nothing to change.';
-    if(r.kept) msg += ` ${r.kept} line(s) left as they were.`;
-    if(r.skipped) msg += ` ${r.skipped} document(s) unread — run it again for the rest.`;
-    notice('trvErr','ok',msg);
-    travelRender();
+    TRV_SVC = { actId: String(actId), lines: r.lines||[], read: r.read, skipped: r.skipped };
+    notice('trvErr','','');
+    trvSvcRender(r);
+    $('svcModal').classList.remove('hidden');
   }catch(e){ notice('trvErr','err',esc(e.message)); }
-  finally{ done(); }
+  finally{ done(); if(btn) btn.textContent = label; }
 }
 
-// ── Experimental: service dates out of the documents ─────────────────────────
-function trvSvcActs(){
-  const sel = $('trvSvcAct'); if(!sel) return;
-  const keep = sel.value;
-  sel.innerHTML = TRAVEL.activities.slice()
-    .sort((a,b)=>String(b.StartDate||'').localeCompare(String(a.StartDate||'')))
-    .map(a=>`<option value="${esc(a.ActivityID)}">${esc(a.Reference||'')}`
-      + `${a.Destinations?' · '+esc(a.Destinations):''}</option>`).join('');
-  if(keep) sel.value = keep;
+function trvSvcRender(r){
+  const a = trvAct(TRV_SVC.actId);
+  $('svcTitle').textContent = 'Service dates · ' + ((a && (a.Destinations||a.Reference)) || '');
+  notice('svcErr','','');
+  const lines = TRV_SVC.lines;
+  const willChange = lines.filter(trvSvcChanges);
+  const overwrite = willChange.filter(x=>x.nowFrom);
+  $('svcSummary').innerHTML = `${r.read} document(s) read`
+    + (r.skipped?`, <b>${r.skipped}</b> left unread — run it again for the rest`:'')
+    + `. <b>${willChange.length}</b> line(s) will change, ${lines.length - willChange.length} left as they are`
+    + (overwrite.length?`, of which <b style="color:#B4651A">${overwrite.length}</b> already had a period`:'') + `.`;
+  $('svcSaveBtn').classList.toggle('hidden', !willChange.length);
+  $('svcBody').innerHTML = trvSvcTable(lines);
 }
 
-async function trvServiceScan(btn){
-  const sel = $('trvSvcAct');
-  if(!sel || !sel.value){ notice('trvSvcErr','err','Pick a trip first.'); return; }
-  const done = busy(btn);
-  notice('trvSvcErr','','Reading the documents — this takes a few seconds each…');
-  try{
-    const r = await api('exp_service_scan',{ activityId: sel.value });
-    if(!r.ok) throw new Error(r.error||'Could not read them');
-    notice('trvSvcErr','ok', `${r.read} document(s) read`
-      + (r.skipped?`, ${r.skipped} left unread — run it again for the rest`:'') + `. ${esc(r.note)}`);
-    $('trvSvc').innerHTML = trvSvcTable(r);
-  }catch(e){ notice('trvSvcErr','err',esc(e.message)); $('trvSvc').innerHTML=''; }
-  finally{ done(); }
+function trvSvcChanges(x){
+  return !!x.proposedFrom && !(x.proposedFrom === x.nowFrom && x.proposedTo === x.nowTo);
 }
 
-function trvSvcTable(r){
-  if(!r.lines.length) return '<div class="muted" style="font-size:13px">No line on that trip has a document attached.</div>';
+function trvSvcTable(lines){
+  if(!lines.length) return '<div class="muted" style="font-size:13px">No line on this trip has a document attached.</div>';
   return '<div class="scroll"><table class="nosort"><thead><tr><th>Line</th><th>Now</th>'
     + '<th>Proposed</th><th>What the documents say</th></tr></thead><tbody>'
-    + r.lines.map(x=>{
-        const now = trvRange(x.nowFrom, x.nowTo);
-        const next = trvRange(x.proposedFrom, x.proposedTo);
-        const changed = next && next !== now;
+    + lines.map(x=>{
+        const now = trvRange(x.nowFrom, x.nowTo), next = trvRange(x.proposedFrom, x.proposedTo);
+        const changes = trvSvcChanges(x);
         return `<tr><td style="white-space:nowrap">${esc(trvDay(x.date))} · ${trvCatIcon(x.category)} `
           + `${esc(x.supplier||'')}<div class="muted" style="font-size:12px">`
           + `${esc(trvAmt(x.currency, x.amount))}</div></td>`
-          + `<td class="muted" style="white-space:nowrap">${esc(now)||'—'}</td>`
-          + `<td style="white-space:nowrap${changed?';color:#2E7D4F;font-weight:600':''}">${esc(next)||'—'}</td>`
+          + `<td style="white-space:nowrap${changes && x.nowFrom?';color:#B4651A':';color:#8A94A6'}">`
+          + (esc(now)||'—') + (changes && x.nowFrom?`<div style="font-size:12px">will be replaced</div>`:'') + `</td>`
+          + `<td style="white-space:nowrap${changes?';color:#2E7D4F;font-weight:600':''}">${esc(next)||'—'}</td>`
           + `<td>` + (x.docs.length ? x.docs.map(d=>
               `<div style="font-size:13px">`
               + (d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.name)}</a>`:esc(d.name))
@@ -6992,6 +6977,26 @@ function trvSvcTable(r){
               + `</div>`).join('') : '<span class="muted">—</span>') + `</td></tr>`;
       }).join('')
     + '</tbody></table></div>';
+}
+
+async function trvServiceSave(btn){
+  if(!TRV_SVC) return;
+  const done = busy(btn);
+  try{
+    const lines = TRV_SVC.lines.filter(trvSvcChanges)
+      .map(x=>({ expenseId: x.expenseId, from: x.proposedFrom, to: x.proposedTo }));
+    if(!lines.length){ $('svcModal').classList.add('hidden'); return; }
+    const r = await api('exp_service_save',{ activityId: TRV_SVC.actId, lines });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    (r.changed||[]).forEach(x=>{
+      const i = TRAVEL.expenses.findIndex(e=>String(e.ExpenseID)===String(x.ExpenseID));
+      if(i>=0) TRAVEL.expenses[i] = x; else TRAVEL.expenses.push(x);
+    });
+    TRV_SVC = null;
+    $('svcModal').classList.add('hidden');
+    notice('trvErr','ok', `${(r.changed||[]).length} line(s) updated.`);
+    travelRender();
+  }catch(e){ notice('svcErr','err',esc(e.message)); done(); }
 }
 
 // ── Sorting, for any table that has not got its own ──────────────────────────

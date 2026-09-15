@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.221';
+const BUILD = '2026-08-08.222';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -266,7 +266,7 @@ function route_(action, d) {
     case 'save_expense':       return saveExpense_(d);
     case 'exp_read':           return expRead_(d);
     case 'exp_service_scan':   return expServiceScan_(d);
-    case 'exp_service_apply':  return expServiceApply_(d);
+    case 'exp_service_save':   return expServiceSave_(d);
     case 'attach_move':        return attachMove_(d);
     case 'attach_rename':      return attachRename_(d);
     case 'tmp_list':           return tmpList_(d);
@@ -6908,26 +6908,30 @@ function expServiceScan_(d) {
            note: 'Nothing has been written — this is what it would have proposed.' };
 }
 
-// The same reading, written down. Only lines whose documents actually yielded a period are
-// touched, and only where it differs from what is already there — so running it twice changes
-// nothing the second time, and a period typed by hand is not overwritten by silence.
-function expServiceApply_(d) {
+// Writing what the preview showed — the periods come back from the page rather than being
+// read out of the documents a second time: the same thirty seconds and the same API calls,
+// for an answer already given. Each line is checked to belong to the activity named, so a
+// stale window cannot write into somebody else's trip.
+function expServiceSave_(d) {
   requireAdmin_(d);
-  var scan = expServiceScan_(d);
-  if (!scan.ok) return scan;
-  var changed = [], kept = 0;
-  scan.lines.forEach(function (l) {
-    if (!l.proposedFrom) { kept++; return; }
-    if (l.proposedFrom === l.nowFrom && l.proposedTo === l.nowTo) { kept++; return; }
-    updateRow_(SHEETS.expenses, 'ExpenseID', l.expenseId,
-               { ServiceFrom: l.proposedFrom, ServiceTo: l.proposedTo });
-    changed.push({ expenseId: l.expenseId, from: l.proposedFrom, to: l.proposedTo,
-                   was: l.nowFrom ? (l.nowFrom + (l.nowTo ? ' → ' + l.nowTo : '')) : '',
-                   supplier: l.supplier, date: l.date,
-                   expense: findRow_(SHEETS.expenses, 'ExpenseID', l.expenseId) });
+  ensureActivities_();
+  var activityId = trim_(d.activityId);
+  if (!findRow_(SHEETS.activities, 'ActivityID', activityId)) return { ok: false, error: 'Activity not found' };
+  var rows = Array.isArray(d.lines) ? d.lines : [];
+  var changed = [], missed = [];
+  rows.forEach(function (r) {
+    var id = trim_(r.expenseId), from = isoDate_(r.from), to = isoDate_(r.to);
+    if (!id || !from) return;
+    if (to && to < from) { var t = from; from = to; to = t; }
+    var x = findRow_(SHEETS.expenses, 'ExpenseID', id);
+    if (!x || trim_(x.ParentType) !== 'activity' || String(x.ParentID) !== String(activityId)) {
+      missed.push(id); return;
+    }
+    if (isoDate_(x.ServiceFrom) === from && isoDate_(x.ServiceTo) === to) return;
+    updateRow_(SHEETS.expenses, 'ExpenseID', id, { ServiceFrom: from, ServiceTo: to });
+    changed.push(findRow_(SHEETS.expenses, 'ExpenseID', id));
   });
-  return { ok: true, reference: scan.reference, changed: changed, kept: kept,
-           read: scan.read, skipped: scan.skipped, lines: scan.lines };
+  return { ok: true, changed: changed, missed: missed };
 }
 
 var EXPENSE_CATEGORIES = ['Airfare / transport', 'Accommodation', 'Local transport / transfer',
