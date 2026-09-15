@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.216';
+const BUILD = '2026-08-08.218';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -6694,9 +6694,10 @@ function expRead_(d) {
     description: trim_(o.description).slice(0, 120)
   };
   if (read.serviceFrom && read.serviceTo && read.serviceTo < read.serviceFrom) read.serviceTo = '';
-  var guess = expActivityGuess_(read.date);
+  var guess = expGuess_(read);
   return { ok: true, read: read, attachmentId: String(att.AttachmentID), model: call.model,
-           activityId: guess.activityId, activityWhy: guess.why };
+           activityId: guess.activityId, activityWhy: guess.why,
+           expenseId: guess.expenseId, expenseWhy: guess.whyLine };
 }
 
 // A file waits in the inbox until it is said to belong somewhere; accepting the reading is
@@ -6823,9 +6824,15 @@ function inboxList_(d) {
 }
 
 // The reading and the guess in one place, so the page and the mail run write the same row.
+// A boarding pass carries no payment date — only the day of the flight. Asking it for the
+// former and then matching on nothing is how one ends up belonging to no trip at all.
+function readDate_(read) {
+  return trim_(read.date) || trim_(read.serviceFrom) || trim_(read.serviceTo);
+}
+
 function inboxRecord_(attachmentId, fileName, read, source, mail) {
-  var guess = read ? expActivityGuess_(read.date) : { activityId: '', why: '' };
-  var line = (read && guess.activityId) ? expLineGuess_(guess.activityId, read) : { expenseId: '', why: '', score: 0 };
+  var guess = read ? expGuess_(read) : { activityId: '', why: '', expenseId: '', whyLine: '', score: 0 };
+  var line = { expenseId: guess.expenseId, why: guess.whyLine, score: guess.score };
   var row = {
     InboxID: Utilities.getUuid(), AttachmentID: String(attachmentId),
     Status: read ? 'read' : 'failed', Source: source || 'upload',
@@ -6853,29 +6860,98 @@ function inboxRowOf_(attachmentId) {
 
 // Same money, near enough the same day, same name. Each alone is a coincidence; together they
 // are the line this document belongs to — and the reason travels with the suggestion.
+function expNorm_(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+// How near the document's date falls to a line: the day it was paid, or anywhere inside the
+// period the service covers — a folio dated the day of checkout still belongs to the stay.
+function expDayGap_(x, date) {
+  if (!date) return 99;
+  var gaps = [];
+  var d = isoDate_(x.Date);
+  if (d) gaps.push(Math.abs(dayGap_(date, d)));
+  var from = isoDate_(x.ServiceFrom), to = isoDate_(x.ServiceTo) || from;
+  if (from) {
+    gaps.push(date >= from && date <= to ? 0
+      : Math.min(Math.abs(dayGap_(date, from)), Math.abs(dayGap_(date, to))));
+  }
+  return gaps.length ? Math.min.apply(null, gaps) : 99;
+}
+
+function expLineScore_(x, read) {
+  var score = 0, why = [];
+  var amt = num_(x.Amount);
+  if (read.amount && amt && Math.abs(amt - read.amount) <= Math.max(0.01, read.amount * 0.005)) {
+    score += 3; why.push('same amount');
+  }
+  if (read.currency && trim_(x.Currency).toUpperCase() === read.currency && score) { score += 1; why.push('same currency'); }
+  var gap = expDayGap_(x, readDate_(read));
+  if (gap <= 3) { score += 1; why.push(gap === 0 ? 'same date' : 'within ' + gap + ' day(s)'); }
+  var sup = expNorm_(read.supplier), xs = expNorm_(x.Supplier);
+  if (sup && xs && (xs.indexOf(sup) >= 0 || sup.indexOf(xs) >= 0)) { score += 2; why.push('same supplier'); }
+  return { score: score, why: why.join(', '), gap: gap };
+}
+
 function expLineGuess_(activityId, read) {
-  var norm = function (s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); };
-  var sup = norm(read.supplier), best = { expenseId: '', why: '', score: 0 };
+  var best = { expenseId: '', why: '', score: 0 };
   readAll_(SHEETS.expenses).forEach(function (x) {
     if (trim_(x.ParentType) !== 'activity' || String(x.ParentID) !== String(activityId)) return;
-    var score = 0, why = [];
-    var amt = num_(x.Amount);
-    if (read.amount && amt && Math.abs(amt - read.amount) <= Math.max(0.01, read.amount * 0.005)) {
-      score += 3; why.push('same amount');
-    }
-    if (read.currency && trim_(x.Currency).toUpperCase() === read.currency && score) { score += 1; why.push('same currency'); }
-    var xd = isoDate_(x.Date);
-    if (xd && read.date) {
-      var gap = Math.abs(dayGap_(read.date, xd));
-      if (gap <= 3) { score += 1; why.push(gap === 0 ? 'same date' : 'within ' + gap + ' day(s)'); }
-    }
-    var xs = norm(x.Supplier);
-    if (sup && xs && (xs.indexOf(sup) >= 0 || sup.indexOf(xs) >= 0)) { score += 2; why.push('same supplier'); }
-    if (score >= 2 && score > best.score) {
-      best = { expenseId: String(x.ExpenseID), why: why.join(', '), score: score };
+    var s = expLineScore_(x, read);
+    if (s.score >= 2 && s.score > best.score) {
+      best = { expenseId: String(x.ExpenseID), why: s.why, score: s.score };
     }
   });
   return best;
+}
+
+// Where a document belongs, in order of what the evidence is worth:
+//   1. a line that plainly is this expense — same money and same name beat any date window
+//   2. the document's date falling inside a trip
+//   3. a line close enough in time, wherever it sits — trips are often undated or misdated,
+//      while a line is pinned to something that actually happened
+//   4. the nearest trip within a fortnight
+// Whatever is found comes back with the reason it was found, and is still only a suggestion.
+function expGuess_(read) {
+  var date = readDate_(read);
+  var byLine = { score: 0 };
+  readAll_(SHEETS.expenses).forEach(function (x) {
+    if (trim_(x.ParentType) !== 'activity' || !trim_(x.ParentID)) return;
+    var s = expLineScore_(x, read);
+    if (s.score > byLine.score || (s.score === byLine.score && s.score && s.gap < byLine.gap)) {
+      byLine = { score: s.score, why: s.why, gap: s.gap,
+                 expenseId: String(x.ExpenseID), activityId: String(x.ParentID), line: x };
+    }
+  });
+  var refOf = function (id) {
+    var a = findRow_(SHEETS.activities, 'ActivityID', id);
+    return a ? (trim_(a.Reference) || id) : id;
+  };
+
+  if (byLine.score >= 4) {
+    return { activityId: byLine.activityId,
+             why: 'a line in ' + refOf(byLine.activityId) + ' is this expense — ' + byLine.why,
+             expenseId: byLine.expenseId, whyLine: byLine.why, score: byLine.score };
+  }
+
+  var byDate = expActivityGuess_(date);
+  if (byDate.activityId && byDate.why.indexOf('falls inside') >= 0) {
+    var inTrip = expLineGuess_(byDate.activityId, read);
+    return { activityId: byDate.activityId, why: byDate.why,
+             expenseId: inTrip.expenseId, whyLine: inTrip.why, score: inTrip.score };
+  }
+
+  if (byLine.score >= 2 && byLine.gap <= 7) {
+    return { activityId: byLine.activityId,
+             why: 'no trip covers ' + date + ', but a line in ' + refOf(byLine.activityId)
+                  + ' is close — ' + byLine.why,
+             expenseId: byLine.expenseId, whyLine: byLine.why, score: byLine.score };
+  }
+
+  if (byDate.activityId) {
+    var near = expLineGuess_(byDate.activityId, read);
+    return { activityId: byDate.activityId, why: byDate.why,
+             expenseId: near.expenseId, whyLine: near.why, score: near.score };
+  }
+  return { activityId: '', why: '', expenseId: '', whyLine: '', score: 0 };
 }
 
 // Accepting is the one moment anything is written: the file is filed on the activity, and it
@@ -6940,8 +7016,8 @@ function inboxReread_(d) {
     return got;
   }
   var read = got.read;
-  var guess = expActivityGuess_(read.date);
-  var line = guess.activityId ? expLineGuess_(guess.activityId, read) : { expenseId: '', why: '', score: 0 };
+  var guess = expGuess_(read);
+  var line = { expenseId: guess.expenseId, why: guess.whyLine, score: guess.score };
   updateRow_(SHEETS.inbox, 'InboxID', row.InboxID, {
     Status: 'read', Error: '',
     DocType: read.docType, DocDate: read.date, Amount: read.amount, Currency: read.currency,

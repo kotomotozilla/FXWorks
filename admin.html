@@ -1184,7 +1184,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.216';
+const BUILD = '2026-08-08.218';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5916,6 +5916,9 @@ async function loadData(){
 let TRAVEL = { activities:[], expenses:[], links:[], files:[], inbox:[] };
 let TRV_OPEN = '', TRV_EDIT_EXP = '', TRV_EDIT_ACT = '', TRV_EXP_ACT = '';
 let TRV_DOCS = null, TRV_FILE_EDIT = '';
+// What has been picked by hand for a waiting document, which is not the same thing as
+// what was suggested for it — and must survive the redraw that picking causes.
+let TRV_INBOX_PICK = {};
 const TRV_ROLES = ['ticket','boarding','invoice','receipt','statement','other'];
 const TRV_CURRENCIES = ['USD','EUR','AED','GBP','HKD','THB','SGD','CHF','CZK','HUF','KZT'];
 const TRV_CATEGORIES = ['Airfare / transport','Accommodation','Local transport / transfer',
@@ -6603,7 +6606,8 @@ function trvInboxRender(){
 
 function trvInboxCard(r){
   const id = String(r.InboxID), f = trvFile(r.AttachmentID);
-  const actId = String(r.SuggestActivityID||'');
+  const picked = TRV_INBOX_PICK[id];
+  const actId = picked === undefined ? String(r.SuggestActivityID||'') : String(picked);
   let h = `<div style="padding:12px;border:1px solid #DDE3EA;border-radius:10px;margin-bottom:10px">`
     + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`
     + `<b>${esc(r.FileName||'document')}</b><div class="acts">`
@@ -6635,13 +6639,15 @@ function trvInboxCard(r){
      + (r.Category?` <span class="muted">· ${esc(r.Category)}</span>`:'') + `</div>`;
 
   h += `<div class="row" style="align-items:flex-end"><div style="flex:1;min-width:260px"><label>Activity</label>`
-     + `<select id="inb_act_${id}" onchange="trvInboxRender()">`
+     + `<select id="inb_act_${id}" onchange="trvInboxPick('${id}',this.value)">`
      + `<option value="">— pick one —</option>`
      + TRAVEL.activities.slice().sort((a,b)=>String(b.StartDate||'').localeCompare(String(a.StartDate||'')))
         .map(a=>`<option value="${esc(a.ActivityID)}" ${actId===String(a.ActivityID)?'selected':''}>`
           + `${esc(a.Reference||'')}${a.Destinations?' · '+esc(a.Destinations):''}</option>`).join('')
      + `</select>`
-     + (r.SuggestWhy?`<div class="muted" style="font-size:12px;margin-top:4px">${esc(r.SuggestWhy)}</div>`:'')
+     + (picked===undefined && r.SuggestWhy
+          ? `<div class="muted" style="font-size:12px;margin-top:4px">${esc(r.SuggestWhy)}</div>`
+          : (picked!==undefined?`<div class="muted" style="font-size:12px;margin-top:4px">chosen by hand</div>`:''))
      + `</div></div>`;
 
   if(!actId) return h + `<div class="muted" style="font-size:13px;margin-top:8px">Pick the activity, then place it on a line.</div></div>`;
@@ -6669,14 +6675,20 @@ function trvInboxCard(r){
   return h + `</div></div>`;
 }
 
+function trvInboxPick(inboxId, actId){
+  TRV_INBOX_PICK[String(inboxId)] = String(actId||'');
+  trvInboxRender();
+}
+
 async function trvInboxAccept(inboxId, onLine, btn){
   const done = busy(btn);
   const act = $('inb_act_'+inboxId), line = $('inb_line_'+inboxId);
   try{
-    const r = await api('inbox_accept',{ inboxId, activityId: act?act.value:'',
+    const r = await api('inbox_accept',{ inboxId, activityId: act?act.value:(TRV_INBOX_PICK[inboxId]||''),
       expenseId: onLine && line ? line.value : '' });
     if(!r.ok) throw new Error(r.error||'Could not place it');
     TRAVEL.inbox = TRAVEL.inbox.filter(x=>String(x.InboxID)!==String(inboxId));
+    delete TRV_INBOX_PICK[String(inboxId)];
     if(r.expense) TRAVEL.expenses.push(r.expense);
     if(r.link && !TRAVEL.links.some(l=>String(l.LinkID)===String(r.link.LinkID))) TRAVEL.links.push(r.link);
     if(r.attachment){
