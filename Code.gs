@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.220';
+const BUILD = '2026-08-08.221';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -266,6 +266,7 @@ function route_(action, d) {
     case 'save_expense':       return saveExpense_(d);
     case 'exp_read':           return expRead_(d);
     case 'exp_service_scan':   return expServiceScan_(d);
+    case 'exp_service_apply':  return expServiceApply_(d);
     case 'attach_move':        return attachMove_(d);
     case 'attach_rename':      return attachRename_(d);
     case 'tmp_list':           return tmpList_(d);
@@ -6702,7 +6703,28 @@ function expRead_(d) {
     description: trim_(o.description).slice(0, 120)
   };
   if (read.serviceFrom && read.serviceTo && read.serviceTo < read.serviceFrom) read.serviceTo = '';
+
+  // A boarding pass gives the day and the month and no more. The year comes from the document's
+  // own date where it has one, and otherwise from the trip this turns out to belong to.
+  var noYear = (Array.isArray(o.serviceNoYear) ? o.serviceNoYear : [])
+    .map(function (v) { return trim_(v); }).filter(function (v) { return !!v; });
+  if (!read.serviceFrom && noYear.length && read.date) {
+    read = expFillService_(read, noYear, read.date);
+  }
+  // A boarding pass has neither a payment date nor a year — nothing to anchor to and nothing
+  // to search the trips with. So the trips are asked instead: which of them has a period that
+  // "14SEP" falls into? That both dates the document and places it.
+  if (!read.serviceFrom && noYear.length) {
+    read = expFillFromActivities_(read, noYear);
+  }
   var guess = expGuess_(read);
+  if (!read.serviceFrom && noYear.length && guess.activityId) {
+    var act = findRow_(SHEETS.activities, 'ActivityID', guess.activityId);
+    if (act) {
+      read = expFillService_(read, noYear, isoDate_(act.ActualStart) || isoDate_(act.StartDate));
+      guess = expGuess_(read);
+    }
+  }
   return { ok: true, read: read, attachmentId: String(att.AttachmentID), model: call.model,
            activityId: guess.activityId, activityWhy: guess.why,
            expenseId: guess.expenseId, expenseWhy: guess.whyLine };
@@ -6886,8 +6908,74 @@ function expServiceScan_(d) {
            note: 'Nothing has been written — this is what it would have proposed.' };
 }
 
+// The same reading, written down. Only lines whose documents actually yielded a period are
+// touched, and only where it differs from what is already there — so running it twice changes
+// nothing the second time, and a period typed by hand is not overwritten by silence.
+function expServiceApply_(d) {
+  requireAdmin_(d);
+  var scan = expServiceScan_(d);
+  if (!scan.ok) return scan;
+  var changed = [], kept = 0;
+  scan.lines.forEach(function (l) {
+    if (!l.proposedFrom) { kept++; return; }
+    if (l.proposedFrom === l.nowFrom && l.proposedTo === l.nowTo) { kept++; return; }
+    updateRow_(SHEETS.expenses, 'ExpenseID', l.expenseId,
+               { ServiceFrom: l.proposedFrom, ServiceTo: l.proposedTo });
+    changed.push({ expenseId: l.expenseId, from: l.proposedFrom, to: l.proposedTo,
+                   was: l.nowFrom ? (l.nowFrom + (l.nowTo ? ' → ' + l.nowTo : '')) : '',
+                   supplier: l.supplier, date: l.date,
+                   expense: findRow_(SHEETS.expenses, 'ExpenseID', l.expenseId) });
+  });
+  return { ok: true, reference: scan.reference, changed: changed, kept: kept,
+           read: scan.read, skipped: scan.skipped, lines: scan.lines };
+}
+
 var EXPENSE_CATEGORIES = ['Airfare / transport', 'Accommodation', 'Local transport / transfer',
                           'Visa / insurance', 'Meals', 'Other'];
+// Tries the yearless dates against every trip's own period, and takes the trip they fall in.
+// A few days either side of the trip counts: a flight home often lands the day after it ends.
+function expFillFromActivities_(read, noYear) {
+  var best = null;
+  readAll_(SHEETS.activities).forEach(function (a) {
+    var s = isoDate_(a.ActualStart) || isoDate_(a.StartDate);
+    var e = isoDate_(a.ActualEnd) || isoDate_(a.EndDate) || s;
+    if (!s) return;
+    if (e < s) { var t = s; s = e; e = t; }
+    var dates = [];
+    noYear.forEach(function (v) {
+      var iso = yearFrom_(v, s);
+      if (iso) dates.push(iso);
+    });
+    if (!dates.length) return;
+    dates.sort();
+    var gap = 0;
+    dates.forEach(function (iso) {
+      gap += (iso >= s && iso <= e) ? 0
+        : Math.min(Math.abs(dayGap_(iso, s)), Math.abs(dayGap_(iso, e)));
+    });
+    if (gap <= 3 * dates.length && (!best || gap < best.gap)) best = { gap: gap, dates: dates };
+  });
+  if (!best) return read;
+  read.serviceFrom = best.dates[0];
+  read.serviceTo = best.dates.length > 1 && best.dates[best.dates.length - 1] !== best.dates[0]
+    ? best.dates[best.dates.length - 1] : '';
+  return read;
+}
+
+// Yearless service dates, anchored and turned into a period.
+function expFillService_(read, noYear, anchor) {
+  var dates = [];
+  noYear.forEach(function (v) {
+    var iso = yearFrom_(v, anchor);
+    if (iso) dates.push(iso);
+  });
+  if (!dates.length) return read;
+  dates.sort();
+  read.serviceFrom = dates[0];
+  read.serviceTo = dates.length > 1 && dates[dates.length - 1] !== dates[0] ? dates[dates.length - 1] : '';
+  return read;
+}
+
 function expCategory_(v) {
   v = trim_(v);
   for (var i = 0; i < EXPENSE_CATEGORIES.length; i++) {
@@ -6899,7 +6987,7 @@ function expCategory_(v) {
 var EXPENSE_READ_PROMPT =
   'This is a document from a business trip. Reply with ONE JSON object, nothing else:\n' +
   '{"docType":"","date":"YYYY-MM-DD","amount":0,"currency":"","supplier":"","category":"",' +
-  '"serviceFrom":"","serviceTo":"","description":""}\n' +
+  '"serviceFrom":"","serviceTo":"","serviceNoYear":["MM-DD"],"description":""}\n' +
   '- docType: one of ticket, boarding, invoice, receipt, statement, other. A boarding pass is\n' +
   '  "boarding" even when it shows a fare; an e-ticket or itinerary is "ticket"\n' +
   '- date: the date the money was charged — the invoice or receipt date. For a ticket, the date\n' +
@@ -6913,6 +7001,10 @@ var EXPENSE_READ_PROMPT =
   '- serviceFrom / serviceTo: the dates the service itself covers — hotel check-in and check-out,\n' +
   '  the flight date, the insurance period. "" when not stated. A single-day service may give\n' +
   '  serviceFrom only\n' +
+  '- serviceNoYear: those same service dates where the document prints no year at all — a\n' +
+  '  boarding pass usually shows "14SEP" and nothing more. Put them here as MM-DD, in order.\n' +
+  '  Never guess the year: that is what this field is for. Empty list when the year is shown\n' +
+  '  or there is no service date\n' +
   '- description: under 60 characters, e.g. "DXB-AMS 21 Aug" or "3 nights, Hyatt Amsterdam"\n' +
   'Take what the document says. Never infer a figure that is not printed on it.';
 

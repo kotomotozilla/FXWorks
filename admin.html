@@ -1198,7 +1198,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.220';
+const BUILD = '2026-08-08.221';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6153,6 +6153,8 @@ function trvDetail(a, lines, files){
      + `<div class="acts"><span class="muted" style="font-size:13px">${trvTotals(lines)} · ${trvUsd(lines)}</span>`
      + `<button class="btn sm" onclick="trvExpOpen('${id}','')">+ Add expense</button>`
      + `<button class="btn ghost sm" onclick="trvDocsOpen('activity','${id}')">Documents (${files.length})</button>`
+     + `<button class="btn ghost sm" onclick="trvServiceApply('${id}',this)" `
+     + `title="read the attached documents and fill in when each service was delivered">Service dates</button>`
      + `</div></div>`;
   h += `<div class="scroll"><table class="trvtight" style="table-layout:auto;margin-top:6px"><thead><tr><th>Date</th>`
      + (hasService?`<th>Service</th>`:'')
@@ -6909,6 +6911,33 @@ async function tmpDelete(attachmentId){
     TMP_FILES = TMP_FILES.filter(f=>String(f.AttachmentID)!==String(attachmentId));
     tmpRender();
   }catch(e){ notice('tmpErr','err',esc(e.message)); }
+}
+
+// Reading the documents of one trip and writing the periods they give. The dry run lives in
+// the panel below the list; this is the same reading, kept.
+async function trvServiceApply(actId, btn){
+  if(!confirm('Read the documents on this trip and fill in the service periods they show?\n'
+    + 'Lines whose documents give no period are left alone.')) return;
+  const done = busy(btn);
+  notice('trvErr','','Reading the documents — a few seconds each…');
+  try{
+    const r = await api('exp_service_apply',{ activityId: actId });
+    if(!r.ok) throw new Error(r.error||'Could not read them');
+    (r.changed||[]).forEach(ch=>{
+      const i = TRAVEL.expenses.findIndex(x=>String(x.ExpenseID)===String(ch.expenseId));
+      if(i>=0 && ch.expense) TRAVEL.expenses[i] = ch.expense;
+    });
+    let msg = r.changed.length
+      ? `${r.changed.length} line(s) updated: ` + r.changed.map(ch=>
+          `${esc(ch.supplier||'')} ${esc(trvRange(ch.from, ch.to))}`
+          + (ch.was?` <span class="muted">(was ${esc(ch.was)})</span>`:'')).join('; ')
+      : 'Nothing to change.';
+    if(r.kept) msg += ` ${r.kept} line(s) left as they were.`;
+    if(r.skipped) msg += ` ${r.skipped} document(s) unread — run it again for the rest.`;
+    notice('trvErr','ok',msg);
+    travelRender();
+  }catch(e){ notice('trvErr','err',esc(e.message)); }
+  finally{ done(); }
 }
 
 // ── Experimental: service dates out of the documents ─────────────────────────
