@@ -52,6 +52,9 @@
   .btn.warn{background:#fff;color:var(--warn);border:1px solid #e6c3ba} .btn.warn:hover{border-color:var(--warn)}
   .btn.sm{padding:6px 11px;font-size:13px;border-radius:8px}
   th.srt{cursor:pointer;user-select:none;white-space:nowrap}
+  thead th[data-sortable]{cursor:pointer;user-select:none}
+  thead th[data-sortable]:hover{color:var(--brand)}
+  thead th[data-sortable]::after{content:attr(data-arrow);color:var(--brand);font-weight:700}
   th.srt:hover{color:var(--brand)}
   .fbadge{background:var(--brand);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:6px}
   table.cost{font-size:13px} table.cost th,table.cost td{padding:6px 8px}
@@ -1167,7 +1170,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.214';
+const BUILD = '2026-08-08.215';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6780,6 +6783,83 @@ function trvSameNamed(f){
     && String(x.ParentType)!=='inbox' && String(x.FileName||'').toLowerCase()===name) || null;
 }
 
+// ── Sorting, for any table that has not got its own ──────────────────────────
+// Done on the rows themselves rather than on the data behind them: every table in the page
+// becomes sortable without its own state, its own keys, or a line of code where it is built.
+// Tables that already sort themselves (class "srt" on the header) are left alone, and a table
+// can opt out with class "nosort".
+function trvSortKey(td){
+  if(!td) return '';
+  const raw = (td.getAttribute('data-sort') || td.textContent || '').trim();
+  // A dash is how this page writes "nothing here", so it sorts with the blanks.
+  if(!raw || raw === '—' || raw === '-') return '';
+  // 25.08.26 and 25.08–21.09.26 both sort by the day they start
+  const dm = raw.match(/^(\d{2})[.\-](\d{2})[.\-](\d{2})$/);
+  if(dm) return 20000000 + (+dm[3])*10000 + (+dm[2])*100 + (+dm[1]);
+  // A range: 25.08–21.09.26 carries its own month at the front, 07–09.07.26 borrows the
+  // month from the end. Either way it sorts by the day it starts.
+  const last = raw.match(/(\d{2})\.(\d{2})\.(\d{2})\s*$/);
+  if(last && /[–-]/.test(raw)){
+    const start = raw.split(/[–-]/)[0].trim();
+    const full = start.match(/^(\d{2})\.(\d{2})\.(\d{2})$/);     // 28.12.26–03.01.27
+    if(full) return 20000000 + (+full[3])*10000 + (+full[2])*100 + (+full[1]);
+    const own = start.match(/^(\d{2})\.(\d{2})$/);                // 25.08–21.09.26
+    const day = own ? +own[1] : parseInt(start, 10);                // 07–09.07.26
+    const month = own ? +own[2] : +last[2];
+    if(isFinite(day) && day) return 20000000 + (+last[3])*10000 + month*100 + day;
+  }
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(iso) return (+iso[1])*10000 + (+iso[2])*100 + (+iso[3]);
+  // The figure a cell leads with: $1,633.87 · HKD 20,738.78 · ≈ $14,268.17 · "9 / 3" sorts by
+  // the 9. Stripping every non-digit instead would turn "9 / 3" into ninety-three.
+  const lead = raw.match(/^[^\d-]{0,6}(-?\d[\d.,]*)/);
+  if(lead){
+    const n = parseFloat(lead[1].replace(/,(?=\d{3}\b)/g, '').replace(/,/g, '.'));
+    if(isFinite(n)) return n;
+  }
+  return raw.toLowerCase();
+}
+
+function trvSortTable(table, th){
+  const head = th.parentNode, cells = Array.from(head.children);
+  const col = cells.indexOf(th);
+  if(col < 0) return;
+  const dir = (table.dataset.sortCol === String(col) && table.dataset.sortDir === '1') ? -1 : 1;
+  table.dataset.sortCol = String(col);
+  table.dataset.sortDir = String(dir);
+  cells.forEach(c=>c.setAttribute('data-arrow',''));
+  th.setAttribute('data-arrow', dir === 1 ? ' ↑' : ' ↓');
+
+  const body = table.tBodies[0]; if(!body) return;
+  const rows = Array.from(body.rows);
+  // Placeholder and spanning rows have no business being reordered; they stay put at the end.
+  const sortable = rows.filter(r=>r.cells.length === cells.length && !r.querySelector('td[colspan]'));
+  const rest = rows.filter(r=>sortable.indexOf(r) < 0);
+  sortable.sort((r1, r2)=>{
+    const a = trvSortKey(r1.cells[col]), b = trvSortKey(r2.cells[col]);
+    if(a === '' && b !== '') return 1;         // empties last, whichever way round
+    if(b === '' && a !== '') return -1;
+    if(typeof a === 'number' && typeof b === 'number') return (a - b) * dir;
+    return String(a).localeCompare(String(b), undefined, { numeric:true }) * dir;
+  });
+  sortable.forEach(r=>body.appendChild(r));
+  rest.forEach(r=>body.appendChild(r));
+}
+
+// One listener for the page, so tables drawn later are covered without being told about it.
+document.addEventListener('click', e=>{
+  const th = e.target.closest ? e.target.closest('thead th') : null;
+  if(!th || th.classList.contains('srt') || th.hasAttribute('onclick')) return;
+  const table = th.closest('table');
+  if(!table || table.classList.contains('nosort')) return;
+  if(!th.textContent.trim() && !th.hasAttribute('title')) return;   // a column of buttons is not a key
+  th.setAttribute('data-sortable','');
+  Array.from(th.parentNode.children).forEach(c=>{
+    if(!c.classList.contains('srt') && !c.hasAttribute('onclick')
+       && (c.textContent.trim() || c.hasAttribute('title'))) c.setAttribute('data-sortable','');
+  });
+  trvSortTable(table, th);
+});
 </script>
 </body>
 </html>
