@@ -491,6 +491,20 @@
         <div id="trvInbox"></div>
       </div>
 
+      <div class="panel" id="trvSvcPanel">
+        <h2>Service dates from the documents <span class="muted" style="font-size:13px">· experimental</span></h2>
+        <p class="muted" style="margin-top:0">Reads the documents attached to a trip's expense lines again,
+          asking only when the service was delivered — check-in and check-out on a folio, the flight date on
+          a boarding pass, both legs on a return ticket. Where a line has several, the period runs from the
+          earliest date found to the latest. <b>Nothing is written</b>: this only reports what it would propose.</p>
+        <div id="trvSvcErr"></div>
+        <div class="row" style="align-items:flex-end">
+          <div style="flex:1;min-width:260px"><label>Trip</label><select id="trvSvcAct"></select></div>
+          <button class="btn sm" onclick="trvServiceScan(this)">Estimate service dates</button>
+        </div>
+        <div id="trvSvc" style="margin-top:12px"></div>
+      </div>
+
       <div class="panel hidden" id="trvLoosePanel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Files nothing points at</h2>
@@ -1184,7 +1198,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.218';
+const BUILD = '2026-08-08.219';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6067,6 +6081,7 @@ function travelRender(){
     t.innerHTML = h + '</tbody>';
   }
   trvInboxRender();
+  trvSvcActs();
   if(TRV_OPEN) trvRenderDetail();
 }
 
@@ -6894,6 +6909,57 @@ async function tmpDelete(attachmentId){
     TMP_FILES = TMP_FILES.filter(f=>String(f.AttachmentID)!==String(attachmentId));
     tmpRender();
   }catch(e){ notice('tmpErr','err',esc(e.message)); }
+}
+
+// ── Experimental: service dates out of the documents ─────────────────────────
+function trvSvcActs(){
+  const sel = $('trvSvcAct'); if(!sel) return;
+  const keep = sel.value;
+  sel.innerHTML = TRAVEL.activities.slice()
+    .sort((a,b)=>String(b.StartDate||'').localeCompare(String(a.StartDate||'')))
+    .map(a=>`<option value="${esc(a.ActivityID)}">${esc(a.Reference||'')}`
+      + `${a.Destinations?' · '+esc(a.Destinations):''}</option>`).join('');
+  if(keep) sel.value = keep;
+}
+
+async function trvServiceScan(btn){
+  const sel = $('trvSvcAct');
+  if(!sel || !sel.value){ notice('trvSvcErr','err','Pick a trip first.'); return; }
+  const done = busy(btn);
+  notice('trvSvcErr','','Reading the documents — this takes a few seconds each…');
+  try{
+    const r = await api('exp_service_scan',{ activityId: sel.value });
+    if(!r.ok) throw new Error(r.error||'Could not read them');
+    notice('trvSvcErr','ok', `${r.read} document(s) read`
+      + (r.skipped?`, ${r.skipped} left unread — run it again for the rest`:'') + `. ${esc(r.note)}`);
+    $('trvSvc').innerHTML = trvSvcTable(r);
+  }catch(e){ notice('trvSvcErr','err',esc(e.message)); $('trvSvc').innerHTML=''; }
+  finally{ done(); }
+}
+
+function trvSvcTable(r){
+  if(!r.lines.length) return '<div class="muted" style="font-size:13px">No line on that trip has a document attached.</div>';
+  return '<div class="scroll"><table class="nosort"><thead><tr><th>Line</th><th>Now</th>'
+    + '<th>Proposed</th><th>What the documents say</th></tr></thead><tbody>'
+    + r.lines.map(x=>{
+        const now = trvRange(x.nowFrom, x.nowTo);
+        const next = trvRange(x.proposedFrom, x.proposedTo);
+        const changed = next && next !== now;
+        return `<tr><td style="white-space:nowrap">${esc(trvDay(x.date))} · ${trvCatIcon(x.category)} `
+          + `${esc(x.supplier||'')}<div class="muted" style="font-size:12px">`
+          + `${esc(trvAmt(x.currency, x.amount))}</div></td>`
+          + `<td class="muted" style="white-space:nowrap">${esc(now)||'—'}</td>`
+          + `<td style="white-space:nowrap${changed?';color:#2E7D4F;font-weight:600':''}">${esc(next)||'—'}</td>`
+          + `<td>` + (x.docs.length ? x.docs.map(d=>
+              `<div style="font-size:13px">${esc(d.name)}`
+              + (d.docType?` <span class="muted">· ${esc(d.docType)}</span>`:'')
+              + (d.dates && d.dates.length?` — ${esc(d.dates.join(', '))}`:'')
+              + (d.what?` <span class="muted">(${esc(d.what)})</span>`:'')
+              + (d.note?` <span style="color:#B4472E">${esc(d.note)}</span>`:'')
+              + (!d.note && (!d.dates || !d.dates.length)?` <span class="muted">— no service date on it</span>`:'')
+              + `</div>`).join('') : '<span class="muted">—</span>') + `</td></tr>`;
+      }).join('')
+    + '</tbody></table></div>';
 }
 
 // ── Sorting, for any table that has not got its own ──────────────────────────

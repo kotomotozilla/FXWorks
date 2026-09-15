@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.218';
+const BUILD = '2026-08-08.219';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -265,6 +265,7 @@ function route_(action, d) {
     case 'delete_activity':    return deleteActivity_(d);
     case 'save_expense':       return saveExpense_(d);
     case 'exp_read':           return expRead_(d);
+    case 'exp_service_scan':   return expServiceScan_(d);
     case 'attach_move':        return attachMove_(d);
     case 'attach_rename':      return attachRename_(d);
     case 'tmp_list':           return tmpList_(d);
@@ -6640,13 +6641,12 @@ function unlinkExpenseFile_(d) {
 // a suggestion, and the page decides whether it becomes a new line or joins an existing one.
 var EXPENSE_DOC_MIME = /^(application\/pdf|image\/(jpeg|jpg|png|webp|heic|heif))$/i;
 
-function expRead_(d) {
-  requireAdmin_(d);
-  ensureActivities_();
+// One road to the model for any document, whatever is being asked of it.
+function docAsk_(attachmentId, prompt) {
   var key = geminiKey_();
   if (!key) return { ok: false, error: 'AI key is not configured (Script Properties → gemini_key)' };
 
-  var att = findRow_(SHEETS.attachments, 'AttachmentID', trim_(d.attachmentId));
+  var att = findRow_(SHEETS.attachments, 'AttachmentID', trim_(attachmentId));
   if (!att) return { ok: false, error: 'File not found' };
   var fileId = trim_(att.DriveFileID);
   if (!fileId) return { ok: false, error: 'This record has no file behind it' };
@@ -6669,17 +6669,25 @@ function expRead_(d) {
   var call = geminiCall_(key, JSON.stringify({
     contents: [{ parts: [
       { inline_data: { mime_type: mime.toLowerCase(), data: Utilities.base64Encode(bytes) } },
-      { text: EXPENSE_READ_PROMPT }
+      { text: prompt }
     ] }],
     generationConfig: { temperature: 0, responseMimeType: 'application/json' }
   }));
   if (!call.ok) return { ok: false, error: 'The model could not be reached: ' + String(call.error).slice(0, 200) };
 
-  var o;
   try {
     var data = JSON.parse(call.body);
-    o = JSON.parse(String(data.candidates[0].content.parts[0].text).replace(/```json|```/g, '').trim());
+    return { ok: true, att: att, model: call.model,
+             json: JSON.parse(String(data.candidates[0].content.parts[0].text).replace(/```json|```/g, '').trim()) };
   } catch (e) { return { ok: false, error: 'The document could not be read' }; }
+}
+
+function expRead_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var got = docAsk_(trim_(d.attachmentId), EXPENSE_READ_PROMPT);
+  if (!got.ok) return got;
+  var att = got.att, o = got.json, call = { model: got.model };
 
   var iso = function (v) { v = trim_(v); return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : ''; };
   var read = {
@@ -6776,6 +6784,75 @@ function expActivityGuess_(dateStr) {
 }
 function dayGap_(a, b) {
   return Math.round((new Date(a).getTime() - new Date(b).getTime()) / 86400000);
+}
+
+// ── Experimental: reading the service period out of the documents ────────────
+// The dates a service actually covers are usually printed on the paper: check-in and check-out
+// on a hotel folio, the flight date on a boarding pass, both legs on a return ticket. Where a
+// line has several documents, the period is the span between the earliest and the latest date
+// any of them shows — a flight out on the 25th and back on the 21st is one line covering both.
+// Nothing is written: this reports what it would have proposed, and stops there.
+var SERVICE_SCAN_MAX = 14;
+
+var SERVICE_READ_PROMPT =
+  'This document belongs to a business trip. Reply with ONE JSON object, nothing else:\n' +
+  '{"docType":"","dates":["YYYY-MM-DD"],"what":""}\n' +
+  '- docType: one of ticket, boarding, invoice, receipt, statement, other\n' +
+  '- dates: every date on which the service itself is delivered, in order. A hotel folio gives\n' +
+  '  check-in and check-out; a boarding pass gives the day of that flight; a return ticket gives\n' +
+  '  the outbound and the return date; a restaurant receipt gives the day of the meal. Do NOT\n' +
+  '  include the invoice date, the issue date, the payment date or a booking date unless the\n' +
+  '  service happened on that day too. Empty list when the document shows no such date\n' +
+  '- what: under 50 characters saying which dates these are, e.g. "check-in / check-out" or\n' +
+  '  "DXB-AMS flight"\n' +
+  'Take only what is printed. Never infer a date that is not on the document.';
+
+function expServiceScan_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var activityId = trim_(d.activityId);
+  var act = findRow_(SHEETS.activities, 'ActivityID', activityId);
+  if (!act) return { ok: false, error: 'Activity not found' };
+
+  var links = readAll_(SHEETS.expenseFiles);
+  var files = readAll_(SHEETS.attachments);
+  var lines = readAll_(SHEETS.expenses).filter(function (x) {
+    return trim_(x.ParentType) === 'activity' && String(x.ParentID) === String(activityId);
+  }).sort(function (a, b) { return String(isoDate_(a.Date)).localeCompare(String(isoDate_(b.Date))); });
+
+  var out = [], read = 0, skipped = 0;
+  lines.forEach(function (x) {
+    var mine = links.filter(function (l) { return String(l.ExpenseID) === String(x.ExpenseID); });
+    var docs = [], dates = [];
+    mine.forEach(function (l) {
+      var f = files.filter(function (a) { return String(a.AttachmentID) === String(l.AttachmentID); })[0];
+      if (!f) return;
+      if (read >= SERVICE_SCAN_MAX) { skipped++; docs.push({ name: trim_(f.FileName), note: 'not read — limit reached' }); return; }
+      read++;
+      var got = docAsk_(String(f.AttachmentID), SERVICE_READ_PROMPT);
+      if (!got.ok) { docs.push({ name: trim_(f.FileName), note: String(got.error).slice(0, 120) }); return; }
+      var found = [];
+      (Array.isArray(got.json.dates) ? got.json.dates : []).forEach(function (v) {
+        var iso = isoDate_(v);
+        if (iso) { found.push(iso); dates.push(iso); }
+      });
+      docs.push({ name: trim_(f.FileName), role: trim_(l.Role), docType: trim_(got.json.docType),
+                  what: trim_(got.json.what).slice(0, 60), dates: found });
+    });
+    if (!mine.length) return;
+    dates.sort();
+    var from = dates.length ? dates[0] : '';
+    var to = dates.length > 1 ? dates[dates.length - 1] : '';
+    if (to === from) to = '';
+    out.push({
+      expenseId: String(x.ExpenseID), date: isoDate_(x.Date), category: trim_(x.Category),
+      supplier: trim_(x.Supplier), amount: num_(x.Amount), currency: trim_(x.Currency),
+      nowFrom: isoDate_(x.ServiceFrom), nowTo: isoDate_(x.ServiceTo),
+      proposedFrom: from, proposedTo: to, docs: docs
+    });
+  });
+  return { ok: true, reference: trim_(act.Reference), lines: out, read: read, skipped: skipped,
+           note: 'Nothing has been written — this is what it would have proposed.' };
 }
 
 var EXPENSE_CATEGORIES = ['Airfare / transport', 'Accommodation', 'Local transport / transfer',
