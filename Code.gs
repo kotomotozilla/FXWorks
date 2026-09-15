@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.212';
+const BUILD = '2026-08-08.214';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -266,6 +266,7 @@ function route_(action, d) {
     case 'save_expense':       return saveExpense_(d);
     case 'exp_read':           return expRead_(d);
     case 'attach_move':        return attachMove_(d);
+    case 'attach_rename':      return attachRename_(d);
     case 'inbox_list':         return inboxList_(d);
     case 'inbox_add_read':     return inboxAddRead_(d);
     case 'inbox_reread':       return inboxReread_(d);
@@ -6708,6 +6709,26 @@ function isoDate_(v) {
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
   var d = new Date(s);
   return isNaN(d.getTime()) ? '' : isoDate_(d);
+}
+
+// What a document is called is worth correcting: "IMG_0421.jpg" says nothing six months
+// later, and the name in Drive should agree with the name in the record.
+function attachRename_(d) {
+  requireAdmin_(d);
+  var id = trim_(d.attachmentId);
+  var a = findRow_(SHEETS.attachments, 'AttachmentID', id);
+  if (!a) return { ok: false, error: 'File not found' };
+  var name = trim_(d.fileName), desc = trim_(d.description);
+  var upd = {};
+  if (name && name !== trim_(a.FileName)) {
+    upd.FileName = name;
+    if (trim_(a.DriveFileID)) {
+      try { DriveApp.getFileById(trim_(a.DriveFileID)).setName(name); } catch (e) {}
+    }
+  }
+  if (desc !== trim_(a.Description)) upd.Description = desc;
+  if (Object.keys(upd).length) updateRow_(SHEETS.attachments, 'AttachmentID', id, upd);
+  return { ok: true, attachment: findRow_(SHEETS.attachments, 'AttachmentID', id) };
 }
 
 // Which trip a document belongs to is usually settled by its date falling inside one. Where
