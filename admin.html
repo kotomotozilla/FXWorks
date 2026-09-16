@@ -481,7 +481,9 @@
       <div class="panel hidden" id="trvInboxPanel">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
           <h2>Documents waiting</h2>
-          <div class="acts"><span id="trvInboxCount" class="muted" style="font-size:13px"></span></div>
+          <div class="acts"><span id="trvInboxCount" class="muted" style="font-size:13px"></span>
+            <button id="trvInboxClear" class="btn ghost sm hidden" onclick="trvInboxClearFailed(this)">
+              Remove unreadable</button></div>
         </div>
         <p class="muted" style="margin-top:0">Read on arrival — uploaded here, or forwarded to the mailbox
           with <b>fxdoc.in</b> in the subject. Nothing is recorded until you place it: each one either starts
@@ -561,6 +563,7 @@
 <!-- Report editor modal -->
 <div id="trDetailModal" class="modal hidden"><div class="box wide">
   <h2><span id="trDetailTitle">Trip</span><button class="x" onclick="trvClose()">×</button></h2>
+  <div id="trDetailErr"></div>
   <div id="trDetail"></div>
 </div></div>
 
@@ -1196,7 +1199,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.225';
+const BUILD = '2026-08-08.226';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5927,7 +5930,7 @@ async function loadData(){
 // their own queue, are read on the way in, and wait until somebody says where they belong.
 let TRAVEL = { activities:[], expenses:[], links:[], files:[], inbox:[] };
 let TRV_OPEN = '', TRV_EDIT_EXP = '', TRV_EDIT_ACT = '', TRV_EXP_ACT = '';
-let TRV_DOCS = null, TRV_FILE_EDIT = '';
+let TRV_DOCS = null, TRV_FILE_EDIT = '', TRV_DIRTY = false;
 // What has been picked by hand for a waiting document, which is not the same thing as
 // what was suggested for it — and must survive the redraw that picking causes.
 let TRV_INBOX_PICK = {};
@@ -5997,6 +6000,18 @@ function trvUsd(lines){
 
 function trvProjName(id){ const p=(PROJECTS||[]).find(x=>String(x.ProjectID)===String(id)); return p?(p.Name||''):''; }
 function trvAct(id){ return TRAVEL.activities.find(a=>String(a.ActivityID)===String(id)) || null; }
+
+// An error has to appear where the eye is. Writing it into the list behind three open
+// windows is the same as not writing it at all — which is exactly how a failed delete used
+// to look like nothing happening.
+function trvSay(kind, msg){
+  const open = ['svcErr','docsErr','trDetailErr'].find(id=>{
+    const modal = { svcErr:'svcModal', docsErr:'docsModal', trDetailErr:'trDetailModal' }[id];
+    const el = $(modal);
+    return el && !el.classList.contains('hidden');
+  });
+  notice(open || 'trvErr', kind, msg);
+}
 
 function travelInit(){ if(!TRAVEL.activities.length || stale('travel')) travelLoad(); else travelRender(); }
 
@@ -6236,7 +6251,7 @@ async function delExpense(id){
     TRAVEL.expenses = TRAVEL.expenses.filter(x=>String(x.ExpenseID)!==String(id));
     TRAVEL.links = TRAVEL.links.filter(l=>String(l.ExpenseID)!==String(id));
     travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
+  }catch(e){ trvSay('err',esc(e.message)); }
 }
 
 // ── The request form ─────────────────────────────────────────────────────────
@@ -6305,19 +6320,20 @@ async function delActivity(id){
     if(!r.ok) throw new Error(r.error||'Could not delete');
     TRAVEL.activities = TRAVEL.activities.filter(x=>String(x.ActivityID)!==String(id));
     if(TRV_OPEN===String(id)) trvClose(); else travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
+  }catch(e){ trvSay('err',esc(e.message)); }
 }
 
 // ── Documents, in a form of their own ────────────────────────────────────────
 // Everything about files lives here: what proves this line, what else is on the trip, what
 // each document is, and what arrives next. Opened against one line, or against the trip.
 function trvDocsOpen(mode, id){
-  TRV_DOCS = { mode: mode, id: String(id), desc: '' };
-  TRV_FILE_EDIT = '';
+  TRV_DOCS = { mode: mode, id: String(id), desc: '', read: null };
+  TRV_FILE_EDIT = ''; TRV_DIRTY = false;
   $('docsModal').classList.remove('hidden');
   trvDocsRender();
 }
-function trvDocsClose(){ TRV_DOCS = null; $('docsModal').classList.add('hidden'); travelRender(); }
+function trvDocsClose(){ TRV_DOCS = null; TRV_DIRTY = false;
+  $('docsModal').classList.add('hidden'); travelRender(); }
 
 function trvDocsContext(){
   if(!TRV_DOCS) return null;
@@ -6378,6 +6394,29 @@ function trvDocsRender(){
           + `<button class="btn ghost sm" onclick="trvDeleteFile('${esc(f.AttachmentID)}')" title="delete">×</button></div>`;
       }).join('') + `</div>`
       : `<div class="muted" style="font-size:13px;margin-top:6px">No files yet.</div>`;
+  }
+
+  if(TRV_DOCS.read){
+    const rd = TRV_DOCS.read.read, f = trvFile(TRV_DOCS.read.attachmentId);
+    const bits = [rd.supplier||'unnamed supplier'];
+    if(rd.date) bits.push(trvDay(rd.date));
+    if(+rd.amount) bits.push(trvAmt(rd.currency, rd.amount));
+    if(rd.serviceFrom) bits.push('service ' + trvRange(rd.serviceFrom, rd.serviceTo));
+    const on = TRAVEL.expenses.find(x=>String(x.ExpenseID)===String(TRV_DOCS.read.expenseId));
+    h += `<div style="margin-top:16px;padding:12px;border:1px solid #C8D6E5;border-radius:10px;background:#F4F8FC">`
+      + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`
+      + `<b>${esc(f?fname(f):'Document')} — read as ${esc(rd.docType)}</b>`
+      + `<button class="btn ghost sm" onclick="TRV_DOCS.read=null;trvDocsRender()">Dismiss</button></div>`
+      + `<div style="margin-top:6px">${esc(bits.join(' · '))}`
+      + (rd.description?` <span class="muted">— ${esc(rd.description)}</span>`:'') + `</div>`
+      + (on ? `<div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">`
+             + `<span>Looks like ${esc(trvDay(on.Date))} · ${esc(on.Supplier||'')} · `
+             + `${esc(trvAmt(on.Currency, on.Amount))}`
+             + (TRV_DOCS.read.why?` <span class="muted">(${esc(TRV_DOCS.read.why)})</span>`:'') + `</span>`
+             + `<button class="btn sm" onclick="trvReadAttachTo('${esc(on.ExpenseID)}','`
+             + `${esc(TRV_DOCS.read.attachmentId)}','${esc(rd.docType)}',this)">Attach to it</button></div>`
+           : `<div class="muted" style="font-size:13px;margin-top:8px">No line here looks like the same expense.</div>`)
+      + `</div>`;
   }
 
   h += `<div style="margin-top:16px"><label>Add documents</label>`
@@ -6441,23 +6480,24 @@ async function trvDocsUpload(input){
     try{
       notice('docsErr','','Uploading '+esc(file.name)+' '+step+'…');
       const b64 = await trvShrink(file);
-      const up = await api('add_attachment',{ parentType:'activity', parentId:ctx.actId,
+      // Filed on the trip and read in one call; a file put here against a line does not need
+      // to go through the waiting list, so it is attached and its reading shown in place.
+      const up = await api('attach_read',{ parentType:'activity', parentId:ctx.actId,
         fileName:file.name, description:(TRV_DOCS.desc||'').trim()||file.name, docType:'other',
+        read: !ctx.line,
         mimeType:/^image\//i.test(file.type||'')?'image/jpeg':(file.type||'application/octet-stream'),
         dataBase64: b64 });
       if(!up.ok) throw new Error(up.error||'Upload failed');
       TRAVEL.files.push(up.attachment);
+      if(up.row) trvInboxPut(up.row);
+      if(up.readOk === false) notice('docsErr','warn',esc(file.name)+': '+esc(up.readError||'could not be read'));
+      else notice('docsErr','','');
       if(ctx.line){
         const link = await api('link_expense_file',{ expenseId: ctx.line.ExpenseID,
           attachmentId: up.attachment.AttachmentID });
         if(link.ok && link.link) TRAVEL.links.push(link.link);
       }
-      trvDocsRender();
-      notice('docsErr','','Reading '+esc(file.name)+' '+step+'…');
-      const got = await api('inbox_add_read',{ attachmentId: up.attachment.AttachmentID });
-      if(got.row) trvInboxPut(got.row);
-      if(!got.ok && got.error) notice('docsErr','warn',esc(file.name)+': '+esc(got.error));
-      else notice('docsErr','','');
+      TRV_DIRTY = true;
       trvDocsRender();
     }catch(e){ notice('docsErr','err',esc(file.name)+': '+esc(e.message)); }
   }
@@ -6491,6 +6531,7 @@ async function trvRole(linkId, role){
     if(!r.ok) throw new Error(r.error||'Could not change that');
     const l = TRAVEL.links.find(y=>String(y.LinkID)===String(linkId));
     if(l) l.Role = r.role;
+    TRV_DIRTY = true;
     trvDocsRender();
   }catch(e){ notice('docsErr','err',esc(e.message)); }
 }
@@ -6500,6 +6541,7 @@ async function trvUnlink(linkId){
     const r = await api('unlink_expense_file',{ linkId });
     if(!r.ok) throw new Error(r.error||'Could not detach');
     TRAVEL.links = TRAVEL.links.filter(l=>String(l.LinkID)!==String(linkId));
+    TRV_DIRTY = true;
     trvDocsRender();
   }catch(e){ notice('docsErr','err',esc(e.message)); }
 }
@@ -6512,9 +6554,9 @@ async function trvDeleteFile(attachmentId){
     TRAVEL.files = TRAVEL.files.filter(f=>String(f.AttachmentID)!==String(attachmentId));
     TRAVEL.links = TRAVEL.links.filter(l=>String(l.AttachmentID)!==String(attachmentId));
     TRAVEL.inbox = TRAVEL.inbox.filter(r=>String(r.AttachmentID)!==String(attachmentId));
-    if(TRV_DOCS) trvDocsRender();
-    travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
+    // With the window open the list behind it is not on screen; it is redrawn on the way out.
+    if(TRV_DOCS){ TRV_DIRTY = true; trvDocsRender(); } else travelRender();
+  }catch(e){ trvSay('err',esc(e.message)); }
 }
 
 // ── Documents arriving ───────────────────────────────────────────────────────
@@ -6550,17 +6592,14 @@ async function trvUploadQueue(input, parentType, parentId){
     try{
       notice(where,'','Uploading '+esc(file.name)+' '+step+'…');
       const b64 = await trvShrink(file);
-      const up = await api('add_attachment',{ parentType, parentId, fileName:file.name,
-        description:file.name, docType:'other',
+      const up = await api('attach_read',{ parentType, parentId, fileName:file.name,
+        description:file.name, docType:'other', read:true,
         mimeType:/^image\//i.test(file.type||'')?'image/jpeg':(file.type||'application/octet-stream'),
         dataBase64: b64 });
       if(!up.ok) throw new Error(up.error||'Upload failed');
       TRAVEL.files.push(up.attachment);
-      travelRender();
-      notice(where,'','Reading '+esc(file.name)+' '+step+'…');
-      const got = await api('inbox_add_read',{ attachmentId: up.attachment.AttachmentID });
-      if(got.row) trvInboxPut(got.row);
-      if(!got.ok && got.error) notice(where,'warn',esc(file.name)+': '+esc(got.error));
+      if(up.row) trvInboxPut(up.row);
+      if(up.readOk === false) notice(where,'warn',esc(file.name)+': '+esc(up.readError||'could not be read'));
       travelRender();
     }catch(e){ notice(where,'err',esc(file.name)+': '+esc(e.message)); }
   }
@@ -6578,15 +6617,33 @@ function trvInboxFor(actId){
 
 // Reading a file that is already filed: same road, and the card that comes back sits in the
 // waiting list until it is placed on a line.
+// A document already filed on the trip is not waiting for anything, so reading it does not
+// put it in the waiting list. The answer is shown in the window where it was asked for, with
+// the line it looks like offered right there.
 async function trvReadHere(actId, attachmentId, btn){
   const done = busy(btn);
-  notice('trvErr','','Reading the document…');
+  trvSay('','Reading the document…');
   try{
-    const r = await api('inbox_add_read',{ attachmentId });
-    if(r.row) trvInboxPut(r.row);
-    notice('trvErr', r.ok?'':'warn', r.ok?'':esc(r.error||'Could not read it'));
-    travelRender();
-  }catch(e){ notice('trvErr','err',esc(e.message)); }
+    const r = await api('exp_read',{ attachmentId });
+    if(!r.ok) throw new Error(r.error||'Could not read it');
+    if(TRV_DOCS) TRV_DOCS.read = { attachmentId: String(attachmentId), read: r.read,
+                                   expenseId: r.expenseId||'', why: r.expenseWhy||'' };
+    trvSay('','');
+    trvDocsRender();
+  }catch(e){ trvSay('err',esc(e.message)); }
+  finally{ done(); }
+}
+
+async function trvReadAttachTo(expenseId, attachmentId, role, btn){
+  const done = busy(btn);
+  try{
+    const r = await api('link_expense_file',{ expenseId, attachmentId, role });
+    if(!r.ok) throw new Error(r.error||'Could not attach');
+    if(r.link && !TRAVEL.links.some(l=>String(l.LinkID)===String(r.link.LinkID))) TRAVEL.links.push(r.link);
+    if(TRV_DOCS) TRV_DOCS.read = null;
+    TRV_DIRTY = true;
+    trvDocsRender();
+  }catch(e){ trvSay('err',esc(e.message)); }
   finally{ done(); }
 }
 
@@ -6615,6 +6672,9 @@ function trvInboxRender(){
   const rows = TRAVEL.inbox.slice().sort((a,b)=>String(b.CreatedAt||'').localeCompare(String(a.CreatedAt||'')));
   $('trvInboxPanel').classList.toggle('hidden', !rows.length);
   $('trvInboxCount').textContent = rows.length ? rows.length + ' document(s)' : '';
+  const failed = rows.filter(r=>String(r.Status)!=='read').length;
+  $('trvInboxClear').classList.toggle('hidden', !failed);
+  $('trvInboxClear').textContent = failed ? `Remove ${failed} unreadable` : 'Remove unreadable';
   box.innerHTML = rows.map(trvInboxCard).join('');
   trvLooseRender();
 }
@@ -6715,12 +6775,30 @@ async function trvInboxAccept(inboxId, onLine, btn){
   }catch(e){ notice('trvInboxErr','err',esc(e.message)); done(); }
 }
 
+// The files stay; only the readings that failed go, so the waiting list stays a list of
+// decisions rather than a record of everything the model choked on.
+async function trvInboxClearFailed(btn){
+  const failed = TRAVEL.inbox.filter(r=>String(r.Status)!=='read').length;
+  if(!failed) return;
+  if(!confirm(`Remove ${failed} reading(s) that failed? The files themselves stay where they are.`)) return;
+  const done = busy(btn);
+  try{
+    const r = await api('inbox_clear_failed');
+    if(!r.ok) throw new Error(r.error||'Could not clear them');
+    TRAVEL.inbox = TRAVEL.inbox.filter(x=>String(x.Status)==='read');
+    notice('trvInboxErr','ok', `${r.removed} removed. The files are in the list below.`);
+    travelRender();
+  }catch(e){ notice('trvInboxErr','err',esc(e.message)); }
+  finally{ done(); }
+}
+
 async function trvInboxDismiss(inboxId, btn){
   const done = busy(btn);
   try{
     const r = await api('inbox_dismiss',{ inboxId });
     if(!r.ok) throw new Error(r.error||'Could not dismiss it');
     TRAVEL.inbox = TRAVEL.inbox.filter(x=>String(x.InboxID)!==String(inboxId));
+    delete TRV_INBOX_PICK[String(inboxId)];
     travelRender();
   }catch(e){ notice('trvInboxErr','err',esc(e.message)); done(); }
 }

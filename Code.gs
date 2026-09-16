@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.225';
+const BUILD = '2026-08-08.226';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -272,6 +272,8 @@ function route_(action, d) {
     case 'tmp_list':           return tmpList_(d);
     case 'inbox_list':         return inboxList_(d);
     case 'inbox_add_read':     return inboxAddRead_(d);
+    case 'attach_read':        return attachAndRead_(d);
+    case 'inbox_clear_failed': return inboxClearFailed_(d);
     case 'inbox_reread':       return inboxReread_(d);
     case 'inbox_accept':       return inboxAccept_(d);
     case 'inbox_dismiss':      return inboxDismiss_(d);
@@ -7037,8 +7039,11 @@ function readDate_(read) {
   return trim_(read.date) || trim_(read.serviceFrom) || trim_(read.serviceTo);
 }
 
-function inboxRecord_(attachmentId, fileName, read, source, mail) {
-  var guess = read ? expGuess_(read) : { activityId: '', why: '', expenseId: '', whyLine: '', score: 0 };
+// The guess can be handed in: whoever read the document has already made it, and repeating
+// it means another pass over every line and every activity for the same answer.
+function inboxRecord_(attachmentId, fileName, read, source, mail, known) {
+  var guess = known || (read ? expGuess_(read)
+                             : { activityId: '', why: '', expenseId: '', whyLine: '', score: 0 });
   var line = { expenseId: guess.expenseId, why: guess.whyLine, score: guess.score };
   var row = {
     InboxID: Utilities.getUuid(), AttachmentID: String(attachmentId),
@@ -7239,6 +7244,42 @@ function inboxReread_(d) {
 
 // A file uploaded from the page takes the same road as one that arrived by mail: stored,
 // read, and left waiting with its suggestion.
+// Uploading and reading were two calls, and two calls are two runs of the script, each
+// opening every sheet it needs from scratch. Five files meant ten. Now one.
+function attachAndRead_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var up = adminAddAttachment_(d);
+  if (!up.ok) return up;
+  var id = String(up.attachment.AttachmentID);
+  if (!truthy_(d.read)) return { ok: true, attachment: up.attachment };
+  var got = expRead_({ passcode: d.passcode, attachmentId: id });
+  var row = inboxRecord_(id, trim_(up.attachment.FileName), got.ok ? got.read : null,
+    trim_(d.source) || 'upload', null,
+    got.ok ? { activityId: got.activityId, why: got.activityWhy,
+               expenseId: got.expenseId, whyLine: got.expenseWhy, score: 0 } : null);
+  if (!got.ok) {
+    updateRow_(SHEETS.inbox, 'InboxID', row.InboxID, { Error: String(got.error).slice(0, 250) });
+    return { ok: true, attachment: up.attachment, readOk: false, readError: got.error,
+             row: findRow_(SHEETS.inbox, 'InboxID', row.InboxID) };
+  }
+  return { ok: true, attachment: up.attachment, readOk: true, row: row };
+}
+
+// ── 7. clearing out what could not be read ───────────────────────────────────
+// The files stay where they are; only the failed readings go, so the waiting list is about
+// what still needs a decision rather than a record of everything the model choked on.
+function inboxClearFailed_(d) {
+  requireAdmin_(d);
+  var gone = 0;
+  readAll_(SHEETS.inbox).forEach(function (r) {
+    if (trim_(r.Status) === 'read') return;
+    deleteRowsWhere_(SHEETS.inbox, 'InboxID', trim_(r.InboxID));
+    gone++;
+  });
+  return { ok: true, removed: gone };
+}
+
 function inboxAddRead_(d) {
   requireAdmin_(d);
   ensureActivities_();
@@ -7248,7 +7289,9 @@ function inboxAddRead_(d) {
   if (existing) return inboxReread_({ passcode: d.passcode, inboxId: existing.InboxID });
   var got = expRead_({ passcode: d.passcode, attachmentId: attachmentId });
   var att = findRow_(SHEETS.attachments, 'AttachmentID', attachmentId);
-  var row = inboxRecord_(attachmentId, trim_(att.FileName), got.ok ? got.read : null, 'upload', null);
+  var row = inboxRecord_(attachmentId, trim_(att.FileName), got.ok ? got.read : null, 'upload', null,
+    got.ok ? { activityId: got.activityId, why: got.activityWhy,
+               expenseId: got.expenseId, whyLine: got.expenseWhy, score: 0 } : null);
   if (!got.ok) {
     updateRow_(SHEETS.inbox, 'InboxID', row.InboxID, { Error: String(got.error).slice(0, 250) });
     return { ok: false, error: got.error, row: findRow_(SHEETS.inbox, 'InboxID', row.InboxID) };
@@ -7318,7 +7361,9 @@ function mailTick(d) {
           appendRow_(SHEETS.attachments, att);
           var got = expRead_({ passcode: (d && d.passcode) || CONFIG.ADMIN_PASSCODE,
                                attachmentId: att.AttachmentID });
-          var row = inboxRecord_(att.AttachmentID, att.FileName, got.ok ? got.read : null, 'mail', mail);
+          var row = inboxRecord_(att.AttachmentID, att.FileName, got.ok ? got.read : null, 'mail', mail,
+            got.ok ? { activityId: got.activityId, why: got.activityWhy,
+                       expenseId: got.expenseId, whyLine: got.expenseWhy, score: 0 } : null);
           if (!got.ok) {
             updateRow_(SHEETS.inbox, 'InboxID', row.InboxID, { Error: String(got.error).slice(0, 250) });
             out.failed.push(blob.getName() + ': ' + got.error);
