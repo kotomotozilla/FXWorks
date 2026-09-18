@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.238';
+const BUILD = '2026-08-08.239';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -6957,16 +6957,28 @@ function svcScanQueue_(d) {
   var upd = { SvcScanStatus: 'queued', SvcScanError: '' };
   if (truthy_(d.fresh)) upd.SvcScanResult = '';        // reading it all again, from scratch
   updateRow_(SHEETS.activities, 'ActivityID', id, upd);
-  svcScanWake_();
+  var woke = svcScanWake_();
+  if (!woke.ok) {
+    updateRow_(SHEETS.activities, 'ActivityID', id,
+               { SvcScanStatus: 'failed', SvcScanError: 'could not start it: ' + woke.error });
+    return { ok: false, error: 'Could not start the reading: ' + woke.error };
+  }
   return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id) };
 }
 
+// Returns what happened, because a trigger that cannot be created — the project's limit is
+// twenty — would otherwise leave the job queued for ever with nothing said.
 function svcScanWake_() {
-  var waiting = ScriptApp.getProjectTriggers().filter(function (t) {
-    return t.getHandlerFunction() === 'travelServiceWorker';
-  });
-  if (waiting.length) return;
-  ScriptApp.newTrigger('travelServiceWorker').timeBased().after(15 * 1000).create();
+  try {
+    var waiting = ScriptApp.getProjectTriggers().filter(function (t) {
+      return t.getHandlerFunction() === 'travelServiceWorker';
+    });
+    if (waiting.length) return { ok: true, already: true };
+    ScriptApp.newTrigger('travelServiceWorker').timeBased().after(15 * 1000).create();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e).slice(0, 200) };
+  }
 }
 
 function svcScanRead_(a) {
@@ -7026,8 +7038,10 @@ function travelServiceWorker() {
   svcScanStore_(id, merged);
   if (scan.left) {
     // More documents than one run may read: back in the queue, and it resumes where it left.
-    updateRow_(SHEETS.activities, 'ActivityID', id, { SvcScanStatus: 'queued', SvcScanError: '' });
-    svcScanWake_();
+    var again = svcScanWake_();
+    updateRow_(SHEETS.activities, 'ActivityID', id, again.ok
+      ? { SvcScanStatus: 'queued', SvcScanError: '' }
+      : { SvcScanStatus: 'failed', SvcScanError: 'stopped part way: ' + again.error });
     return 0;
   }
   updateRow_(SHEETS.activities, 'ActivityID', id, { SvcScanStatus: 'ready', SvcScanError: '' });
@@ -7069,9 +7083,13 @@ function svcScanGet_(d) {
   var a = findRow_(SHEETS.activities, 'ActivityID', trim_(d.activityId));
   if (!a) return { ok: false, error: 'Activity not found' };
   var lines = svcScanRead_(a);
+  var left = 0;
+  lines.forEach(function (l) {
+    (l.docs || []).forEach(function (doc) { if (/limit reached/.test(String(doc.note || ''))) left++; });
+  });
   return { ok: true, status: trim_(a.SvcScanStatus), error: trim_(a.SvcScanError),
-           at: trim_(a.SvcScanAt), reference: trim_(a.Reference), lines: lines,
-           read: lines.reduce(function (n, l) { return n + ((l.docs || []).length); }, 0) };
+           at: trim_(a.SvcScanAt), reference: trim_(a.Reference), lines: lines, left: left,
+           read: lines.reduce(function (n, l) { return n + ((l.docs || []).length); }, 0) - left };
 }
 
 // ── Experimental: reading the service period out of the documents ────────────
@@ -7080,12 +7098,13 @@ function svcScanGet_(d) {
 // line has several documents, the period is the span between the earliest and the latest date
 // any of them shows — a flight out on the 25th and back on the 21st is one line covering both.
 // Nothing is written: this reports what it would have proposed, and stops there.
-// Three documents, not fourteen. The script serves one thing at a time for a given user, so
-// a run that reads for a minute is a minute in which the page gets nothing — the window sits
-// on a spinner and the lists come back empty. Short runs, queued back to back, cost the same
-// in total and leave the door open in between.
-var SERVICE_SCAN_MAX = 3;
-var SERVICE_SCAN_SECONDS = 40;
+// The script serves one thing at a time for a given user, so a long run is a long silence for
+// the page. But a trigger cannot be asked to fire again in fifteen seconds — Apps Script gets
+// to it about a minute later — so runs that are too short spend most of the time waiting to
+// be started rather than reading. Six documents, or forty-five seconds, is the balance: two
+// or three runs for a trip of this size instead of five, and never a minute of blockage.
+var SERVICE_SCAN_MAX = 6;
+var SERVICE_SCAN_SECONDS = 45;
 
 var SERVICE_READ_PROMPT =
   'This document belongs to a business trip. Reply with ONE JSON object, nothing else:\n' +

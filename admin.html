@@ -1202,7 +1202,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.238';
+const BUILD = '2026-08-08.239';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -7211,7 +7211,10 @@ async function trvServiceOpen(actId, btn){
     $('svcScanBtn').textContent = lines.length ? 'Scan again' : 'Scan service dates';
     $('svcClearBtn').classList.toggle('hidden', !lines.length && status!=='failed');
     if(running){
-      $('svcSummary').innerHTML = 'Still reading — ' + (lines.length ? `${lines.length} line(s) done so far. ` : '')
+      $('svcSummary').innerHTML = 'Still reading — '
+        + (lines.length ? `${lines.length} line(s) so far` : 'nothing yet')
+        + (r.left ? `, ${r.left} document(s) left` : '')
+        + '. It goes about six documents at a time, a minute apart, so the page stays usable. '
         + 'You can close this window; it carries on without it.';
       $('svcBody').innerHTML = lines.length ? trvSvcTable(lines) : '';
       return;
