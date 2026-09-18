@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.239';
+const BUILD = '2026-08-08.240';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -7114,6 +7114,12 @@ var SERVICE_READ_PROMPT =
   '  shows the year. A hotel folio gives check-in and check-out; a boarding pass gives the day\n' +
   '  of that flight; a return ticket gives the outbound and the return date; a restaurant\n' +
   '  receipt gives the day of the meal\n' +
+  '- A HOTEL FOLIO is settled by what was charged, not by what the header says. Take the\n' +
+  '  earliest date on an accommodation or room charge line as the arrival, and the day after\n' +
+  '  the latest such line as the departure — three nights charged on the 11th, 12th and 13th\n' +
+  '  means 11th to 14th. The Arrival and Departure printed at the top can show only the last\n' +
+  '  segment after a room change or a rebooking; use them only when no nightly charges are\n' +
+  '  listed\n' +
   '- datesNoYear: the same kind of dates where the document prints no year at all — a boarding\n' +
   '  pass usually shows "14SEP" or "26AUG" and nothing more. Put those here as MM-DD. Never\n' +
   '  guess the year; leaving it out is the point of this field\n' +
@@ -7337,6 +7343,12 @@ var EXPENSE_READ_PROMPT =
   '- serviceFrom / serviceTo: the dates the service itself covers — hotel check-in and check-out,\n' +
   '  the flight date, the insurance period. "" when not stated. A single-day service may give\n' +
   '  serviceFrom only\n' +
+  '- A HOTEL FOLIO is settled by what was charged, not by what the header says. Take the\n' +
+  '  earliest date on an accommodation or room charge line as the arrival, and the day after\n' +
+  '  the latest such line as the departure — three nights charged on the 11th, 12th and 13th\n' +
+  '  means 11th to 14th. The Arrival and Departure printed at the top can show only the last\n' +
+  '  segment after a room change or a rebooking; use them only when no nightly charges are\n' +
+  '  listed\n' +
   '- serviceNoYear: those same service dates where the document prints no year at all — a\n' +
   '  boarding pass usually shows "14SEP" and nothing more. Put them here as MM-DD, in order.\n' +
   '  Never guess the year: that is what this field is for. Empty list when the year is shown\n' +
