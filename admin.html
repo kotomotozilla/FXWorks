@@ -1201,7 +1201,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.230';
+const BUILD = '2026-08-08.232';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1293,31 +1293,45 @@ function holdBusy(el){
   };
 }
 
-async function api(action, payload={}){
+async function api(action, payload={}, opts={}){
   let el = RUN_EL;
   if(!el && CLICK_EL && (Date.now() - CLICK_AT) < 2000){ el = CLICK_EL; CLICK_EL = null; }
   const release = el ? holdBusy(el) : null;
   if(release) RUN_EL = el;
   try{
-    return await apiCall(action, payload);
+    return await apiCall(action, payload, opts);
   } finally {
     if(release) release();
   }
 }
 
-async function apiCall(action, payload={}){
+async function apiCall(action, payload={}, opts={}){
   let res;
   const t0 = performance.now();
+  // The script serves one request at a time for a user, so a call made while background work
+  // is running waits its turn. Waiting is fine; waiting for ever is not — past the limit the
+  // page says so instead of sitting on a spinner.
+  const limit = +opts.timeoutMs || 0;
+  const once = () => {
+    const body = JSON.stringify(Object.assign({action, passcode:PIN}, payload));
+    if(!limit) return fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'}, body });
+    const stop = new AbortController();
+    const timer = setTimeout(()=>stop.abort(), limit);
+    return fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow', signal: stop.signal,
+      headers:{'Content-Type':'text/plain;charset=utf-8'}, body }).finally(()=>clearTimeout(timer));
+  };
   try{
-    res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
-      headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
+    res = await once();
   }catch(_){
     // one retry: a dropped connection here is usually a body that was too big or a blip
     try{
       await new Promise(r=>setTimeout(r,700));
-      res = await fetch(APPS_SCRIPT_URL,{ method:'POST', redirect:'follow',
-        headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({action, passcode:PIN}, payload)) });
+      res = await once();
     }catch(__){
+      if(limit) throw new Error('The server did not answer "'+action+'" within '
+        + Math.round(limit/1000) + 's. Background reading holds the script while it runs — '
+        + 'give it a moment and try again.');
       throw new Error('No connection to the server on "'+action+'" ('+Math.round(JSON.stringify(payload||{}).length/1024)+' KB sent). Check the web app URL and your connection.');
     }
   }
@@ -5936,7 +5950,7 @@ let TRV_DOCS = null, TRV_FILE_EDIT = '', TRV_DIRTY = false;
 // What has been picked by hand for a waiting document, which is not the same thing as
 // what was suggested for it — and must survive the redraw that picking causes.
 let TRV_INBOX_PICK = {};
-const TRV_ROLES = ['ticket','boarding','invoice','receipt','statement','other'];
+const TRV_ROLES = ['ticket','boarding','invoice','receipt','statement','replaced','other'];
 const TRV_CURRENCIES = ['USD','EUR','AED','GBP','HKD','THB','SGD','CHF','CZK','HUF','KZT'];
 const TRV_CATEGORIES = ['Airfare / transport','Accommodation','Local transport / transfer',
                         'Visa / insurance','Meals','Other'];
@@ -6020,7 +6034,7 @@ function travelInit(){ if(!TRAVEL.activities.length || stale('travel')) travelLo
 async function travelLoad(btn){
   const done = busy(btn);
   try{
-    const r = await api('list_travel');
+    const r = await api('list_travel', {}, { timeoutMs: 60000 });
     if(!r.ok) throw new Error(r.error||'Could not load');
     TRAVEL = { activities:r.activities||[], expenses:r.expenses||[], links:r.links||[],
                files:r.files||[], inbox:r.inbox||[] };
@@ -6105,7 +6119,7 @@ function trvReportWatch(){
   TRV_WATCH = setInterval(async ()=>{
     if($('view-travel').classList.contains('hidden')) return;
     try{
-      const r = await api('list_travel');
+      const r = await api('list_travel', {}, { timeoutMs: 45000 });
       if(!r.ok) return;
       const was = TRV_SVC ? String((trvAct(TRV_SVC.actId)||{}).SvcScanStatus||'') : '';
       TRAVEL = { activities:r.activities||[], expenses:r.expenses||[], links:r.links||[],
@@ -6438,11 +6452,17 @@ function trvDocsRender(){
     h += ls.length ? `<div class="trvfiles" style="margin-top:8px">` + ls.map(l=>{
         const f = trvFile(l.AttachmentID);
         const nm = f ? fname(f) : 'missing file';
+        const off = String(l.IgnoreDates||'').toLowerCase()==='yes';
         return `<div class="f">${trvFileLabel(f, nm)}`
           + `<select onchange="trvRole('${esc(l.LinkID)}',this.value)" `
           + `style="width:auto;padding:4px 8px;font-size:13px">`
           + TRV_ROLES.map(r=>`<option value="${r}" ${String(l.Role||'other')===r?'selected':''}>${r}</option>`).join('')
           + `</select>`
+          + `<label style="display:flex;gap:5px;align-items:center;font-size:12px;color:#5A6472;`
+          + `flex:0 0 auto;margin:0" title="keep the document, but leave its dates out when the `
+          + `service period is worked out — a reissued ticket, for instance">`
+          + `<input type="checkbox" ${off?'checked':''} `
+          + `onchange="trvIgnoreDates('${esc(l.LinkID)}',this.checked)"> not for dates</label>`
           + (f&&f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
           + `<button class="btn ghost sm" onclick="trvUnlink('${esc(l.LinkID)}')" title="detach">×</button></div>`;
       }).join('') + `</div>`
@@ -6608,7 +6628,20 @@ async function trvRole(linkId, role){
     const r = await api('expense_file_role',{ linkId, role });
     if(!r.ok) throw new Error(r.error||'Could not change that');
     const l = TRAVEL.links.find(y=>String(y.LinkID)===String(linkId));
-    if(l) l.Role = r.role;
+    if(l && r.link) Object.assign(l, r.link);
+    TRV_DIRTY = true;
+    trvDocsRender();
+  }catch(e){ notice('docsErr','err',esc(e.message)); }
+}
+
+// A ticket that was reissued, a folio superseded by a corrected one: still evidence, still in
+// the report, but no longer part of working out when the service happened.
+async function trvIgnoreDates(linkId, off){
+  try{
+    const r = await api('expense_file_role',{ linkId, ignoreDates: !!off });
+    if(!r.ok) throw new Error(r.error||'Could not change that');
+    const l = TRAVEL.links.find(y=>String(y.LinkID)===String(linkId));
+    if(l && r.link) Object.assign(l, r.link);
     TRV_DIRTY = true;
     trvDocsRender();
   }catch(e){ notice('docsErr','err',esc(e.message)); }
@@ -7124,7 +7157,7 @@ async function trvServiceOpen(actId, btn){
 
   const done = busy(btn);
   try{
-    const r = await api('svc_scan_get',{ activityId: actId });
+    const r = await api('svc_scan_get',{ activityId: actId }, { timeoutMs: 45000 });
     if(!r || !r.ok) throw new Error((r && r.error) || 'Could not fetch it');
     const lines = Array.isArray(r.lines) ? r.lines : [];
     const status = String(r.status||'');
@@ -7199,6 +7232,8 @@ function trvSvcTable(lines){
               + (d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.name)}</a>`:esc(d.name))
               + (d.docType?` <span class="muted">· ${esc(d.docType)}</span>`:'')
               + (d.dates && d.dates.length?` — ${esc(d.dates.join(', '))}`:'')
+              + (d.ignored?` <span style="color:#B4651A" title="marked as not counting towards the period">`
+                           + `· not counted</span>`:'')
               + (d.yearAdded?` <span class="muted" title="the document printed no year; taken from the line">`
                              + `· year added</span>`:'')
               + (d.what?` <span class="muted">(${esc(d.what)})</span>`:'')

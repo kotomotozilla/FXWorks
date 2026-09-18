@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.230';
+const BUILD = '2026-08-08.232';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -118,7 +118,9 @@ const HEADERS = {
                 'Source', 'CreatedAt', 'OrgID'],
   // Which file proves which line. Kept apart from the attachment's own parent: one folio
   // covers several lines, and a line can be proved by more than one document.
-  expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'Role', 'CreatedAt', 'OrgID'],
+  // IgnoreDates: the document stays in the file and in the report — it explains why the
+  // dates moved — but a ticket that has been reissued must not go on setting the period.
+  expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'Role', 'IgnoreDates', 'CreatedAt', 'OrgID'],
   // A document that has been read but not yet placed. It arrives by upload or by mail, and
   // the reading has to outlive the page that was open at the time — or a document that came
   // in overnight would have to be read again in the morning.
@@ -6219,7 +6221,9 @@ function paidBy_(v) { v = trim_(v).toLowerCase(); return EXPENSE_PAID_BY.indexOf
 // One expense is often proved by several documents at once — a flight by the ticket, the
 // boarding pass and the airline's invoice. The role says which of them a file is, so a
 // glance at a line shows not just that something is attached but what is missing.
-var EXPENSE_FILE_ROLES = ['ticket', 'boarding', 'invoice', 'receipt', 'statement', 'other'];
+// 'replaced' is a ticket that was reissued, or any document a later one supersedes: kept
+// as evidence, ignored when the service period is worked out.
+var EXPENSE_FILE_ROLES = ['ticket', 'boarding', 'invoice', 'receipt', 'statement', 'replaced', 'other'];
 function fileRole_(v) { v = trim_(v).toLowerCase(); return EXPENSE_FILE_ROLES.indexOf(v) >= 0 ? v : 'other'; }
 
 // The sheet began life as "Trips" with a TripID column, and the expense and attachment rows
@@ -6617,14 +6621,18 @@ function linkExpenseFile_(d) {
   });
   if (dup.length) {
     // Attaching the same file again is how the role gets corrected, not a second link.
-    if (trim_(d.role) && fileRole_(dup[0].Role) !== role) {
-      updateRow_(SHEETS.expenseFiles, 'LinkID', dup[0].LinkID, { Role: role });
-      dup[0].Role = role;
+    if (trim_(d.role)) {
+      var mark = (role === 'replaced' || truthy_(d.ignoreDates)) ? 'yes' : trim_(dup[0].IgnoreDates);
+      if (fileRole_(dup[0].Role) !== role || mark !== trim_(dup[0].IgnoreDates)) {
+        updateRow_(SHEETS.expenseFiles, 'LinkID', dup[0].LinkID, { Role: role, IgnoreDates: mark });
+        dup[0].Role = role; dup[0].IgnoreDates = mark;
+      }
     }
     return { ok: true, link: dup[0] };
   }
   var row = { LinkID: Utilities.getUuid(), ExpenseID: expenseId, AttachmentID: attachmentId,
-              Role: role, CreatedAt: new Date().toISOString() };
+              Role: role, IgnoreDates: (role === 'replaced' || truthy_(d.ignoreDates)) ? 'yes' : '',
+              CreatedAt: new Date().toISOString() };
   appendRow_(SHEETS.expenseFiles, row);
   return { ok: true, link: row };
 }
@@ -6633,9 +6641,18 @@ function setExpenseFileRole_(d) {
   requireAdmin_(d);
   var id = trim_(d.linkId);
   if (!id) return { ok: false, error: 'Missing link' };
-  var role = fileRole_(d.role);
-  if (!updateRow_(SHEETS.expenseFiles, 'LinkID', id, { Role: role })) return { ok: false, error: 'Link not found' };
-  return { ok: true, linkId: id, role: role };
+  var cur = findRow_(SHEETS.expenseFiles, 'LinkID', id);
+  if (!cur) return { ok: false, error: 'Link not found' };
+  var upd = {};
+  if (trim_(d.role)) {
+    upd.Role = fileRole_(d.role);
+    // Calling it replaced is the ordinary way of saying "stop counting this one".
+    if (upd.Role === 'replaced') upd.IgnoreDates = 'yes';
+  }
+  if (d.ignoreDates !== undefined) upd.IgnoreDates = truthy_(d.ignoreDates) ? 'yes' : '';
+  updateRow_(SHEETS.expenseFiles, 'LinkID', id, upd);
+  var after = findRow_(SHEETS.expenseFiles, 'LinkID', id);
+  return { ok: true, linkId: id, role: trim_(after.Role), ignoreDates: trim_(after.IgnoreDates), link: after };
 }
 
 function unlinkExpenseFile_(d) {
@@ -6943,7 +6960,12 @@ function svcScanGet_(d) {
 // line has several documents, the period is the span between the earliest and the latest date
 // any of them shows — a flight out on the 25th and back on the 21st is one line covering both.
 // Nothing is written: this reports what it would have proposed, and stops there.
-var SERVICE_SCAN_MAX = 14;
+// Three documents, not fourteen. The script serves one thing at a time for a given user, so
+// a run that reads for a minute is a minute in which the page gets nothing — the window sits
+// on a spinner and the lists come back empty. Short runs, queued back to back, cost the same
+// in total and leave the door open in between.
+var SERVICE_SCAN_MAX = 3;
+var SERVICE_SCAN_SECONDS = 40;
 
 var SERVICE_READ_PROMPT =
   'This document belongs to a business trip. Reply with ONE JSON object, nothing else:\n' +
@@ -7000,7 +7022,7 @@ function expServiceScan_(d) {
   var already = {};
   (Array.isArray(d.skipIds) ? d.skipIds : []).forEach(function (id) { already[String(id)] = true; });
 
-  var out = [], read = 0, skipped = 0;
+  var out = [], read = 0, skipped = 0, started = Date.now();
   lines.forEach(function (x) {
     if (already[String(x.ExpenseID)]) return;
     var mine = links.filter(function (l) { return String(l.ExpenseID) === String(x.ExpenseID); });
@@ -7008,24 +7030,34 @@ function expServiceScan_(d) {
     mine.forEach(function (l) {
       var f = files.filter(function (a) { return String(a.AttachmentID) === String(l.AttachmentID); })[0];
       if (!f) return;
-      if (read >= SERVICE_SCAN_MAX) { skipped++; docs.push({ name: trim_(f.FileName), url: trim_(f.Url), note: 'not read — limit reached' }); return; }
+      // Either count or clock: whichever runs out first ends the run, and the rest waits for
+      // the next one.
+      if (read >= SERVICE_SCAN_MAX || (Date.now() - started) > SERVICE_SCAN_SECONDS * 1000) {
+        skipped++;
+        docs.push({ name: trim_(f.FileName), url: trim_(f.Url), note: 'not read — limit reached' });
+        return;
+      }
       read++;
       var got = docAsk_(String(f.AttachmentID), SERVICE_READ_PROMPT);
       if (!got.ok) { docs.push({ name: trim_(f.FileName), url: trim_(f.Url), note: String(got.error).slice(0, 120) }); return; }
       var found = [], guessed = 0;
       (Array.isArray(got.json.dates) ? got.json.dates : []).forEach(function (v) {
         var iso = isoDate_(v);
-        if (iso) { found.push(iso); dates.push(iso); }
+        if (iso) found.push(iso);
       });
       // The anchor for a yearless date: the line's own date, else the trip around it.
       var anchor = isoDate_(x.Date) || isoDate_(act.ActualStart) || isoDate_(act.StartDate);
       (Array.isArray(got.json.datesNoYear) ? got.json.datesNoYear : []).forEach(function (v) {
         var iso = yearFrom_(v, anchor);
-        if (iso) { found.push(iso); dates.push(iso); guessed++; }
+        if (iso) { found.push(iso); guessed++; }
       });
+      // A reissued ticket still says what it says; it just no longer says when the trip
+      // happened. Read, shown, and left out of the arithmetic.
+      var counts = !truthy_(l.IgnoreDates);
+      if (counts) found.forEach(function (iso) { dates.push(iso); });
       docs.push({ name: trim_(f.FileName), url: trim_(f.Url), role: trim_(l.Role),
                   docType: trim_(got.json.docType), what: trim_(got.json.what).slice(0, 60),
-                  dates: found, yearAdded: guessed });
+                  dates: found, yearAdded: guessed, ignored: !counts });
     });
     if (!mine.length) return;
     dates.sort();
@@ -7611,7 +7643,7 @@ function travelReportWorker() {
     return trim_(a.ReportPdfStatus) === 'queued';
   });
   var done = [];
-  for (var i = 0; i < queued.length && i < 3; i++) {
+  for (var i = 0; i < queued.length && i < 1; i++) {
     var id = String(queued[i].ActivityID);
     updateRow_(SHEETS.activities, 'ActivityID', id, { ReportPdfStatus: 'working' });
     var made;
@@ -7623,7 +7655,7 @@ function travelReportWorker() {
   }
   if (done.length) tripReportNotify_(done);
   // Anything queued while this ran gets its own turn.
-  if (queued.length > 3) tripReportWake_();
+  if (queued.length > 1) tripReportWake_();
   return done.length;
 }
 
