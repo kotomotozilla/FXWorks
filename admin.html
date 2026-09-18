@@ -1202,7 +1202,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.236';
+const BUILD = '2026-08-08.238';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -1295,6 +1295,10 @@ function holdBusy(el){
 }
 
 async function api(action, payload={}, opts={}){
+  // A call nobody pressed a button for must not borrow one. The background poll used to take
+  // charge of whatever was last busy and hold it disabled for the length of the request —
+  // which, during a scan, meant the button beside it could not be pressed at all.
+  if(opts.quiet) return apiCall(action, payload, opts);
   let el = RUN_EL;
   if(!el && CLICK_EL && (Date.now() - CLICK_AT) < 2000){ el = CLICK_EL; CLICK_EL = null; }
   const release = el ? holdBusy(el) : null;
@@ -6024,7 +6028,17 @@ function trvUsd(lines){
 }
 
 function trvProjName(id){ const p=(PROJECTS||[]).find(x=>String(x.ProjectID)===String(id)); return p?(p.Name||''):''; }
-function trvAct(id){ return TRAVEL.activities.find(a=>String(a.ActivityID)===String(id)) || null; }
+function trvAct(id){ return TRAVEL.activities.find(a=>a && String(a.ActivityID)===String(id)) || null; }
+
+// Putting a row back into the list where it came from. An answer that arrives without the row
+// — an older deployment, a call that half worked — used to be written into the array anyway,
+// and the next redraw died on it with nothing to say for itself.
+function trvPutAct(row){
+  if(!row || !row.ActivityID) return false;
+  const i = TRAVEL.activities.findIndex(a=>a && String(a.ActivityID)===String(row.ActivityID));
+  if(i>=0) TRAVEL.activities[i] = row; else TRAVEL.activities.push(row);
+  return true;
+}
 
 // An error has to appear where the eye is. Writing it into the list behind three open
 // windows is the same as not writing it at all — which is exactly how a failed delete used
@@ -6045,8 +6059,8 @@ async function travelLoad(btn){
   try{
     const r = await api('list_travel', {}, { timeoutMs: 60000 });
     if(!r.ok) throw new Error(r.error||'Could not load');
-    TRAVEL = { activities:r.activities||[], expenses:r.expenses||[], links:r.links||[],
-               files:r.files||[], inbox:r.inbox||[] };
+    TRAVEL = { activities:(r.activities||[]).filter(Boolean), expenses:r.expenses||[],
+               links:r.links||[], files:r.files||[], inbox:r.inbox||[] };
     LOADED['travel'] = Date.now();
     notice('trvErr','','');
     travelRender();
@@ -6106,8 +6120,7 @@ async function trvReportMake(actId, btn){
   try{
     const r = await api('trip_report_queue',{ activityId: actId });
     if(!r.ok) throw new Error(r.error||'Could not start it');
-    const i = TRAVEL.activities.findIndex(x=>String(x.ActivityID)===String(actId));
-    if(i>=0) TRAVEL.activities[i] = r.activity;
+    trvPutAct(r.activity);
     trvSay('ok','The report is being built. You can close the page — a note comes by mail when it is ready.');
     travelRender();
     trvReportWatch();
@@ -6128,11 +6141,11 @@ function trvReportWatch(){
   TRV_WATCH = setInterval(async ()=>{
     if($('view-travel').classList.contains('hidden')) return;
     try{
-      const r = await api('list_travel', {}, { timeoutMs: 45000 });
+      const r = await api('list_travel', {}, { timeoutMs: 45000, quiet: true });
       if(!r.ok) return;
       const was = TRV_SVC ? String((trvAct(TRV_SVC.actId)||{}).SvcScanStatus||'') : '';
-      TRAVEL = { activities:r.activities||[], expenses:r.expenses||[], links:r.links||[],
-                 files:r.files||[], inbox:r.inbox||[] };
+      TRAVEL = { activities:(r.activities||[]).filter(Boolean), expenses:r.expenses||[],
+                 links:r.links||[], files:r.files||[], inbox:r.inbox||[] };
       travelRender();
       trvReportWatch();
       // The window was left open on a trip that has just finished reading: show the result
@@ -6147,7 +6160,7 @@ function trvReportWatch(){
 
 function travelRender(){
   const t = $('trvTable'); if(!t) return;
-  const acts = TRAVEL.activities.slice().sort((a,b)=>
+  const acts = TRAVEL.activities.filter(Boolean).sort((a,b)=>
     String(b.StartDate||b.CreatedAt||'').localeCompare(String(a.StartDate||a.CreatedAt||'')));
   const linked = {}; TRAVEL.links.forEach(l=>linked[String(l.AttachmentID)]=1);
   let noFile = 0, loose = 0;
@@ -6386,8 +6399,7 @@ async function saveActivityForm(btn){
       projectId:$('ac_project').value, notes:$('ac_notes').value
     });
     if(!r.ok) throw new Error(r.error||'Could not save');
-    const i = TRAVEL.activities.findIndex(a=>String(a.ActivityID)===String(r.activity.ActivityID));
-    if(i>=0) TRAVEL.activities[i] = r.activity; else TRAVEL.activities.push(r.activity);
+    trvPutAct(r.activity);
     $('acModal').classList.add('hidden');
     const fresh = !TRV_EDIT_ACT;
     travelRender();
@@ -6406,8 +6418,7 @@ async function saveReport(id, btn){
       reportNotes:g('notes'), noPersonal:g('nopers')
     });
     if(!r.ok) throw new Error(r.error||'Could not save');
-    const i = TRAVEL.activities.findIndex(a=>String(a.ActivityID)===String(id));
-    if(i>=0) TRAVEL.activities[i] = r.activity;
+    trvPutAct(r.activity);
     travelRender();
   }catch(e){ notice('trvRepErr_'+id,'err',esc(e.message)); }
   finally{ done(); }
@@ -7141,8 +7152,7 @@ async function trvServiceClear(btn){
   try{
     const r = await api('svc_scan_clear',{ activityId: TRV_SVC_ACT });
     if(!r.ok) throw new Error(r.error||'Could not clear it');
-    const i = TRAVEL.activities.findIndex(x=>String(x.ActivityID)===String(TRV_SVC_ACT));
-    if(i>=0) TRAVEL.activities[i] = r.activity;
+    trvPutAct(r.activity);
     travelRender();
     trvServiceOpen(TRV_SVC_ACT);
   }catch(e){ notice('svcErr','err',esc(e.message)); }
@@ -7155,8 +7165,9 @@ async function trvServiceQueue(actId, fresh, btn){
   try{
     const r = await api('svc_scan_queue',{ activityId: actId, fresh: !!fresh });
     if(!r.ok) throw new Error(r.error||'Could not start it');
-    const i = TRAVEL.activities.findIndex(x=>String(x.ActivityID)===String(actId));
-    if(i>=0) TRAVEL.activities[i] = r.activity;
+    if(!r.activity) throw new Error('The server started it but did not say so — '
+      + 'if this keeps happening, publish a new deployment version in Apps Script.');
+    trvPutAct(r.activity);
     if(!$('svcModal').classList.contains('hidden')){
       notice('svcErr','ok','Reading in the background — this window can be closed. '
         + 'A note comes by mail when there is something to look at.');
