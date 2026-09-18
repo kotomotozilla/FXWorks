@@ -606,7 +606,7 @@
   <div style="height:12px"></div>
   <div class="acts">
     <button id="svcSaveBtn" class="btn sm" onclick="trvServiceSave(this)">Save</button>
-    <button id="svcAgainBtn" class="btn ghost sm hidden" onclick="trvServiceQueue(TRV_SVC&&TRV_SVC.actId,true,this)">
+    <button id="svcAgainBtn" class="btn ghost sm hidden" onclick="trvServiceQueue(TRV_SVC_ACT,true,this)">
       Read again</button>
     <button class="btn ghost sm" onclick="closeModal('svcModal')">Cancel</button>
   </div>
@@ -1201,7 +1201,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.229';
+const BUILD = '2026-08-08.230';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -7071,7 +7071,7 @@ async function tmpDelete(attachmentId){
 // Reading fourteen documents takes longer than anyone wants to watch, so the press queues
 // the trip and the work happens without the page. What was found waits on the trip until it
 // is looked at and either saved or thrown away.
-let TRV_SVC = null;
+let TRV_SVC = null, TRV_SVC_ACT = '';
 
 function trvSvcBtn(a){
   const id = String(a.ActivityID), st = String(a.SvcScanStatus||'');
@@ -7111,6 +7111,7 @@ async function trvServiceQueue(actId, fresh, btn){
 async function trvServiceOpen(actId, btn){
   const a = trvAct(actId);
   TRV_SVC = null;
+  TRV_SVC_ACT = String(actId||'');
   $('svcTitle').textContent = 'Service dates · ' + ((a && (a.Destinations||a.Reference)) || '');
   $('svcSummary').innerHTML = 'Fetching what was read…';
   $('svcBody').innerHTML = '<div class="muted" style="padding:12px 0"><span class="spin dark"></span></div>';
@@ -7124,33 +7125,39 @@ async function trvServiceOpen(actId, btn){
   const done = busy(btn);
   try{
     const r = await api('svc_scan_get',{ activityId: actId });
-    if(!r.ok) throw new Error(r.error||'Could not fetch it');
-    TRV_SVC = { actId: String(actId), lines: r.lines||[], read: r.read, skipped: 0, status: r.status };
+    if(!r || !r.ok) throw new Error((r && r.error) || 'Could not fetch it');
+    const lines = Array.isArray(r.lines) ? r.lines : [];
+    const status = String(r.status||'');
+    TRV_SVC = { actId: String(actId), lines: lines, read: r.read||0, skipped: 0, status: status };
     $('svcAgainBtn').classList.remove('hidden');
-    if(r.status==='queued' || r.status==='working'){
-      $('svcSummary').innerHTML = 'Still reading — ' + (r.lines.length
-        ? `${r.lines.length} line(s) done so far. `
-        : '') + 'You can close this window; it carries on without it.';
-      $('svcBody').innerHTML = r.lines.length ? trvSvcTable(r.lines) : '';
+    if(status==='queued' || status==='working'){
+      $('svcSummary').innerHTML = 'Still reading — ' + (lines.length ? `${lines.length} line(s) done so far. ` : '')
+        + 'You can close this window; it carries on without it.';
+      $('svcBody').innerHTML = lines.length ? trvSvcTable(lines) : '';
       return;
     }
-    if(r.status==='failed'){
+    if(status==='failed'){
       $('svcSummary').innerHTML = '';
-      $('svcBody').innerHTML = r.lines.length ? trvSvcTable(r.lines) : '';
+      $('svcBody').innerHTML = lines.length ? trvSvcTable(lines) : '';
       notice('svcErr','err','The last attempt failed: ' + esc(r.error||'unknown') + '. Press Read again to retry.');
       return;
     }
-    if(!r.lines.length){
+    if(!lines.length){
       $('svcSummary').innerHTML = '';
       $('svcBody').innerHTML = '<div class="muted" style="font-size:13px">'
         + 'Nothing has been read yet. Press Read again to start.</div>';
       return;
     }
-    trvSvcRender({ read: r.read, skipped: 0 });
+    trvSvcRender({ read: r.read||0, skipped: 0 });
   }catch(e){
     $('svcSummary').innerHTML = '';
     $('svcBody').innerHTML = '';
-    notice('svcErr','err','Could not fetch what was read: ' + esc(e.message));
+    // "Unknown action" from the server means the script is newer than the published
+    // deployment — worth saying, rather than leaving it as a riddle.
+    const hint = /Unknown action/.test(e.message)
+      ? ' — the published deployment is older than the script: publish a new version in Apps Script.'
+      : '';
+    notice('svcErr','err','Could not fetch what was read: ' + esc(e.message) + hint);
   }
   finally{ done(); }
 }
