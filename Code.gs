@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.226';
+const BUILD = '2026-08-08.229';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -107,7 +107,9 @@ const HEADERS = {
   activities:  ['ActivityID', 'Type', 'Reference', 'Status', 'RequestedBy', 'Purpose', 'CounterpartyID',
                 'Counterparty', 'Destinations', 'ProjectID', 'StartDate', 'EndDate', 'ActualStart', 'ActualEnd',
                 'EstimatedCost', 'Currency', 'ReportDate', 'Activities', 'Meetings', 'Notes', 'ReportNotes',
-                'NoPersonal', 'ReportPdfID', 'ReportPdfUrl', 'ReportPdfAt', 'Source', 'CreatedAt', 'OrgID'],
+                'NoPersonal', 'ReportPdfID', 'ReportPdfUrl', 'ReportPdfAt', 'ReportPdfStatus',
+                'ReportPdfError', 'ReportPdfQueuedAt', 'SvcScanStatus', 'SvcScanAt',
+                'SvcScanError', 'SvcScanResult', 'Source', 'CreatedAt', 'OrgID'],
   // ServiceFrom/ServiceTo: a hotel over a month end or a year of insurance paid at once
   // belongs to the period of the service, not to the day the card was charged.
   expenses:    ['ExpenseID', 'Date', 'ServiceFrom', 'ServiceTo', 'Category', 'Supplier', 'Description',
@@ -266,7 +268,10 @@ function route_(action, d) {
     case 'save_expense':       return saveExpense_(d);
     case 'exp_read':           return expRead_(d);
     case 'exp_service_scan':   return expServiceScan_(d);
+    case 'svc_scan_queue':     return svcScanQueue_(d);
+    case 'svc_scan_get':       return svcScanGet_(d);
     case 'exp_service_save':   return expServiceSave_(d);
+    case 'trip_report_queue':  return tripReportQueue_(d);
     case 'attach_move':        return attachMove_(d);
     case 'attach_rename':      return attachRename_(d);
     case 'tmp_list':           return tmpList_(d);
@@ -6813,6 +6818,125 @@ function dayGap_(a, b) {
   return Math.round((new Date(a).getTime() - new Date(b).getTime()) / 86400000);
 }
 
+// ── Reading service periods in the background ────────────────────────────────
+// Fourteen documents take half a minute or more, and nobody should have to hold a window
+// open for it. The press queues the trip; a trigger reads; what it found is kept on the
+// trip until it is looked at and either saved or thrown away. A run that hits the per-run
+// limit queues itself again and carries on from where it stopped.
+function svcScanQueue_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var id = trim_(d.activityId);
+  var a = findRow_(SHEETS.activities, 'ActivityID', id);
+  if (!a) return { ok: false, error: 'Activity not found' };
+  var upd = { SvcScanStatus: 'queued', SvcScanError: '' };
+  if (truthy_(d.fresh)) upd.SvcScanResult = '';        // reading it all again, from scratch
+  updateRow_(SHEETS.activities, 'ActivityID', id, upd);
+  svcScanWake_();
+  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id) };
+}
+
+function svcScanWake_() {
+  var waiting = ScriptApp.getProjectTriggers().filter(function (t) {
+    return t.getHandlerFunction() === 'travelServiceWorker';
+  });
+  if (waiting.length) return;
+  ScriptApp.newTrigger('travelServiceWorker').timeBased().after(15 * 1000).create();
+}
+
+function svcScanRead_(a) {
+  var raw = trim_(a.SvcScanResult);
+  if (!raw) return [];
+  try { var parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; }
+  catch (e) { return []; }
+}
+
+// A sheet cell holds so much and no more. The dates are the point; if the detail of which
+// document said what will not fit, that is what gives way, and it says so.
+function svcScanStore_(activityId, lines) {
+  var text = JSON.stringify(lines);
+  if (text.length > 45000) {
+    text = JSON.stringify(lines.map(function (l) {
+      var copy = {};
+      Object.keys(l).forEach(function (k) { if (k !== 'docs') copy[k] = l[k]; });
+      copy.docs = [{ name: l.docs && l.docs.length ? l.docs.length + ' document(s) — detail not kept' : '', dates: [] }];
+      return copy;
+    }));
+  }
+  updateRow_(SHEETS.activities, 'ActivityID', activityId,
+             { SvcScanResult: text.slice(0, 48000), SvcScanAt: new Date().toISOString() });
+}
+
+function travelServiceWorker() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'travelServiceWorker') { try { ScriptApp.deleteTrigger(t); } catch (e) {} }
+  });
+  ensureActivities_();
+  var queued = readAll_(SHEETS.activities).filter(function (a) {
+    return trim_(a.SvcScanStatus) === 'queued';
+  });
+  if (!queued.length) return 0;
+
+  var a = queued[0], id = String(a.ActivityID);
+  updateRow_(SHEETS.activities, 'ActivityID', id, { SvcScanStatus: 'working' });
+  // A line the last run only got halfway through — some of its documents unread because the
+  // limit fell in the middle of it — is not done, and must not be skipped as if it were.
+  var prior = svcScanRead_(a).filter(function (l) {
+    return !(l.docs || []).some(function (doc) { return /limit reached/.test(String(doc.note || '')); });
+  });
+  var done = prior.map(function (l) { return String(l.expenseId); });
+
+  var scan;
+  try { scan = expServiceScan_({ passcode: CONFIG.ADMIN_PASSCODE, activityId: id, skipIds: done }); }
+  catch (e) { scan = { ok: false, error: String(e).slice(0, 250) }; }
+
+  if (!scan.ok) {
+    updateRow_(SHEETS.activities, 'ActivityID', id,
+               { SvcScanStatus: 'failed', SvcScanError: String(scan.error).slice(0, 250) });
+    if (queued.length > 1) svcScanWake_();
+    return 0;
+  }
+
+  var merged = prior.concat(scan.lines);
+  svcScanStore_(id, merged);
+  if (scan.left) {
+    // More documents than one run may read: back in the queue, and it resumes where it left.
+    updateRow_(SHEETS.activities, 'ActivityID', id, { SvcScanStatus: 'queued', SvcScanError: '' });
+    svcScanWake_();
+    return 0;
+  }
+  updateRow_(SHEETS.activities, 'ActivityID', id, { SvcScanStatus: 'ready', SvcScanError: '' });
+  svcScanNotify_(a, merged);
+  if (queued.length > 1) svcScanWake_();
+  return 1;
+}
+
+function svcScanNotify_(a, lines) {
+  var to = trim_(CONFIG.ADMIN_EMAIL);
+  if (!to) return;
+  var changing = lines.filter(function (l) {
+    return trim_(l.proposedFrom) && !(l.proposedFrom === l.nowFrom && l.proposedTo === l.nowTo);
+  });
+  try {
+    MailApp.sendEmail(to, 'FXWorks: service dates read for ' + trim_(a.Reference),
+      'The documents on ' + trim_(a.Reference) + ' have been read.\n\n'
+      + changing.length + ' of ' + lines.length + ' line(s) would change. Nothing has been written:\n'
+      + 'open the trip in FXWorks, press Service dates, and save or discard what it found.\n\n'
+      + CONFIG.ADMIN_BASE_URL + '\n');
+  } catch (e) {}
+}
+
+function svcScanGet_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var a = findRow_(SHEETS.activities, 'ActivityID', trim_(d.activityId));
+  if (!a) return { ok: false, error: 'Activity not found' };
+  var lines = svcScanRead_(a);
+  return { ok: true, status: trim_(a.SvcScanStatus), error: trim_(a.SvcScanError),
+           at: trim_(a.SvcScanAt), reference: trim_(a.Reference), lines: lines,
+           read: lines.reduce(function (n, l) { return n + ((l.docs || []).length); }, 0) };
+}
+
 // ── Experimental: reading the service period out of the documents ────────────
 // The dates a service actually covers are usually printed on the paper: check-in and check-out
 // on a hotel folio, the flight date on a boarding pass, both legs on a return ticket. Where a
@@ -6871,8 +6995,14 @@ function expServiceScan_(d) {
     return trim_(x.ParentType) === 'activity' && String(x.ParentID) === String(activityId);
   }).sort(function (a, b) { return String(isoDate_(a.Date)).localeCompare(String(isoDate_(b.Date))); });
 
+  // A run that hit the limit leaves the rest for the next one, and the next one must not
+  // pay for the documents already read: they cost seconds and money each.
+  var already = {};
+  (Array.isArray(d.skipIds) ? d.skipIds : []).forEach(function (id) { already[String(id)] = true; });
+
   var out = [], read = 0, skipped = 0;
   lines.forEach(function (x) {
+    if (already[String(x.ExpenseID)]) return;
     var mine = links.filter(function (l) { return String(l.ExpenseID) === String(x.ExpenseID); });
     var docs = [], dates = [];
     mine.forEach(function (l) {
@@ -6910,6 +7040,7 @@ function expServiceScan_(d) {
     });
   });
   return { ok: true, reference: trim_(act.Reference), lines: out, read: read, skipped: skipped,
+           left: skipped,
            note: 'Nothing has been written — this is what it would have proposed.' };
 }
 
@@ -6936,6 +7067,9 @@ function expServiceSave_(d) {
     updateRow_(SHEETS.expenses, 'ExpenseID', id, { ServiceFrom: from, ServiceTo: to });
     changed.push(findRow_(SHEETS.expenses, 'ExpenseID', id));
   });
+  if (changed.length || rows.length) {
+    updateRow_(SHEETS.activities, 'ActivityID', activityId, { SvcScanStatus: '', SvcScanResult: '' });
+  }
   return { ok: true, changed: changed, missed: missed };
 }
 
@@ -7076,17 +7210,29 @@ function expNorm_(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g
 
 // How near the document's date falls to a line: the day it was paid, or anywhere inside the
 // period the service covers — a folio dated the day of checkout still belongs to the stay.
+// When the line knows when the service happened, that is what a document's date is compared
+// against — and the day the card was charged stops mattering. A return ticket bought in
+// August covers a flight three weeks later: judged by the payment date, the boarding pass
+// for the second leg looks like it belongs to something else entirely, and judged by the
+// ticket's own dates it lands exactly where it should. A hotel folio works the same way:
+// the stay is the period, not the day the invoice was raised.
 function expDayGap_(x, date) {
   if (!date) return 99;
-  var gaps = [];
-  var d = isoDate_(x.Date);
-  if (d) gaps.push(Math.abs(dayGap_(date, d)));
   var from = isoDate_(x.ServiceFrom), to = isoDate_(x.ServiceTo) || from;
   if (from) {
-    gaps.push(date >= from && date <= to ? 0
-      : Math.min(Math.abs(dayGap_(date, from)), Math.abs(dayGap_(date, to))));
+    return (date >= from && date <= to) ? 0
+      : Math.min(Math.abs(dayGap_(date, from)), Math.abs(dayGap_(date, to)));
   }
-  return gaps.length ? Math.min.apply(null, gaps) : 99;
+  var d = isoDate_(x.Date);
+  return d ? Math.abs(dayGap_(date, d)) : 99;
+}
+
+// Two tickets can both cover the same day — a long one and a short one. The narrower window
+// is the more specific claim, so it wins a tie.
+function expSpan_(x) {
+  var from = isoDate_(x.ServiceFrom), to = isoDate_(x.ServiceTo) || from;
+  if (!from) return 9999;
+  return Math.abs(dayGap_(to, from));
 }
 
 function expLineScore_(x, read) {
@@ -7100,16 +7246,22 @@ function expLineScore_(x, read) {
   if (gap <= 3) { score += 1; why.push(gap === 0 ? 'same date' : 'within ' + gap + ' day(s)'); }
   var sup = expNorm_(read.supplier), xs = expNorm_(x.Supplier);
   if (sup && xs && (xs.indexOf(sup) >= 0 || sup.indexOf(xs) >= 0)) { score += 2; why.push('same supplier'); }
+  // One airline flies every leg of a trip, so the name alone proves nothing. Where the
+  // document carries a date and the line's own dates say otherwise, that is a disagreement,
+  // not a weak match: only the money can still carry it.
+  if (readDate_(read) && gap > 3 && score < 3) return { score: 0, why: '', gap: gap };
   return { score: score, why: why.join(', '), gap: gap };
 }
 
 function expLineGuess_(activityId, read) {
-  var best = { expenseId: '', why: '', score: 0 };
+  var best = { expenseId: '', why: '', score: 0, gap: 99, span: 9999 };
   readAll_(SHEETS.expenses).forEach(function (x) {
     if (trim_(x.ParentType) !== 'activity' || String(x.ParentID) !== String(activityId)) return;
-    var s = expLineScore_(x, read);
-    if (s.score >= 2 && s.score > best.score) {
-      best = { expenseId: String(x.ExpenseID), why: s.why, score: s.score };
+    var s = expLineScore_(x, read), span = expSpan_(x);
+    if (s.score < 2) return;
+    if (s.score > best.score || (s.score === best.score && s.gap < best.gap)
+        || (s.score === best.score && s.gap === best.gap && span < best.span)) {
+      best = { expenseId: String(x.ExpenseID), why: s.why, score: s.score, gap: s.gap, span: span };
     }
   });
   return best;
@@ -7124,12 +7276,15 @@ function expLineGuess_(activityId, read) {
 // Whatever is found comes back with the reason it was found, and is still only a suggestion.
 function expGuess_(read) {
   var date = readDate_(read);
-  var byLine = { score: 0 };
+  var byLine = { score: 0, gap: 99, span: 9999 };
   readAll_(SHEETS.expenses).forEach(function (x) {
     if (trim_(x.ParentType) !== 'activity' || !trim_(x.ParentID)) return;
-    var s = expLineScore_(x, read);
-    if (s.score > byLine.score || (s.score === byLine.score && s.score && s.gap < byLine.gap)) {
-      byLine = { score: s.score, why: s.why, gap: s.gap,
+    var s = expLineScore_(x, read), span = expSpan_(x);
+    var better = s.score > byLine.score
+      || (s.score === byLine.score && s.score && s.gap < byLine.gap)
+      || (s.score === byLine.score && s.score && s.gap === byLine.gap && span < byLine.span);
+    if (better) {
+      byLine = { score: s.score, why: s.why, gap: s.gap, span: span,
                  expenseId: String(x.ExpenseID), activityId: String(x.ParentID), line: x };
     }
   });
@@ -7411,4 +7566,243 @@ function notifyInbox_(out) {
     + 'open FXWorks, Activities, and confirm or correct each one:\n\n' + lines.join('\n')
     + '\n\n' + CONFIG.ADMIN_BASE_URL + '\n';
   try { MailApp.sendEmail(to, 'FXWorks: ' + out.taken + ' document(s) waiting', body); } catch (e) {}
+}
+
+// ── The trip report ──────────────────────────────────────────────────────────
+// Building it takes long enough that nobody should have to watch: the button puts the trip
+// in a queue and a trigger does the work, so the page can be closed. When the file is ready
+// a note goes out and the trip in the list becomes a link to it. Running it again rebuilds
+// and replaces — the old file goes to Trash, so there is one report per trip, not a pile.
+function tripReportQueue_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var id = trim_(d.activityId);
+  var a = findRow_(SHEETS.activities, 'ActivityID', id);
+  if (!a) return { ok: false, error: 'Activity not found' };
+  var lines = readAll_(SHEETS.expenses).filter(function (x) {
+    return trim_(x.ParentType) === 'activity' && String(x.ParentID) === String(id);
+  });
+  if (!lines.length && !trim_(a.Activities)) {
+    return { ok: false, error: 'Nothing to report yet — no expense lines and no report text' };
+  }
+  updateRow_(SHEETS.activities, 'ActivityID', id, {
+    ReportPdfStatus: 'queued', ReportPdfError: '', ReportPdfQueuedAt: new Date().toISOString()
+  });
+  tripReportWake_();
+  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id) };
+}
+
+// One waiting trigger is enough: it takes whatever is queued when it runs. Piling up a
+// trigger per press would hit the project's trigger limit on a busy afternoon.
+function tripReportWake_() {
+  var waiting = ScriptApp.getProjectTriggers().filter(function (t) {
+    return t.getHandlerFunction() === 'travelReportWorker';
+  });
+  if (waiting.length) return;
+  ScriptApp.newTrigger('travelReportWorker').timeBased().after(15 * 1000).create();
+}
+
+function travelReportWorker() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'travelReportWorker') { try { ScriptApp.deleteTrigger(t); } catch (e) {} }
+  });
+  ensureActivities_();
+  var queued = readAll_(SHEETS.activities).filter(function (a) {
+    return trim_(a.ReportPdfStatus) === 'queued';
+  });
+  var done = [];
+  for (var i = 0; i < queued.length && i < 3; i++) {
+    var id = String(queued[i].ActivityID);
+    updateRow_(SHEETS.activities, 'ActivityID', id, { ReportPdfStatus: 'working' });
+    var made;
+    try { made = tripReportBuild_(id); }
+    catch (e) { made = { ok: false, error: String(e).slice(0, 250) }; }
+    if (made.ok) done.push(made);
+    else updateRow_(SHEETS.activities, 'ActivityID', id,
+                    { ReportPdfStatus: 'failed', ReportPdfError: String(made.error).slice(0, 250) });
+  }
+  if (done.length) tripReportNotify_(done);
+  // Anything queued while this ran gets its own turn.
+  if (queued.length > 3) tripReportWake_();
+  return done.length;
+}
+
+function tripReportBuild_(activityId) {
+  var a = findRow_(SHEETS.activities, 'ActivityID', activityId);
+  if (!a) return { ok: false, error: 'Activity not found' };
+
+  var lines = readAll_(SHEETS.expenses).filter(function (x) {
+    return trim_(x.ParentType) === 'activity' && String(x.ParentID) === String(activityId);
+  }).sort(function (p, q) { return String(isoDate_(p.Date)).localeCompare(String(isoDate_(q.Date))); });
+
+  var links = readAll_(SHEETS.expenseFiles), files = readAll_(SHEETS.attachments);
+  var docsOf = function (expenseId) {
+    return links.filter(function (l) { return String(l.ExpenseID) === String(expenseId); })
+      .map(function (l) {
+        var f = files.filter(function (x) { return String(x.AttachmentID) === String(l.AttachmentID); })[0];
+        return { name: f ? (trim_(f.Description) || trim_(f.FileName)) : 'missing file', role: trim_(l.Role) };
+      });
+  };
+
+  var reportDate = isoDate_(a.ReportDate) || isoDate_(a.ActualEnd) || isoDate_(a.EndDate)
+    || new Date().toISOString().slice(0, 10);
+  var who = trim_(a.RequestedBy) || CONFIG.DEFAULT_SIGNATORY;
+  var sig = tripSignature_(who);
+
+  var html = tripReportHtml_(a, lines, docsOf, reportDate, who, sig);
+  var name = tripReportName_(a, reportDate);
+  var blob = Utilities.newBlob(html, 'text/html', name).getAs('application/pdf').setName(name);
+
+  // The file is dated by the report, not by the afternoon it happened to be generated.
+  var stamp = pdfStamp_(reportDate, '12:00');
+  var norm = pdfNormalise_(blob, stamp, stamp, {
+    Title: 'Business trip report ' + trim_(a.Reference),
+    Author: who, Subject: 'Business trip report — ' + trim_(a.Destinations),
+    Producer: PDF_META.producer, Creator: PDF_META.producer
+  });
+  var file = attachmentsFolder_().createFile(norm.ok ? norm.blob : blob);
+
+  var prev = trim_(a.ReportPdfID);
+  if (prev && prev !== file.getId()) { try { DriveApp.getFileById(prev).setTrashed(true); } catch (e) {} }
+  updateRow_(SHEETS.activities, 'ActivityID', activityId, {
+    ReportPdfID: file.getId(), ReportPdfUrl: file.getUrl(), ReportPdfAt: new Date().toISOString(),
+    ReportPdfStatus: 'ready', ReportPdfError: norm.ok ? '' : String(norm.error || '').slice(0, 200)
+  });
+  return { ok: true, activityId: String(activityId), reference: trim_(a.Reference),
+           url: file.getUrl(), fileId: file.getId(), name: name, normalised: !!norm.ok };
+}
+
+function tripReportName_(a, reportDate) {
+  var where = trim_(a.Destinations).replace(/[\/\\:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return ('Trip report ' + reportDate + (where ? ' ' + where : '') + ' ' + trim_(a.Reference)).trim() + '.pdf';
+}
+
+// Only the director signs: the expenses are his and nobody countersigns them.
+function tripSignature_(name) {
+  var rows = readAll_(SHEETS.signatures);
+  var want = trim_(name).toLowerCase();
+  var hit = rows.filter(function (r) { return trim_(r.OwnerName).toLowerCase() === want; });
+  if (!hit.length) hit = rows.filter(function (r) { return normEmail_(r.OwnerEmail) === normEmail_(CONFIG.ADMIN_EMAIL); });
+  return hit.length ? signatureDataUri_(hit[hit.length - 1]) : '';
+}
+
+function tripReportNotify_(done) {
+  var to = trim_(CONFIG.ADMIN_EMAIL);
+  if (!to) return;
+  var body = done.map(function (r) { return '• ' + r.reference + ' — ' + r.url; }).join('\n');
+  try {
+    MailApp.sendEmail(to, 'FXWorks: ' + done.length + ' trip report(s) ready',
+      done.length + ' report(s) have been built:\n\n' + body
+      + '\n\nThey are also linked from the trip list in FXWorks:\n' + CONFIG.ADMIN_BASE_URL + '\n');
+  } catch (e) {}
+}
+
+function tripReportHtml_(a, lines, docsOf, reportDate, who, sig) {
+  var esc = function (x) {
+    return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  };
+  var money = function (n) {
+    n = round2_(num_(n));
+    var s = Math.abs(n).toFixed(2).split('.');
+    return (n < 0 ? '-' : '') + s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + s[1];
+  };
+  var day = function (v) { var s = isoDate_(v); return s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(2, 4) : ''; };
+  var span = function (f, t) {
+    var x = day(f), y = day(t);
+    return x && y && x !== y ? x + ' – ' + y : (x || y || '');
+  };
+  var para = function (text) {
+    return String(text || '').split(/\n+/).map(function (p) { return trim_(p); })
+      .filter(function (p) { return !!p; })
+      .map(function (p) { return '<p style="margin:0 0 6px">' + esc(p) + '</p>'; }).join('') || '&mdash;';
+  };
+
+  var byCur = {}, usd = 0, usdGaps = 0;
+  lines.forEach(function (x) {
+    var c = trim_(x.Currency) || '—';
+    byCur[c] = round2_((byCur[c] || 0) + num_(x.Amount));
+    if (trim_(x.AmountUSD) === '') usdGaps++; else usd = round2_(usd + num_(x.AmountUSD));
+  });
+  var totals = Object.keys(byCur).sort().map(function (c) { return c + ' ' + money(byCur[c]); }).join(' · ');
+
+  var rows = lines.map(function (x, i) {
+    var docs = docsOf(x.ExpenseID);
+    return '<tr>'
+      + '<td class="c">' + (i + 1) + '</td>'
+      + '<td class="c">' + esc(day(x.Date)) + '</td>'
+      + '<td class="c">' + esc(span(x.ServiceFrom, x.ServiceTo) || '&mdash;') + '</td>'
+      + '<td>' + esc(trim_(x.Category)) + '</td>'
+      + '<td>' + esc(trim_(x.Supplier)) + '</td>'
+      + '<td class="r">' + esc(trim_(x.Currency)) + ' ' + money(x.Amount) + '</td>'
+      + '<td class="r">' + (trim_(x.AmountUSD) === '' ? '&mdash;' : money(x.AmountUSD)) + '</td>'
+      + '<td>' + (docs.length
+          ? docs.map(function (d) { return esc(d.name) + (d.role ? ' (' + esc(d.role) + ')' : ''); }).join('<br>')
+          : '<span style="color:#b00">no document</span>') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  var head = ''
+    + '<tr><td class="label">Reference:</td><td>' + esc(trim_(a.Reference)) + '</td></tr>'
+    + '<tr><td class="label">Destinations:</td><td>' + esc(trim_(a.Destinations)) + '</td></tr>'
+    + '<tr><td class="label">Planned:</td><td>' + esc(span(a.StartDate, a.EndDate) || '&mdash;') + '</td></tr>'
+    + '<tr><td class="label">Actually travelled:</td><td>' + esc(span(a.ActualStart, a.ActualEnd) || '&mdash;') + '</td></tr>'
+    + (trim_(a.Counterparty) ? '<tr><td class="label">Counterparty:</td><td>' + esc(trim_(a.Counterparty)) + '</td></tr>' : '')
+    + (trim_(a.EstimatedCost) !== '' ? '<tr><td class="label">Budget:</td><td>'
+        + esc(trim_(a.Currency)) + ' ' + money(a.EstimatedCost) + '</td></tr>' : '');
+
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Business Trip Report</title>'
+    + '<style>'
+    + '@page{ margin:18mm 14mm; }*{box-sizing:border-box}'
+    + "body{font-family:'Times New Roman',Georgia,serif;color:#111;font-size:11pt;margin:0;padding:0}"
+    + '.lh{display:flex;justify-content:space-between;font-size:9pt;color:#444;border-bottom:1px solid #999;'
+    + 'padding-bottom:6px;margin-bottom:20px;letter-spacing:.4px;text-transform:uppercase;'
+    + 'font-family:Arial,Helvetica,sans-serif}'
+    + 'h1{text-align:center;font-size:15pt;margin:0 0 16px}'
+    + 'h2{font-size:11.5pt;margin:18px 0 6px;border-bottom:1px solid #ccc;padding-bottom:3px}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:6px}'
+    + 'td,th{border:1px solid #999;padding:5px 7px;vertical-align:top}'
+    + 'td.label{width:34%;font-weight:bold;background:#f2f2f2}'
+    + 'th{background:#f2f2f2;font-size:9.5pt;text-align:left}'
+    + 'td.c{text-align:center;white-space:nowrap}td.r{text-align:right;white-space:nowrap}'
+    + '.ex td,.ex th{font-size:9.5pt}'
+    + '.tot{font-weight:bold;background:#f7f7f7}'
+    + '.note{font-size:10pt;margin:10px 0 0}'
+    + '.srow{width:60%;margin-top:26px;font-size:10.5pt;border-collapse:separate;page-break-inside:avoid}'
+    + '.sch{font-weight:bold;margin:0 0 10px}'
+    + '.scv{border-bottom:1px solid #333;min-height:20px;padding:0 4px 2px}'
+    + '.scl{font-size:8.5pt;color:#555;margin:2px 0 10px;font-family:Arial,Helvetica,sans-serif}'
+    + '.ink{height:0;overflow:visible}.ink img{height:78px}'
+    + '.foot{margin-top:22px;text-align:center;font-size:9pt;color:#555;letter-spacing:1px;'
+    + 'font-family:Arial,Helvetica,sans-serif}'
+    + '</style></head><body>'
+    + '<div class="lh"><span>' + esc(CONFIG.COMPANY_NAME) + '</span><span>Report date: '
+    + esc(day(reportDate)) + '</span></div>'
+    + '<h1>Business Trip Report</h1>'
+    + '<table>' + head + '</table>'
+    + '<h2>Purpose</h2>' + para(a.Purpose)
+    + '<h2>What was done</h2>' + para(a.Activities)
+    + (trim_(a.Meetings) ? '<h2>Who was met</h2>' + para(a.Meetings) : '')
+    + (trim_(a.ReportNotes) ? '<h2>Notes</h2>' + para(a.ReportNotes) : '')
+    + '<h2>Expenses</h2>'
+    + (lines.length
+        ? '<table class="ex"><tr><th>#</th><th>Date</th><th>Service period</th><th>Category</th>'
+          + '<th>Supplier</th><th>Amount</th><th>USD</th><th>Supporting documents</th></tr>'
+          + rows
+          + '<tr class="tot"><td colspan="5">Total</td><td class="r">' + esc(totals) + '</td>'
+          + '<td class="r">' + (usdGaps ? '≈ ' : '') + money(usd) + '</td><td></td></tr>'
+          + '</table>'
+        : '<p>&mdash;</p>')
+    + (truthy_(a.NoPersonal)
+        ? '<p class="note">Only business expenses are claimed on this trip.</p>' : '')
+    + '<p class="note">Amounts in USD are converted at the rate of each expense date.</p>'
+    + '<table class="srow"><tr><td>'
+    + '<div class="sch">Reported and claimed by</div>'
+    + '<div class="scv">' + esc(who) + '</div><div class="scl">Name</div>'
+    + '<div class="scv">Director</div><div class="scl">Title</div>'
+    + '<div class="scv">' + esc(day(reportDate)) + '</div><div class="scl">Date</div>'
+    + '<div class="scv">&nbsp;</div><div class="scl">Signature</div>'
+    + (sig ? '<div class="ink"><img src="' + sig + '" alt="" style="margin:-92px 0 0 14px"></div>' : '')
+    + '</td></tr></table>'
+    + '<div class="foot">' + esc(CONFIG.COMPANY_NAME) + '</div>'
+    + '</body></html>';
 }

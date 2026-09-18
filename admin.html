@@ -606,6 +606,8 @@
   <div style="height:12px"></div>
   <div class="acts">
     <button id="svcSaveBtn" class="btn sm" onclick="trvServiceSave(this)">Save</button>
+    <button id="svcAgainBtn" class="btn ghost sm hidden" onclick="trvServiceQueue(TRV_SVC&&TRV_SVC.actId,true,this)">
+      Read again</button>
     <button class="btn ghost sm" onclick="closeModal('svcModal')">Cancel</button>
   </div>
 </div></div>
@@ -1199,7 +1201,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.226';
+const BUILD = '2026-08-08.229';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -6050,6 +6052,76 @@ function trvTotals(lines){
 }
 
 // ── The list ─────────────────────────────────────────────────────────────────
+// The report button carries its state rather than a caption: nothing built yet, building
+// now, built, or failed with the reason in the tooltip.
+function trvReportBtn(a, rep){
+  const id = String(a.ActivityID);
+  if(rep==='queued' || rep==='working'){
+    return `<button class="btn ghost sm" disabled title="the report is being built — `
+      + `you can close the page, it carries on">⏳</button>`;
+  }
+  if(rep==='failed'){
+    return `<button class="btn ghost sm" style="color:#B4472E" onclick="trvReportMake('${id}',this)" `
+      + `title="last attempt failed: ${esc(a.ReportPdfError||'unknown')} — press to try again">⚠︎</button>`;
+  }
+  if(rep==='ready'){
+    return `<button class="btn ghost sm" onclick="trvReportMake('${id}',this)" `
+      + `title="built ${esc(String(a.ReportPdfAt||'').slice(0,10))} — press to rebuild and replace">📄</button>`;
+  }
+  return `<button class="btn ghost sm" onclick="trvReportMake('${id}',this)" `
+    + `title="build the trip report">📄</button>`;
+}
+
+// Queued, not awaited: the work is done by a trigger, so the page can be closed and the note
+// arrives by mail. While anything is queued the list keeps an eye on it.
+async function trvReportMake(actId, btn){
+  const a = trvAct(actId);
+  if(a && String(a.ReportPdfStatus||'')==='ready'
+     && !confirm('Rebuild the report for ' + (a.Reference||'this trip') + '?\n'
+                 + 'The current file is replaced and moved to Trash.')) return;
+  const done = busy(btn);
+  try{
+    const r = await api('trip_report_queue',{ activityId: actId });
+    if(!r.ok) throw new Error(r.error||'Could not start it');
+    const i = TRAVEL.activities.findIndex(x=>String(x.ActivityID)===String(actId));
+    if(i>=0) TRAVEL.activities[i] = r.activity;
+    trvSay('ok','The report is being built. You can close the page — a note comes by mail when it is ready.');
+    travelRender();
+    trvReportWatch();
+  }catch(e){ trvSay('err',esc(e.message)); }
+  finally{ done(); }
+}
+
+// A quiet poll while something is building, and only then: the tab should not talk to the
+// server all day because a report was made this morning.
+let TRV_WATCH = null;
+function trvReportWatch(){
+  const busyNow = TRAVEL.activities.some(a=>{
+    const r = String(a.ReportPdfStatus||''), s = String(a.SvcScanStatus||'');
+    return r==='queued' || r==='working' || s==='queued' || s==='working';
+  });
+  if(!busyNow){ if(TRV_WATCH){ clearInterval(TRV_WATCH); TRV_WATCH = null; } return; }
+  if(TRV_WATCH) return;
+  TRV_WATCH = setInterval(async ()=>{
+    if($('view-travel').classList.contains('hidden')) return;
+    try{
+      const r = await api('list_travel');
+      if(!r.ok) return;
+      const was = TRV_SVC ? String((trvAct(TRV_SVC.actId)||{}).SvcScanStatus||'') : '';
+      TRAVEL = { activities:r.activities||[], expenses:r.expenses||[], links:r.links||[],
+                 files:r.files||[], inbox:r.inbox||[] };
+      travelRender();
+      trvReportWatch();
+      // The window was left open on a trip that has just finished reading: show the result
+      // rather than a stale "still reading".
+      if(TRV_SVC && !$('svcModal').classList.contains('hidden')){
+        const now = String((trvAct(TRV_SVC.actId)||{}).SvcScanStatus||'');
+        if(now !== was && (now==='ready' || now==='failed')) trvServiceOpen(TRV_SVC.actId);
+      }
+    }catch(e){}
+  }, 20000);
+}
+
 function travelRender(){
   const t = $('trvTable'); if(!t) return;
   const acts = TRAVEL.activities.slice().sort((a,b)=>
@@ -6074,8 +6146,13 @@ function travelRender(){
       const missing = lines.filter(x=>!trvLinksFor(x.ExpenseID).length).length;
       const waiting = trvInboxFor(id).length;
       const done = String(a.Status||'')==='Reported';
-      h += `<tr><td style="white-space:nowrap"><b title="${esc(a.Reference||'')}">`
-         + `${esc(trvRoute(a.Destinations)||a.Reference||'—')}</b>`
+      const rep = String(a.ReportPdfStatus||'');
+      const label = esc(trvRoute(a.Destinations)||a.Reference||'—');
+      h += `<tr><td style="white-space:nowrap">`
+         + (rep==='ready' && a.ReportPdfUrl
+             ? `<a href="${esc(a.ReportPdfUrl)}" target="_blank" rel="noopener" `
+               + `title="open the report · ${esc(a.Reference||'')}"><b>${label}</b></a>`
+             : `<b title="${esc(a.Reference||'')}">${label}</b>`)
          + (String(a.Type||'trip')!=='trip'?` <span class="muted" style="font-size:12px">${esc(a.Type)}</span>`:'')
          + (waiting?` <span style="color:#B4651A;font-size:12px" title="${waiting} document(s) waiting to be placed">`
                   + `●${waiting}</span>`:'')
@@ -6087,13 +6164,15 @@ function travelRender(){
          + (missing?` / <span style="color:#B4472E" title="${missing} line(s) with no document">${missing}</span>`:'')
          + `</td>`
          + `<td class="num" title="${esc(trvTotals(lines))}">${trvUsd(lines)}</td>`
-         + `<td class="num" style="white-space:nowrap">`
-         + `<button class="btn ghost sm" onclick="trvOpen('${id}')">Open</button> `
-         + `<button class="btn ghost sm" onclick="delActivity('${id}')" title="delete">×</button></td></tr>`;
+         + `<td class="num" style="white-space:nowrap"><span class="acts">`
+         + trvReportBtn(a, rep)
+         + `<button class="btn ghost sm" onclick="trvOpen('${id}')">Open</button>`
+         + `<button class="btn ghost sm" onclick="delActivity('${id}')" title="delete">×</button></span></td></tr>`;
     });
     t.innerHTML = h + '</tbody>';
   }
   trvInboxRender();
+  trvReportWatch();
   if(TRV_OPEN) trvRenderDetail();
 }
 
@@ -6166,8 +6245,7 @@ function trvDetail(a, lines, files){
      + `<div class="acts"><span class="muted" style="font-size:13px">${trvTotals(lines)} · ${trvUsd(lines)}</span>`
      + `<button class="btn sm" onclick="trvExpOpen('${id}','')">+ Add expense</button>`
      + `<button class="btn ghost sm" onclick="trvDocsOpen('activity','${id}')">Documents (${files.length})</button>`
-     + `<button class="btn ghost sm" onclick="trvServiceApply('${id}',this)" `
-     + `title="read the attached documents and fill in when each service was delivered">Service dates</button>`
+     + trvSvcBtn(a)
      + `</div></div>`;
   h += `<div class="scroll"><table class="trvtight" style="table-layout:auto;margin-top:6px"><thead><tr><th>Date</th>`
      + (hasService?`<th>Service</th>`:'')
@@ -6989,37 +7067,90 @@ async function tmpDelete(attachmentId){
   }catch(e){ notice('tmpErr','err',esc(e.message)); }
 }
 
-// ── Service dates: shown first, written on request ───────────────────────────
-// The documents are read once. What comes back is displayed, and the same figures are what
-// get saved — reading them again on save would be another half-minute for an answer already
-// given.
+// ── Service dates: read in the background, decided later ─────────────────────
+// Reading fourteen documents takes longer than anyone wants to watch, so the press queues
+// the trip and the work happens without the page. What was found waits on the trip until it
+// is looked at and either saved or thrown away.
 let TRV_SVC = null;
 
-async function trvServiceApply(actId, btn){
-  // The window opens first and empty. It used to open only once the reading came back, so a
-  // slow answer looked like a dead button and an error landed in a panel hidden behind the
-  // trip window — on screen, nothing at all happened.
+function trvSvcBtn(a){
+  const id = String(a.ActivityID), st = String(a.SvcScanStatus||'');
+  if(st==='queued' || st==='working'){
+    return `<button class="btn ghost sm" onclick="trvServiceOpen('${id}',this)" `
+      + `title="the documents are being read — you can close this window">⏳ Service dates</button>`;
+  }
+  if(st==='ready'){
+    return `<button class="btn sm" onclick="trvServiceOpen('${id}',this)" `
+      + `title="the documents have been read — see what they give">Service dates ✓</button>`;
+  }
+  if(st==='failed'){
+    return `<button class="btn ghost sm" style="color:#B4472E" onclick="trvServiceOpen('${id}',this)" `
+      + `title="the last attempt failed: ${esc(a.SvcScanError||'unknown')}">Service dates ⚠︎</button>`;
+  }
+  return `<button class="btn ghost sm" onclick="trvServiceQueue('${id}',true,this)" `
+    + `title="read the attached documents and work out when each service was delivered">Service dates</button>`;
+}
+
+async function trvServiceQueue(actId, fresh, btn){
+  if(!actId) return;
+  const done = busy(btn);
+  try{
+    const r = await api('svc_scan_queue',{ activityId: actId, fresh: !!fresh });
+    if(!r.ok) throw new Error(r.error||'Could not start it');
+    const i = TRAVEL.activities.findIndex(x=>String(x.ActivityID)===String(actId));
+    if(i>=0) TRAVEL.activities[i] = r.activity;
+    if(!$('svcModal').classList.contains('hidden')) trvServiceOpen(actId);
+    else trvSay('ok','Reading the documents in the background. You can close this window — '
+      + 'a note comes by mail when there is something to look at.');
+    travelRender();
+    trvReportWatch();
+  }catch(e){ trvSay('err',esc(e.message)); }
+  finally{ done(); }
+}
+
+async function trvServiceOpen(actId, btn){
   const a = trvAct(actId);
   TRV_SVC = null;
   $('svcTitle').textContent = 'Service dates · ' + ((a && (a.Destinations||a.Reference)) || '');
-  $('svcSummary').innerHTML = 'Reading the documents on this trip — this can take half a minute…';
+  $('svcSummary').innerHTML = 'Fetching what was read…';
   $('svcBody').innerHTML = '<div class="muted" style="padding:12px 0"><span class="spin dark"></span></div>';
   $('svcSaveBtn').classList.add('hidden');
   $('svcSaveBtn').disabled = false;
   $('svcSaveBtn').innerHTML = 'Save';
+  $('svcAgainBtn').classList.add('hidden');
   notice('svcErr','','');
   $('svcModal').classList.remove('hidden');
 
   const done = busy(btn);
   try{
-    const r = await api('exp_service_scan',{ activityId: actId });
-    if(!r.ok) throw new Error(r.error||'Could not read them');
-    TRV_SVC = { actId: String(actId), lines: r.lines||[], read: r.read, skipped: r.skipped };
-    trvSvcRender(r);
+    const r = await api('svc_scan_get',{ activityId: actId });
+    if(!r.ok) throw new Error(r.error||'Could not fetch it');
+    TRV_SVC = { actId: String(actId), lines: r.lines||[], read: r.read, skipped: 0, status: r.status };
+    $('svcAgainBtn').classList.remove('hidden');
+    if(r.status==='queued' || r.status==='working'){
+      $('svcSummary').innerHTML = 'Still reading — ' + (r.lines.length
+        ? `${r.lines.length} line(s) done so far. `
+        : '') + 'You can close this window; it carries on without it.';
+      $('svcBody').innerHTML = r.lines.length ? trvSvcTable(r.lines) : '';
+      return;
+    }
+    if(r.status==='failed'){
+      $('svcSummary').innerHTML = '';
+      $('svcBody').innerHTML = r.lines.length ? trvSvcTable(r.lines) : '';
+      notice('svcErr','err','The last attempt failed: ' + esc(r.error||'unknown') + '. Press Read again to retry.');
+      return;
+    }
+    if(!r.lines.length){
+      $('svcSummary').innerHTML = '';
+      $('svcBody').innerHTML = '<div class="muted" style="font-size:13px">'
+        + 'Nothing has been read yet. Press Read again to start.</div>';
+      return;
+    }
+    trvSvcRender({ read: r.read, skipped: 0 });
   }catch(e){
     $('svcSummary').innerHTML = '';
     $('svcBody').innerHTML = '';
-    notice('svcErr','err','Could not read the documents: ' + esc(e.message));
+    notice('svcErr','err','Could not fetch what was read: ' + esc(e.message));
   }
   finally{ done(); }
 }
