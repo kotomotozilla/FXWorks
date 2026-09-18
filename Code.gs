@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.235';
+const BUILD = '2026-08-08.236';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -279,6 +279,7 @@ function route_(action, d) {
     case 'exp_service_scan':   return expServiceScan_(d);
     case 'svc_scan_queue':     return svcScanQueue_(d);
     case 'svc_scan_get':       return svcScanGet_(d);
+    case 'svc_scan_clear':     return svcScanClear_(d);
     case 'exp_service_save':   return expServiceSave_(d);
     case 'trip_report_queue':  return tripReportQueue_(d);
     case 'attach_move':        return attachMove_(d);
@@ -7048,6 +7049,18 @@ function svcScanNotify_(a, lines) {
       + 'open the trip in FXWorks, press Service dates, and save or discard what it found.\n\n'
       + CONFIG.ADMIN_BASE_URL + '\n');
   } catch (e) {}
+}
+
+// Clearing is not undoing: nothing was written, so this only drops the reading itself. The
+// documents and everything already saved on the lines stay exactly as they are.
+function svcScanClear_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var id = trim_(d.activityId);
+  if (!findRow_(SHEETS.activities, 'ActivityID', id)) return { ok: false, error: 'Activity not found' };
+  updateRow_(SHEETS.activities, 'ActivityID', id,
+             { SvcScanStatus: '', SvcScanResult: '', SvcScanError: '', SvcScanAt: '' });
+  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id) };
 }
 
 function svcScanGet_(d) {

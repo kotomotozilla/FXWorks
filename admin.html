@@ -605,9 +605,10 @@
   <div id="svcBody"></div>
   <div style="height:12px"></div>
   <div class="acts">
-    <button id="svcSaveBtn" class="btn sm" onclick="trvServiceSave(this)">Save</button>
-    <button id="svcAgainBtn" class="btn ghost sm hidden" onclick="trvServiceQueue(TRV_SVC_ACT,true,this)">
-      Read again</button>
+    <button id="svcSaveBtn" class="btn sm hidden" onclick="trvServiceSave(this)">Save</button>
+    <button id="svcScanBtn" class="btn sm" onclick="trvServiceQueue(TRV_SVC_ACT,true,this)">
+      Scan service dates</button>
+    <button id="svcClearBtn" class="btn ghost sm hidden" onclick="trvServiceClear(this)">Clear list</button>
     <button class="btn ghost sm" onclick="closeModal('svcModal')">Cancel</button>
   </div>
 </div></div>
@@ -1201,7 +1202,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.235';
+const BUILD = '2026-08-08.236';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -7117,22 +7118,35 @@ async function tmpDelete(attachmentId){
 // is looked at and either saved or thrown away.
 let TRV_SVC = null, TRV_SVC_ACT = '';
 
+// One button, one meaning: it opens the window. What happens next is decided there, where
+// the buttons say what they do and the result is in front of you.
 function trvSvcBtn(a){
   const id = String(a.ActivityID), st = String(a.SvcScanStatus||'');
-  if(st==='queued' || st==='working'){
-    return `<button class="btn ghost sm" onclick="trvServiceOpen('${id}',this)" `
-      + `title="the documents are being read — you can close this window">⏳ Service dates</button>`;
-  }
-  if(st==='ready'){
-    return `<button class="btn sm" onclick="trvServiceOpen('${id}',this)" `
-      + `title="the documents have been read — see what they give">Service dates ✓</button>`;
-  }
-  if(st==='failed'){
-    return `<button class="btn ghost sm" style="color:#B4472E" onclick="trvServiceOpen('${id}',this)" `
-      + `title="the last attempt failed: ${esc(a.SvcScanError||'unknown')}">Service dates ⚠︎</button>`;
-  }
-  return `<button class="btn ghost sm" onclick="trvServiceQueue('${id}',true,this)" `
-    + `title="read the attached documents and work out when each service was delivered">Service dates</button>`;
+  const mark = st==='queued'||st==='working' ? ' ⏳'
+             : st==='ready' ? ' ✓'
+             : st==='failed' ? ' ⚠︎' : '';
+  const tip = st==='queued'||st==='working' ? 'the documents are being read'
+            : st==='ready' ? 'the documents have been read — see what they give'
+            : st==='failed' ? 'the last attempt failed: ' + (a.SvcScanError||'unknown')
+            : 'work out when each service was delivered, from the documents';
+  return `<button class="btn ${st==='ready'?'':'ghost '}sm" onclick="trvServiceOpen('${id}',this)" `
+    + `style="${st==='failed'?'color:#B4472E':''}" title="${esc(tip)}">Service dates${mark}</button>`;
+}
+
+async function trvServiceClear(btn){
+  if(!TRV_SVC_ACT) return;
+  if(!confirm('Throw away what was read?\nNothing has been written to the expense lines, so only '
+    + 'the reading itself goes.')) return;
+  const done = busy(btn);
+  try{
+    const r = await api('svc_scan_clear',{ activityId: TRV_SVC_ACT });
+    if(!r.ok) throw new Error(r.error||'Could not clear it');
+    const i = TRAVEL.activities.findIndex(x=>String(x.ActivityID)===String(TRV_SVC_ACT));
+    if(i>=0) TRAVEL.activities[i] = r.activity;
+    travelRender();
+    trvServiceOpen(TRV_SVC_ACT);
+  }catch(e){ notice('svcErr','err',esc(e.message)); }
+  finally{ done(); }
 }
 
 async function trvServiceQueue(actId, fresh, btn){
@@ -7143,9 +7157,14 @@ async function trvServiceQueue(actId, fresh, btn){
     if(!r.ok) throw new Error(r.error||'Could not start it');
     const i = TRAVEL.activities.findIndex(x=>String(x.ActivityID)===String(actId));
     if(i>=0) TRAVEL.activities[i] = r.activity;
-    if(!$('svcModal').classList.contains('hidden')) trvServiceOpen(actId);
-    else trvSay('ok','Reading the documents in the background. You can close this window — '
-      + 'a note comes by mail when there is something to look at.');
+    if(!$('svcModal').classList.contains('hidden')){
+      notice('svcErr','ok','Reading in the background — this window can be closed. '
+        + 'A note comes by mail when there is something to look at.');
+      trvServiceOpen(actId);
+    } else {
+      trvSay('ok','Reading the documents in the background. You can close this window — '
+        + 'a note comes by mail when there is something to look at.');
+    }
     travelRender();
     trvReportWatch();
   }catch(e){ trvSay('err',esc(e.message)); }
@@ -7162,7 +7181,8 @@ async function trvServiceOpen(actId, btn){
   $('svcSaveBtn').classList.add('hidden');
   $('svcSaveBtn').disabled = false;
   $('svcSaveBtn').innerHTML = 'Save';
-  $('svcAgainBtn').classList.add('hidden');
+  $('svcScanBtn').classList.add('hidden');
+  $('svcClearBtn').classList.add('hidden');
   notice('svcErr','','');
   $('svcModal').classList.remove('hidden');
 
@@ -7173,8 +7193,13 @@ async function trvServiceOpen(actId, btn){
     const lines = Array.isArray(r.lines) ? r.lines : [];
     const status = String(r.status||'');
     TRV_SVC = { actId: String(actId), lines: lines, read: r.read||0, skipped: 0, status: status };
-    $('svcAgainBtn').classList.remove('hidden');
-    if(status==='queued' || status==='working'){
+    // Scanning is offered whenever nothing is running; clearing only when there is something
+    // to clear. A reading in progress is left alone rather than restarted by a stray press.
+    const running = status==='queued' || status==='working';
+    $('svcScanBtn').classList.toggle('hidden', running);
+    $('svcScanBtn').textContent = lines.length ? 'Scan again' : 'Scan service dates';
+    $('svcClearBtn').classList.toggle('hidden', !lines.length && status!=='failed');
+    if(running){
       $('svcSummary').innerHTML = 'Still reading — ' + (lines.length ? `${lines.length} line(s) done so far. ` : '')
         + 'You can close this window; it carries on without it.';
       $('svcBody').innerHTML = lines.length ? trvSvcTable(lines) : '';
@@ -7183,13 +7208,16 @@ async function trvServiceOpen(actId, btn){
     if(status==='failed'){
       $('svcSummary').innerHTML = '';
       $('svcBody').innerHTML = lines.length ? trvSvcTable(lines) : '';
-      notice('svcErr','err','The last attempt failed: ' + esc(r.error||'unknown') + '. Press Read again to retry.');
+      notice('svcErr','err','The last attempt failed: ' + esc(r.error||'unknown')
+        + '. Press Scan again to retry.');
       return;
     }
     if(!lines.length){
       $('svcSummary').innerHTML = '';
       $('svcBody').innerHTML = '<div class="muted" style="font-size:13px">'
-        + 'Nothing has been read yet. Press Read again to start.</div>';
+        + 'Nothing has been read yet. <b>Scan service dates</b> reads the documents attached to this '
+        + 'trip\'s expense lines and works out when each service was delivered. It runs in the '
+        + 'background — this window can be closed.</div>';
       return;
     }
     trvSvcRender({ read: r.read||0, skipped: 0 });
