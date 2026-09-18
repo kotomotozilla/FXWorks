@@ -1201,7 +1201,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.232';
+const BUILD = '2026-08-08.235';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5951,6 +5951,14 @@ let TRV_DOCS = null, TRV_FILE_EDIT = '', TRV_DIRTY = false;
 // what was suggested for it — and must survive the redraw that picking causes.
 let TRV_INBOX_PICK = {};
 const TRV_ROLES = ['ticket','boarding','invoice','receipt','statement','replaced','other'];
+const TRV_USE = [{v:'both',t:'dates: both'},{v:'from',t:'dates: start only'},
+                 {v:'to',t:'dates: end only'},{v:'none',t:'dates: none'}];
+function trvUse(l){
+  const v = String(l.Use||'').toLowerCase();
+  if(['both','from','to','none'].includes(v)) return v;
+  return (String(l.Role||'')==='replaced' || String(l.IgnoreDates||'').toLowerCase()==='yes')
+    ? 'none' : 'both';
+}
 const TRV_CURRENCIES = ['USD','EUR','AED','GBP','HKD','THB','SGD','CHF','CZK','HUF','KZT'];
 const TRV_CATEGORIES = ['Airfare / transport','Accommodation','Local transport / transfer',
                         'Visa / insurance','Meals','Other'];
@@ -6452,17 +6460,20 @@ function trvDocsRender(){
     h += ls.length ? `<div class="trvfiles" style="margin-top:8px">` + ls.map(l=>{
         const f = trvFile(l.AttachmentID);
         const nm = f ? fname(f) : 'missing file';
-        const off = String(l.IgnoreDates||'').toLowerCase()==='yes';
+        const use = trvUse(l);
         return `<div class="f">${trvFileLabel(f, nm)}`
           + `<select onchange="trvRole('${esc(l.LinkID)}',this.value)" `
           + `style="width:auto;padding:4px 8px;font-size:13px">`
           + TRV_ROLES.map(r=>`<option value="${r}" ${String(l.Role||'other')===r?'selected':''}>${r}</option>`).join('')
           + `</select>`
-          + `<label style="display:flex;gap:5px;align-items:center;font-size:12px;color:#5A6472;`
-          + `flex:0 0 auto;margin:0" title="keep the document, but leave its dates out when the `
-          + `service period is worked out — a reissued ticket, for instance">`
-          + `<input type="checkbox" ${off?'checked':''} `
-          + `onchange="trvIgnoreDates('${esc(l.LinkID)}',this.checked)"> not for dates</label>`
+          + `<select onchange="trvSetUse('${esc(l.LinkID)}',this.value)" `
+          + `style="width:auto;padding:4px 8px;font-size:13px" `
+          + `title="which end of the service period this document may set — a reissue that moved `
+          + `only the return leg sets the end, while the original still sets the start">`
+          + TRV_USE.map(u=>`<option value="${u.v}" ${use===u.v?'selected':''}>${esc(u.t)}</option>`).join('')
+          + `</select>`
+          + (l.UseWhy && String(l.UseWhy)!=='set by hand'
+              ? `<span class="muted" style="font-size:12px;flex:0 0 auto" title="${esc(l.UseWhy)}">· why</span>` : '')
           + (f&&f.Url?`<a href="${esc(f.Url)}" target="_blank" rel="noopener">open</a>`:'')
           + `<button class="btn ghost sm" onclick="trvUnlink('${esc(l.LinkID)}')" title="detach">×</button></div>`;
       }).join('') + `</div>`
@@ -6635,10 +6646,10 @@ async function trvRole(linkId, role){
 }
 
 // A ticket that was reissued, a folio superseded by a corrected one: still evidence, still in
-// the report, but no longer part of working out when the service happened.
-async function trvIgnoreDates(linkId, off){
+// the report, and free to set one end of the period, both, or neither.
+async function trvSetUse(linkId, use){
   try{
-    const r = await api('expense_file_role',{ linkId, ignoreDates: !!off });
+    const r = await api('expense_file_role',{ linkId, use });
     if(!r.ok) throw new Error(r.error||'Could not change that');
     const l = TRAVEL.links.find(y=>String(y.LinkID)===String(linkId));
     if(l && r.link) Object.assign(l, r.link);
@@ -7202,15 +7213,20 @@ function trvSvcRender(r){
   const lines = TRV_SVC.lines;
   const willChange = lines.filter(trvSvcChanges);
   const overwrite = willChange.filter(x=>x.nowFrom);
+  const waiting = lines.filter(x=>x.pending).length;
   $('svcSummary').innerHTML = `${r.read} document(s) read`
     + (r.skipped?`, <b>${r.skipped}</b> left unread — run it again for the rest`:'')
-    + `. <b>${willChange.length}</b> line(s) will change, ${lines.length - willChange.length} left as they are`
+    + `. <b>${willChange.length}</b> line(s) will change, ${lines.length - willChange.length - waiting} left as they are`
+    + (waiting?`, <b style="color:#B4651A">${waiting}</b> still waiting on a document and left alone`:'')
     + (overwrite.length?`, of which <b style="color:#B4651A">${overwrite.length}</b> already had a period`:'') + `.`;
   $('svcSaveBtn').classList.toggle('hidden', !willChange.length);
   $('svcBody').innerHTML = trvSvcTable(lines);
 }
 
+// A line still waiting on a document has no proposal to accept: what it would show now is
+// the part that happens to have been read, which is not the answer.
 function trvSvcChanges(x){
+  if(x.pending) return false;
   return !!x.proposedFrom && !(x.proposedFrom === x.nowFrom && x.proposedTo === x.nowTo);
 }
 
@@ -7221,6 +7237,16 @@ function trvSvcTable(lines){
     + lines.map(x=>{
         const now = trvRange(x.nowFrom, x.nowTo), next = trvRange(x.proposedFrom, x.proposedTo);
         const changes = trvSvcChanges(x);
+        if(x.pending) return `<tr><td style="white-space:nowrap">${esc(trvDay(x.date))} · `
+          + `${trvCatIcon(x.category)} ${esc(x.supplier||'')}<div class="muted" style="font-size:12px">`
+          + `${esc(trvAmt(x.currency, x.amount))}</div></td>`
+          + `<td class="muted" style="white-space:nowrap">${esc(now)||'—'}</td>`
+          + `<td style="color:#B4651A;white-space:nowrap">waiting</td>`
+          + `<td>` + x.docs.map(d=>`<div style="font-size:13px">`
+              + (d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.name)}</a>`:esc(d.name))
+              + (d.note?` <span style="color:#B4472E">${esc(d.note)}</span>`
+                       :(d.dates&&d.dates.length?` — ${esc(d.dates.join(', '))}`:''))
+              + `</div>`).join('') + `</td></tr>`;
         return `<tr><td style="white-space:nowrap">${esc(trvDay(x.date))} · ${trvCatIcon(x.category)} `
           + `${esc(x.supplier||'')}<div class="muted" style="font-size:12px">`
           + `${esc(trvAmt(x.currency, x.amount))}</div></td>`
@@ -7232,8 +7258,10 @@ function trvSvcTable(lines){
               + (d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.name)}</a>`:esc(d.name))
               + (d.docType?` <span class="muted">· ${esc(d.docType)}</span>`:'')
               + (d.dates && d.dates.length?` — ${esc(d.dates.join(', '))}`:'')
-              + (d.ignored?` <span style="color:#B4651A" title="marked as not counting towards the period">`
-                           + `· not counted</span>`:'')
+              + (d.use==='none'?` <span style="color:#B4651A" title="set to count towards neither end">`
+                                + `· not counted</span>`:'')
+              + (d.use==='from'?` <span class="muted" title="sets the start of the period only">· start only</span>`:'')
+              + (d.use==='to'?` <span class="muted" title="sets the end of the period only">· end only</span>`:'')
               + (d.yearAdded?` <span class="muted" title="the document printed no year; taken from the line">`
                              + `· year added</span>`:'')
               + (d.what?` <span class="muted">(${esc(d.what)})</span>`:'')

@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.232';
+const BUILD = '2026-08-08.235';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -80,7 +80,12 @@ const HEADERS = {
                 'CeilingApproved', 'CeilingApprovedBy', 'CeilingApprovedAt', 'OrgID', 'OrgID'],
   invoices:    ['InvoiceID', 'Number', 'ContractID', 'CounterpartyID', 'InvoiceDate', 'DueDate',
                 'Amount', 'Currency', 'AmountUSD', 'FxRate', 'FxAsOf', 'CreatedAt', 'OrgID'],
-  attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate', 'IsCurrent', 'DriveFileID', 'Url', 'CreatedAt', 'OrgID'],
+  // Read*: what the model made of this file when it was last read. Kept so that a second
+  // document can be compared with the first without reading both again — that is how a
+  // reissued ticket is recognised as the same booking.
+  attachments: ['AttachmentID', 'ParentType', 'ParentID', 'FileName', 'Description', 'DocType', 'DocDate',
+                'IsCurrent', 'DriveFileID', 'Url', 'ReadType', 'ReadRef', 'ReadDates', 'ReadAt',
+                'CreatedAt', 'OrgID'],
   projects:    ['ProjectID', 'Name', 'Customer', 'CounterpartyID', 'Description', 'ContractID', 'CreatedAt', 'UpdatedAt', 'OrgID'],
   assignments: ['AssignmentID', 'ProjectID', 'ProjectName', 'Customer', 'ProjectDescription', 'EmployeeEmail', 'EmployeeName',
                 'Title', 'Currency', 'Rate', 'Comment', 'LastNotifiedComment', 'Status', 'ReportedHours', 'ReportedAmount',
@@ -118,9 +123,11 @@ const HEADERS = {
                 'Source', 'CreatedAt', 'OrgID'],
   // Which file proves which line. Kept apart from the attachment's own parent: one folio
   // covers several lines, and a line can be proved by more than one document.
-  // IgnoreDates: the document stays in the file and in the report — it explains why the
-  // dates moved — but a ticket that has been reissued must not go on setting the period.
-  expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'Role', 'IgnoreDates', 'CreatedAt', 'OrgID'],
+  // Use: which end of the service period this document is allowed to set. A reissue often
+  // replaces the return leg only — the original still gives the outbound — so "both, start
+  // only, end only, neither" is the choice, not "counts or does not".
+  expenseFiles:['LinkID', 'ExpenseID', 'AttachmentID', 'Role', 'Use', 'UseWhy', 'IgnoreDates',
+                'CreatedAt', 'OrgID'],
   // A document that has been read but not yet placed. It arrives by upload or by mail, and
   // the reading has to outlive the page that was open at the time — or a document that came
   // in overnight would have to be read again in the morning.
@@ -6226,6 +6233,16 @@ function paidBy_(v) { v = trim_(v).toLowerCase(); return EXPENSE_PAID_BY.indexOf
 var EXPENSE_FILE_ROLES = ['ticket', 'boarding', 'invoice', 'receipt', 'statement', 'replaced', 'other'];
 function fileRole_(v) { v = trim_(v).toLowerCase(); return EXPENSE_FILE_ROLES.indexOf(v) >= 0 ? v : 'other'; }
 
+// both — the document sets either end of the period; from — only its start; to — only its
+// end; none — it sets neither, and is kept purely as evidence.
+var EXPENSE_FILE_USE = ['both', 'from', 'to', 'none'];
+function fileUse_(v, role, legacyIgnore) {
+  v = trim_(v).toLowerCase();
+  if (EXPENSE_FILE_USE.indexOf(v) >= 0) return v;
+  if (trim_(role).toLowerCase() === 'replaced' || truthy_(legacyIgnore)) return 'none';
+  return 'both';
+}
+
 // The sheet began life as "Trips" with a TripID column, and the expense and attachment rows
 // pointed at it with ParentType 'trip'. Renaming in place keeps every id valid — only the
 // words change — and the flag makes sure it happens once.
@@ -6622,19 +6639,95 @@ function linkExpenseFile_(d) {
   if (dup.length) {
     // Attaching the same file again is how the role gets corrected, not a second link.
     if (trim_(d.role)) {
-      var mark = (role === 'replaced' || truthy_(d.ignoreDates)) ? 'yes' : trim_(dup[0].IgnoreDates);
-      if (fileRole_(dup[0].Role) !== role || mark !== trim_(dup[0].IgnoreDates)) {
-        updateRow_(SHEETS.expenseFiles, 'LinkID', dup[0].LinkID, { Role: role, IgnoreDates: mark });
-        dup[0].Role = role; dup[0].IgnoreDates = mark;
+      var use = trim_(d.use) ? fileUse_(d.use, role, d.ignoreDates)
+        : (role === 'replaced' ? 'none' : fileUse_(dup[0].Use, dup[0].Role, dup[0].IgnoreDates));
+      if (fileRole_(dup[0].Role) !== role || use !== fileUse_(dup[0].Use, dup[0].Role, dup[0].IgnoreDates)) {
+        updateRow_(SHEETS.expenseFiles, 'LinkID', dup[0].LinkID,
+                   { Role: role, Use: use, IgnoreDates: use === 'none' ? 'yes' : '' });
+        dup[0].Role = role; dup[0].Use = use; dup[0].IgnoreDates = use === 'none' ? 'yes' : '';
       }
     }
     return { ok: true, link: dup[0] };
   }
+  // What the document turned out to be, when nobody said otherwise.
+  if (!trim_(d.role)) {
+    var known = findRow_(SHEETS.attachments, 'AttachmentID', attachmentId);
+    if (known && trim_(known.ReadType)) role = fileRole_(known.ReadType);
+  }
+  var use = fileUse_(d.use, role, d.ignoreDates), why = '';
+  if (!trim_(d.use)) {
+    var auto = expAutoUse_(expenseId, attachmentId);
+    if (auto) {
+      use = auto.use; why = auto.why;
+      if (auto.other) {
+        updateRow_(SHEETS.expenseFiles, 'LinkID', auto.other.linkId, {
+          Use: auto.other.use, UseWhy: auto.other.why,
+          IgnoreDates: auto.other.use === 'none' ? 'yes' : ''
+        });
+      }
+    }
+  }
   var row = { LinkID: Utilities.getUuid(), ExpenseID: expenseId, AttachmentID: attachmentId,
-              Role: role, IgnoreDates: (role === 'replaced' || truthy_(d.ignoreDates)) ? 'yes' : '',
+              Role: role, Use: use, UseWhy: why, IgnoreDates: use === 'none' ? 'yes' : '',
               CreatedAt: new Date().toISOString() };
   appendRow_(SHEETS.expenseFiles, row);
   return { ok: true, link: row };
+}
+
+// Two tickets under one booking reference are the same journey twice: the later document
+// is the one that happened. Which part it replaces follows from the dates — a reissue that
+// only moved the return leg still leaves the outbound to the original, and saying so is the
+// difference between a period that is right and one that merely looks tidy.
+function expAutoUse_(expenseId, attachmentId) {
+  var att = findRow_(SHEETS.attachments, 'AttachmentID', attachmentId);
+  if (!att) return null;
+  var ref = trim_(att.ReadRef).toUpperCase();
+  var mine = trim_(att.ReadDates).split(',').filter(function (x) { return !!trim_(x); }).sort();
+  if (!ref || !mine.length) return null;
+
+  var links = readAll_(SHEETS.expenseFiles).filter(function (l) {
+    return String(l.ExpenseID) === String(expenseId) && String(l.AttachmentID) !== String(attachmentId);
+  });
+  var files = readAll_(SHEETS.attachments);
+  var out = null;
+  links.forEach(function (l) {
+    if (out) return;
+    var other = files.filter(function (f) { return String(f.AttachmentID) === String(l.AttachmentID); })[0];
+    if (!other || trim_(other.ReadRef).toUpperCase() !== ref) return;
+    var theirs = trim_(other.ReadDates).split(',').filter(function (x) { return !!trim_(x); }).sort();
+    if (!theirs.length) return;
+    var mineFrom = mine[0], mineTo = mine[mine.length - 1];
+    var oldFrom = theirs[0], oldTo = theirs[theirs.length - 1];
+    if (mineFrom === oldFrom && mineTo === oldTo) {
+      // The same journey said twice — a duplicate, not a change.
+      out = { use: 'none', why: 'same booking ' + ref + ' and the same dates as ' + trim_(other.FileName),
+              other: { linkId: String(l.LinkID), use: 'both',
+                       why: 'the original for booking ' + ref } };
+      return;
+    }
+    if (mineFrom <= oldFrom && mineTo >= oldTo) {
+      out = { use: 'both', why: 'booking ' + ref + ' reissued — covers everything ' + trim_(other.FileName) + ' did',
+              other: { linkId: String(l.LinkID), use: 'none',
+                       why: 'replaced by a later document for booking ' + ref } };
+      return;
+    }
+    if (mineTo > oldTo) {
+      out = { use: 'to', why: 'booking ' + ref + ' reissued — the return leg moved',
+              other: { linkId: String(l.LinkID), use: 'from',
+                       why: 'still the outbound for booking ' + ref } };
+      return;
+    }
+    if (mineFrom < oldFrom) {
+      out = { use: 'from', why: 'booking ' + ref + ' reissued — the outbound moved',
+              other: { linkId: String(l.LinkID), use: 'to',
+                       why: 'still the return for booking ' + ref } };
+      return;
+    }
+    // Inside the other's dates: a leg of the same journey, not a replacement.
+    out = { use: 'none', why: 'one leg of booking ' + ref + ', already covered by ' + trim_(other.FileName),
+            other: null };
+  });
+  return out;
 }
 
 function setExpenseFileRole_(d) {
@@ -6647,12 +6740,15 @@ function setExpenseFileRole_(d) {
   if (trim_(d.role)) {
     upd.Role = fileRole_(d.role);
     // Calling it replaced is the ordinary way of saying "stop counting this one".
-    if (upd.Role === 'replaced') upd.IgnoreDates = 'yes';
+    if (upd.Role === 'replaced' && !trim_(d.use)) upd.Use = 'none';
   }
-  if (d.ignoreDates !== undefined) upd.IgnoreDates = truthy_(d.ignoreDates) ? 'yes' : '';
+  if (trim_(d.use)) { upd.Use = fileUse_(d.use, upd.Role || cur.Role, ''); upd.UseWhy = 'set by hand'; }
+  if (d.ignoreDates !== undefined && !trim_(d.use)) upd.Use = truthy_(d.ignoreDates) ? 'none' : 'both';
+  if (upd.Use !== undefined) upd.IgnoreDates = upd.Use === 'none' ? 'yes' : '';
   updateRow_(SHEETS.expenseFiles, 'LinkID', id, upd);
   var after = findRow_(SHEETS.expenseFiles, 'LinkID', id);
-  return { ok: true, linkId: id, role: trim_(after.Role), ignoreDates: trim_(after.IgnoreDates), link: after };
+  return { ok: true, linkId: id, role: trim_(after.Role),
+           use: fileUse_(after.Use, after.Role, after.IgnoreDates), link: after };
 }
 
 function unlinkExpenseFile_(d) {
@@ -6718,7 +6814,9 @@ function expRead_(d) {
   var att = got.att, o = got.json, call = { model: got.model };
 
   var iso = function (v) { v = trim_(v); return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : ''; };
+  var ref = trim_(o.bookingRef).toUpperCase().replace(/[^A-Z0-9]/g, '');
   var read = {
+    bookingRef: ref.length >= 5 && ref.length <= 20 ? ref : '',
     docType: fileRole_(o.docType),
     date: iso(o.date),
     amount: num_(o.amount),
@@ -6744,6 +6842,15 @@ function expRead_(d) {
   if (!read.serviceFrom && noYear.length) {
     read = expFillFromActivities_(read, noYear);
   }
+  // Kept on the file itself: the next document that turns up can then be compared with this
+  // one without reading it all over again.
+  try {
+    updateRow_(SHEETS.attachments, 'AttachmentID', String(att.AttachmentID), {
+      ReadType: read.docType, ReadRef: read.bookingRef, ReadAt: new Date().toISOString(),
+      ReadDates: [read.serviceFrom, read.serviceTo].filter(function (x) { return !!x; }).join(',')
+    });
+  } catch (e) {}
+
   var guess = expGuess_(read);
   if (!read.serviceFrom && noYear.length && guess.activityId) {
     var act = findRow_(SHEETS.activities, 'ActivityID', guess.activityId);
@@ -6969,7 +7076,7 @@ var SERVICE_SCAN_SECONDS = 40;
 
 var SERVICE_READ_PROMPT =
   'This document belongs to a business trip. Reply with ONE JSON object, nothing else:\n' +
-  '{"docType":"","dates":["YYYY-MM-DD"],"datesNoYear":["MM-DD"],"what":""}\n' +
+  '{"docType":"","dates":["YYYY-MM-DD"],"datesNoYear":["MM-DD"],"what":"","bookingRef":""}\n' +
   '- docType: one of ticket, boarding, invoice, receipt, statement, other\n' +
   '- dates: every date on which the service itself is delivered, in order, where the document\n' +
   '  shows the year. A hotel folio gives check-in and check-out; a boarding pass gives the day\n' +
@@ -6982,6 +7089,9 @@ var SERVICE_READ_PROMPT =
   '  the service happened on that day too. Both lists may be empty\n' +
   '- what: under 50 characters saying which dates these are, e.g. "check-in / check-out" or\n' +
   '  "DXB-AMS flight"\n' +
+  '- bookingRef: the booking reference the document is issued under — the PNR or record\n' +
+  '  locator on a ticket or boarding pass, the reservation number on a hotel confirmation.\n' +
+  '  Exactly as printed, "" when there is none\n' +
   'Take only what is printed. Never infer a date that is not on the document.';
 
 // "14SEP" on a boarding pass is a real date with a missing year, and the year is not a guess:
@@ -7026,7 +7136,7 @@ function expServiceScan_(d) {
   lines.forEach(function (x) {
     if (already[String(x.ExpenseID)]) return;
     var mine = links.filter(function (l) { return String(l.ExpenseID) === String(x.ExpenseID); });
-    var docs = [], dates = [];
+    var docs = [], starts = [], ends = [], pending = false;
     mine.forEach(function (l) {
       var f = files.filter(function (a) { return String(a.AttachmentID) === String(l.AttachmentID); })[0];
       if (!f) return;
@@ -7034,6 +7144,7 @@ function expServiceScan_(d) {
       // the next one.
       if (read >= SERVICE_SCAN_MAX || (Date.now() - started) > SERVICE_SCAN_SECONDS * 1000) {
         skipped++;
+        pending = true;
         docs.push({ name: trim_(f.FileName), url: trim_(f.Url), note: 'not read — limit reached' });
         return;
       }
@@ -7051,24 +7162,42 @@ function expServiceScan_(d) {
         var iso = yearFrom_(v, anchor);
         if (iso) { found.push(iso); guessed++; }
       });
-      // A reissued ticket still says what it says; it just no longer says when the trip
-      // happened. Read, shown, and left out of the arithmetic.
-      var counts = !truthy_(l.IgnoreDates);
-      if (counts) found.forEach(function (iso) { dates.push(iso); });
+      // A reissue that moved only the return leg still gives the outbound: the document says
+      // which end of the period it is allowed to set, and both tickets can be right at once.
+      // The reading is worth keeping whoever asked for it: this pass opens every document on
+      // the trip anyway, and a file that remembers its own type, booking and dates is one the
+      // next document can be compared against without being read again.
+      var ref = trim_(got.json.bookingRef).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      found.sort();
+      try {
+        updateRow_(SHEETS.attachments, 'AttachmentID', String(f.AttachmentID), {
+          ReadType: fileRole_(got.json.docType),
+          ReadRef: (ref.length >= 5 && ref.length <= 20) ? ref : '',
+          ReadDates: found.length ? (found[0] + (found.length > 1 ? ',' + found[found.length - 1] : '')) : '',
+          ReadAt: new Date().toISOString()
+        });
+      } catch (e) {}
+
+      var use = fileUse_(l.Use, l.Role, l.IgnoreDates);
+      if (found.length && (use === 'both' || use === 'from')) starts.push(found[0]);
+      if (found.length && (use === 'both' || use === 'to')) ends.push(found[found.length - 1]);
       docs.push({ name: trim_(f.FileName), url: trim_(f.Url), role: trim_(l.Role),
                   docType: trim_(got.json.docType), what: trim_(got.json.what).slice(0, 60),
-                  dates: found, yearAdded: guessed, ignored: !counts });
+                  dates: found, yearAdded: guessed, use: use, ignored: use === 'none' });
     });
     if (!mine.length) return;
-    dates.sort();
-    var from = dates.length ? dates[0] : '';
-    var to = dates.length > 1 ? dates[dates.length - 1] : '';
+    starts.sort(); ends.sort();
+    var from = starts.length ? starts[0] : (ends.length ? ends[0] : '');
+    var to = ends.length ? ends[ends.length - 1] : '';
     if (to === from) to = '';
+    // A line whose documents have not all been read has no answer yet, and half an answer is
+    // worse than none: it would be saved as if it were the whole of it.
+    if (pending) { from = ''; to = ''; }
     out.push({
       expenseId: String(x.ExpenseID), date: isoDate_(x.Date), category: trim_(x.Category),
       supplier: trim_(x.Supplier), amount: num_(x.Amount), currency: trim_(x.Currency),
       nowFrom: isoDate_(x.ServiceFrom), nowTo: isoDate_(x.ServiceTo),
-      proposedFrom: from, proposedTo: to, docs: docs
+      proposedFrom: from, proposedTo: to, pending: pending, docs: docs
     });
   });
   return { ok: true, reference: trim_(act.Reference), lines: out, read: read, skipped: skipped,
@@ -7162,7 +7291,7 @@ function expCategory_(v) {
 var EXPENSE_READ_PROMPT =
   'This is a document from a business trip. Reply with ONE JSON object, nothing else:\n' +
   '{"docType":"","date":"YYYY-MM-DD","amount":0,"currency":"","supplier":"","category":"",' +
-  '"serviceFrom":"","serviceTo":"","serviceNoYear":["MM-DD"],"description":""}\n' +
+  '"serviceFrom":"","serviceTo":"","serviceNoYear":["MM-DD"],"description":"","bookingRef":""}\n' +
   '- docType: one of ticket, boarding, invoice, receipt, statement, other. A boarding pass is\n' +
   '  "boarding" even when it shows a fare; an e-ticket or itinerary is "ticket"\n' +
   '- date: the date the money was charged — the invoice or receipt date. For a ticket, the date\n' +
@@ -7181,6 +7310,10 @@ var EXPENSE_READ_PROMPT =
   '  Never guess the year: that is what this field is for. Empty list when the year is shown\n' +
   '  or there is no service date\n' +
   '- description: under 60 characters, e.g. "DXB-AMS 21 Aug" or "3 nights, Hyatt Amsterdam"\n' +
+  '- bookingRef: the booking reference the document is issued under — the PNR or record\n' +
+  '  locator on a ticket or boarding pass, the reservation number on a hotel confirmation.\n' +
+  '  Exactly as printed, "" when there is none. Not the invoice number and not the ticket\n' +
+  '  number, unless that is the only reference the document carries\n' +
   'Take what the document says. Never infer a figure that is not printed on it.';
 
 // ── Documents that arrive on their own ───────────────────────────────────────
