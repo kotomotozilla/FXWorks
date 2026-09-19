@@ -1205,7 +1205,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.255';
+const BUILD = '2026-08-08.257';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 // A currency with no symbol of its own is written with its code. It used to fall back to a
@@ -6303,6 +6303,7 @@ function trvDetail(a, lines, files){
   // What the trip is made for. Here rather than in the request form: it governs the expenses
   // below it, and it is read and changed while looking at them.
   const split = trvActProj(a);
+  const odd = trvProjOddLines(id);
   h += `<div style="margin-top:14px;padding:12px;border:1px solid #DDE3EA;border-radius:10px">`
      + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`
      + `<b style="font-size:14px">Projects</b>`
@@ -6318,6 +6319,8 @@ function trvDetail(a, lines, files){
      + `expense line it has — clearing it takes them off`
      + (lines.length ? `. <b>${lines.filter(x=>trvProjOf(x.ExpenseID).length).length} of ${lines.length}</b> `
                        + `line(s) carry a project now` : '')
+     + (odd.length ? ` · <b style="color:#B4651A">${odd.length}</b> line(s) are split differently `
+                     + `and would be overwritten` : '')
      + `.</div></div>`;
 
   // The report, filled in as it goes
@@ -6450,11 +6453,15 @@ function trvProjShare(i, v){ if(TRV_EXP_PROJ[i]) TRV_EXP_PROJ[i].share = +v||0; 
 // screen to say it had happened.
 function trvProjChip(x){
   const rows = trvProjOf(x.ExpenseID);
-  if(!rows.length) return `<div class="muted" style="font-size:12px;color:#8A94A6">no project</div>`;
+  const act = trvAct(x.ParentType==='activity' ? x.ParentID : '');
+  const odd = act && !trvProjSame(rows, trvActProj(act));
+  const mark = odd ? ` <span style="color:#B4651A" title="different from the trip — saving the trip `
+                     + `will overwrite it">●</span>` : '';
+  if(!rows.length) return `<div class="muted" style="font-size:12px;color:#8A94A6">no project${mark}</div>`;
   if(rows.length === 1) return `<div class="muted" style="font-size:12px" `
-    + `title="${esc(trvProjFull(rows[0].projectId))}">${esc(trvProjName(rows[0].projectId)||'—')}</div>`;
+    + `title="${esc(trvProjFull(rows[0].projectId))}">${esc(trvProjName(rows[0].projectId)||'—')}${mark}</div>`;
   const detail = rows.map(p=>`${trvProjFull(p.projectId)} ${money(p.share)}%`).join(', ');
-  return `<div class="muted" style="font-size:12px" title="${esc(detail)}">${rows.length} projects</div>`;
+  return `<div class="muted" style="font-size:12px" title="${esc(detail)}">${rows.length} projects${mark}</div>`;
 }
 
 // What a trip is made for, as stored on it.
@@ -6474,6 +6481,18 @@ function trvActProj(a){
 function trvProjFull(id){
   const p=(PROJECTS||[]).find(x=>String(x.ProjectID)===String(id));
   return p ? trvProjLabel(p) : '—';
+}
+
+// Whether a line is split the way the trip is. Two lists of the same pairs in any order are
+// the same answer, so they are compared as sorted text rather than position by position.
+function trvProjSame(one, two){
+  const key = rows => (rows||[]).filter(p=>p.projectId)
+    .map(p=>`${p.projectId}:${Math.round((+p.share||0)*100)}`).sort().join('|');
+  return key(one) === key(two);
+}
+function trvProjOddLines(actId){
+  const split = trvActProj(trvAct(actId));
+  return trvLinesOf(actId).filter(x=>!trvProjSame(trvProjOf(x.ExpenseID), split));
 }
 
 function trvProjOf(expenseId){
@@ -6589,13 +6608,27 @@ async function saveReport(id, btn){
     // the projects land on the trip's expense lines in the same call.
     const lines = trvLinesOf(id);
     const split = (TRV_EXP_PROJ||[]).filter(p=>p.projectId);
-    if(lines.length && !split.length && trvActProj(trvAct(id)).length
-       && !confirm(`Take the projects off all ${lines.length} expense line(s) on this trip?\n`
-         + 'They will stop counting against any contract in Costs.')) return;
+    // A line somebody split by hand is about to be flattened. Say so, and let the report be
+    // saved on its own instead.
+    const odd = lines.filter(x=>!trvProjSame(trvProjOf(x.ExpenseID), split));
+    let withProjects = true;
+    if(odd.length){
+      const names = odd.slice(0,4).map(x=>`${trvDay(x.Date)} ${x.Supplier||''}`.trim()).join(', ');
+      withProjects = confirm(`${odd.length} expense line(s) are split differently from the trip`
+        + `${names?`:\n${names}${odd.length>4?', …':''}`:''}\n\n`
+        + `OK — set every line to the trip's projects.\n`
+        + `Cancel — save the report only and leave the lines as they are.`);
+    } else if(lines.length && !split.length && trvActProj(trvAct(id)).length){
+      if(!confirm(`Take the projects off all ${lines.length} expense line(s) on this trip?\n`
+        + 'They will stop counting against any contract in Costs.')) return;
+    }
     const r = await api('save_activity_report',{
       activityId:id, actualStart:g('astart'), actualEnd:g('aend'), reportDate:g('date'),
       requestedBy:g('by'), activities:g('act'), meetings:g('meet'),
-      reportNotes:g('notes'), noPersonal:g('nopers'), projects: TRV_EXP_PROJ
+      reportNotes:g('notes'), noPersonal:g('nopers'),
+      // Left out entirely when the person declined: saying nothing is what leaves the lines
+      // and the trip's own split untouched.
+      projects: withProjects ? TRV_EXP_PROJ : undefined
     });
     if(!r.ok) throw new Error(r.error||'Could not save');
     trvPutAct(r.activity);

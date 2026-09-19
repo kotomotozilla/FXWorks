@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.255';
+const BUILD = '2026-08-08.257';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -5358,12 +5358,13 @@ function costReport_(d) {
         if (paidBy_(x.PaidBy) === 'personal') row.personal = round2_(row.personal + toUsd_(x.Currency, amount, dt));
       };
       var blank = function (name) {
-        return { project: name, bucket: emptyBucket_(), count: 0, byCategory: {}, byActivity: {}, personal: 0 };
+        return { project: name, bucket: emptyBucket_(), count: 0, seen: {},
+                 byCategory: {}, byActivity: {}, personal: 0 };
       };
       if (!mine.length) {
         var o = directOff['none'] = directOff['none'] || blank('');
         addTo_(o.bucket, x.Currency, num_(x.Amount), dt);
-        o.count++;
+        if (!o.seen[String(x.ExpenseID)]) { o.seen[String(x.ExpenseID)] = 1; o.count++; }
         noteOn(o, num_(x.Amount));
         return;
       }
@@ -5375,14 +5376,16 @@ function costReport_(d) {
           var key = p.projectId || 'none';
           var off = directOff[key] = directOff[key] || blank(pr ? trim_(pr.Name) : '');
           addTo_(off.bucket, x.Currency, p.amount, dt);
-          off.count++;
+          if (!off.seen[String(x.ExpenseID)]) { off.seen[String(x.ExpenseID)] = 1; off.count++; }
           noteOn(off, p.amount);
           return;
         }
         var e = directByContract[contractId] = directByContract[contractId]
-          || { bucket: emptyBucket_(), count: 0, byProject: {} };
+          || { bucket: emptyBucket_(), count: 0, seen: {}, byProject: {} };
         addTo_(e.bucket, x.Currency, p.amount, dt);
-        e.count++;
+        // One expense, however many of its projects lead here. Counting the parts made a
+        // flight shared between two projects of the same contract look like two flights.
+        if (!e.seen[String(x.ExpenseID)]) { e.seen[String(x.ExpenseID)] = 1; e.count++; }
         var name = pr ? (trim_(pr.Name) || p.projectId) : p.projectId;
         e.byProject[name] = round2_((e.byProject[name] || 0) + toUsd_(x.Currency, p.amount, dt));
       });
