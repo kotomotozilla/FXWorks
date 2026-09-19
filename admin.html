@@ -1211,7 +1211,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.252';
+const BUILD = '2026-08-08.254';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 // A currency with no symbol of its own is written with its code. It used to fall back to a
@@ -6077,6 +6077,17 @@ function trvUsd(lines){
 }
 
 function trvProjName(id){ const p=(PROJECTS||[]).find(x=>String(x.ProjectID)===String(id)); return p?(p.Name||''):''; }
+
+// Every project reads the same way: name, then who it is for and under which contract. Adding
+// that only where a name happened to repeat made two entries in the same list look like two
+// different kinds of thing, and left the reader to work out why.
+function trvProjLabel(p){
+  const name = String(p.Name||'').trim() || '(unnamed)';
+  const who = String(p.Customer||'').trim() || cpName(p.CounterpartyID) || '';
+  const num = ctNumber(p.ContractID) || '';
+  const tail = [who, num || 'no contract'].filter(Boolean).join(' · ');
+  return tail ? `${name} — ${tail}` : name;
+}
 function trvAct(id){ return TRAVEL.activities.find(a=>a && String(a.ActivityID)===String(id)) || null; }
 
 // Putting a row back into the list where it came from. An answer that arrives without the row
@@ -6410,7 +6421,7 @@ function trvProjRender(){
   const taken = {}; TRV_EXP_PROJ.forEach(p=>taken[String(p.projectId)]=1);
   box.innerHTML = TRV_EXP_PROJ.length
     ? TRV_EXP_PROJ.map((p,i)=>`<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">`
-        + `<span style="flex:1 1 auto">${esc(trvProjName(p.projectId)||'—')}</span>`
+        + `<span style="flex:1 1 auto">${esc(trvProjFull(p.projectId))}</span>`
         + `<input type="number" step="0.01" min="0" value="${esc(p.share)}" `
         + `style="width:90px;padding:6px 8px;font-size:13px" onchange="trvProjShare(${i},this.value)"> %`
         + `<button class="btn ghost sm" onclick="trvProjDrop(${i})" title="remove">×</button></div>`).join('')
@@ -6423,7 +6434,7 @@ function trvProjRender(){
   const sel = $(TRV_PROJ_UI.sel);
   if(sel) sel.innerHTML = '<option value="">— pick a project —</option>'
     + trvProjList().filter(p=>!taken[String(p.ProjectID)])
-        .map(p=>`<option value="${esc(p.ProjectID)}">${esc(p.Name||'')}</option>`).join('');
+        .map(p=>`<option value="${esc(p.ProjectID)}">${esc(trvProjLabel(p))}</option>`).join('');
 }
 
 function trvProjSum(){
@@ -6459,8 +6470,9 @@ function trvProjShare(i, v){ if(TRV_EXP_PROJ[i]) TRV_EXP_PROJ[i].share = +v||0; 
 function trvProjChip(x){
   const rows = trvProjOf(x.ExpenseID);
   if(!rows.length) return `<div class="muted" style="font-size:12px;color:#8A94A6">no project</div>`;
-  if(rows.length === 1) return `<div class="muted" style="font-size:12px">${esc(trvProjName(rows[0].projectId)||'—')}</div>`;
-  const detail = rows.map(p=>`${trvProjName(p.projectId)||'—'} ${money(p.share)}%`).join(', ');
+  if(rows.length === 1) return `<div class="muted" style="font-size:12px" `
+    + `title="${esc(trvProjFull(rows[0].projectId))}">${esc(trvProjName(rows[0].projectId)||'—')}</div>`;
+  const detail = rows.map(p=>`${trvProjFull(p.projectId)} ${money(p.share)}%`).join(', ');
   return `<div class="muted" style="font-size:12px" title="${esc(detail)}">${rows.length} projects</div>`;
 }
 
@@ -6476,6 +6488,11 @@ function trvActProj(a){
     }catch(e){}
   }
   return a.ProjectID ? [{ projectId:String(a.ProjectID), share:100 }] : [];
+}
+
+function trvProjFull(id){
+  const p=(PROJECTS||[]).find(x=>String(x.ProjectID)===String(id));
+  return p ? trvProjLabel(p) : '—';
 }
 
 function trvProjOf(expenseId){
