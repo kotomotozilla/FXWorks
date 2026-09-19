@@ -587,10 +587,15 @@
       <option value="company">Company</option><option value="personal">Personally</option></select></div>
     <div style="flex:1;min-width:160px"><label>Who paid (if personally)</label><input id="ex_paidname"></div>
   </div>
-  <div class="row">
-    <div style="flex:1;min-width:180px"><label>Project</label><select id="ex_project"></select></div>
-    <div style="flex:2;min-width:220px"><label>Note</label><input id="ex_desc"></div>
+  <div><label>Projects</label>
+    <div id="ex_projects"></div>
+    <div class="row" style="align-items:flex-end;margin-top:6px">
+      <div style="flex:1;min-width:200px"><select id="ex_addproj"></select></div>
+      <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="trvProjAdd()">Add project</button></div>
+      <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="trvProjEven()">Split equally</button></div>
+    </div>
   </div>
+  <div><label>Note</label><input id="ex_desc"></div>
   <div style="height:12px"></div>
   <div class="acts">
     <button class="btn sm" onclick="trvExpSave(this)">Save</button>
@@ -1202,7 +1207,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.240';
+const BUILD = '2026-08-08.241';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -5949,7 +5954,7 @@ async function loadData(){
 // ── Activities and expenses ──────────────────────────────────────────────────
 // The list stays a list; one activity opens in a window of its own. Documents arrive in
 // their own queue, are read on the way in, and wait until somebody says where they belong.
-let TRAVEL = { activities:[], expenses:[], links:[], files:[], inbox:[] };
+let TRAVEL = { activities:[], expenses:[], links:[], files:[], inbox:[], expenseProjects:[] };
 let TRV_OPEN = '', TRV_EDIT_EXP = '', TRV_EDIT_ACT = '', TRV_EXP_ACT = '';
 let TRV_DOCS = null, TRV_FILE_EDIT = '', TRV_DIRTY = false;
 // What has been picked by hand for a waiting document, which is not the same thing as
@@ -6060,7 +6065,8 @@ async function travelLoad(btn){
     const r = await api('list_travel', {}, { timeoutMs: 60000 });
     if(!r.ok) throw new Error(r.error||'Could not load');
     TRAVEL = { activities:(r.activities||[]).filter(Boolean), expenses:r.expenses||[],
-               links:r.links||[], files:r.files||[], inbox:r.inbox||[] };
+               links:r.links||[], files:r.files||[], inbox:r.inbox||[],
+               expenseProjects:r.expenseProjects||[] };
     LOADED['travel'] = Date.now();
     notice('trvErr','','');
     travelRender();
@@ -6145,7 +6151,8 @@ function trvReportWatch(){
       if(!r.ok) return;
       const was = TRV_SVC ? String((trvAct(TRV_SVC.actId)||{}).SvcScanStatus||'') : '';
       TRAVEL = { activities:(r.activities||[]).filter(Boolean), expenses:r.expenses||[],
-                 links:r.links||[], files:r.files||[], inbox:r.inbox||[] };
+                 links:r.links||[], files:r.files||[], inbox:r.inbox||[],
+                 expenseProjects:r.expenseProjects||[] };
       travelRender();
       trvReportWatch();
       // The window was left open on a trip that has just finished reading: show the result
@@ -6294,7 +6301,7 @@ function trvDetail(a, lines, files){
        + (hasService?`<td class="muted" style="font-size:13px;white-space:nowrap">`
                      + `${esc(trvRange(x.ServiceFrom, x.ServiceTo))||'—'}</td>`:'')
        + `<td title="${esc(x.Category||'')}" style="font-size:17px">${trvCatIcon(x.Category)}</td>`
-       + `<td>${esc(x.Supplier||'')}</td>`
+       + `<td>${esc(x.Supplier||'')}${trvProjChip(x)}</td>`
        + `<td class="num" style="white-space:nowrap">${trvAmt(x.Currency, x.Amount)}</td>`
        + `<td class="num">${x.AmountUSD===''||x.AmountUSD==null?'—':'$'+money(x.AmountUSD)}</td>`
        + `<td>${esc(x.PaidBy||'company')==='personal'?'<b>personal</b>':'company'}</td>`
@@ -6314,6 +6321,70 @@ function trvDetail(a, lines, files){
 // ── One expense, in a form ───────────────────────────────────────────────────
 // Editing in the table itself looked compact and was miserable to use on a touch screen:
 // fields the width of a thumbnail, and a stray tap losing what was typed.
+// An expense is often made for more than one project — a flight to a city where two of them
+// are met. The shares start equal, which is the honest answer when nobody has a better one,
+// and are edited when somebody does.
+let TRV_EXP_PROJ = [];
+
+function trvProjList(){ return (PROJECTS||[]).slice().sort((a,b)=>String(a.Name||'').localeCompare(String(b.Name||''))); }
+
+function trvProjRender(){
+  const box = $('ex_projects'); if(!box) return;
+  const taken = {}; TRV_EXP_PROJ.forEach(p=>taken[String(p.projectId)]=1);
+  box.innerHTML = TRV_EXP_PROJ.length
+    ? TRV_EXP_PROJ.map((p,i)=>`<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">`
+        + `<span style="flex:1 1 auto">${esc(trvProjName(p.projectId)||'—')}</span>`
+        + `<input type="number" step="0.01" min="0" value="${esc(p.share)}" `
+        + `style="width:90px;padding:6px 8px;font-size:13px" onchange="trvProjShare(${i},this.value)"> %`
+        + `<button class="btn ghost sm" onclick="trvProjDrop(${i})" title="remove">×</button></div>`).join('')
+      + `<div class="muted" style="font-size:12px">${trvProjSum()}</div>`
+    : '<div class="muted" style="font-size:13px">Not tied to a project. The expense is recorded, '
+      + 'but it will not appear under any project in Costs.</div>';
+  const sel = $('ex_addproj');
+  if(sel) sel.innerHTML = '<option value="">— pick a project —</option>'
+    + trvProjList().filter(p=>!taken[String(p.ProjectID)])
+        .map(p=>`<option value="${esc(p.ProjectID)}">${esc(p.Name||'')}</option>`).join('');
+}
+
+function trvProjSum(){
+  const total = TRV_EXP_PROJ.reduce((n,p)=>n+(+p.share||0),0);
+  const off = Math.abs(total - 100) > 0.01;
+  return TRV_EXP_PROJ.length===1 ? 'One project — the whole expense.'
+    : (off ? `Shares add up to ${money(total)}% — they will be scaled to 100% on save.`
+           : 'Shares add up to 100%.');
+}
+
+function trvProjEven(){
+  if(!TRV_EXP_PROJ.length) return;
+  const even = Math.round(100/TRV_EXP_PROJ.length*100)/100;
+  TRV_EXP_PROJ.forEach((p,i)=>p.share = i<TRV_EXP_PROJ.length-1
+    ? even : Math.round((100-even*(TRV_EXP_PROJ.length-1))*100)/100);
+  trvProjRender();
+}
+function trvProjAdd(){
+  const sel = $('ex_addproj');
+  if(!sel || !sel.value) return;
+  TRV_EXP_PROJ.push({ projectId: sel.value, share: 0 });
+  trvProjEven();
+}
+function trvProjDrop(i){ TRV_EXP_PROJ.splice(i,1); trvProjEven(); trvProjRender(); }
+function trvProjShare(i, v){ if(TRV_EXP_PROJ[i]) TRV_EXP_PROJ[i].share = +v||0; trvProjRender(); }
+
+// What a line is split across, as stored.
+// Under the supplier, where the money goes. Silent when there is one project or none — the
+// ordinary case does not need decorating.
+function trvProjChip(x){
+  const rows = trvProjOf(x.ExpenseID);
+  if(rows.length < 2) return '';
+  const detail = rows.map(p=>`${trvProjName(p.projectId)||'—'} ${money(p.share)}%`).join(', ');
+  return `<div class="muted" style="font-size:12px" title="${esc(detail)}">${rows.length} projects</div>`;
+}
+
+function trvProjOf(expenseId){
+  return (TRAVEL.expenseProjects||[]).filter(r=>String(r.ExpenseID)===String(expenseId))
+    .map(r=>({ projectId:String(r.ProjectID), share:+r.Share||0 }));
+}
+
 function trvExpOpen(actId, expenseId){
   const x = expenseId ? TRAVEL.expenses.find(e=>String(e.ExpenseID)===String(expenseId)) : null;
   const a = trvAct(actId);
@@ -6330,7 +6401,9 @@ function trvExpOpen(actId, expenseId){
   $('ex_cur').innerHTML = trvCurOptions(x ? x.Currency : (a ? a.Currency : 'USD'));
   $('ex_paid').value = (x && String(x.PaidBy||'')==='personal') ? 'personal' : 'company';
   $('ex_paidname').value = x ? (x.PaidByName||'') : '';
-  $('ex_project').innerHTML = trvProjOptions(x ? x.ProjectID : (a ? a.ProjectID : ''));
+  TRV_EXP_PROJ = x ? trvProjOf(x.ExpenseID) : [];
+  if(!TRV_EXP_PROJ.length && !x && a && a.ProjectID) TRV_EXP_PROJ = [{ projectId:String(a.ProjectID), share:100 }];
+  trvProjRender();
   $('ex_desc').value = x ? (x.Description||'') : '';
   $('exModal').classList.remove('hidden');
 }
@@ -6345,11 +6418,14 @@ async function trvExpSave(btn){
       category:$('ex_cat').value, supplier:$('ex_sup').value,
       amount:$('ex_amt').value, currency:$('ex_cur').value,
       paidBy:$('ex_paid').value, paidByName:$('ex_paidname').value,
-      projectId:$('ex_project').value, description:$('ex_desc').value
+      projects: TRV_EXP_PROJ, description:$('ex_desc').value
     });
     if(!r.ok) throw new Error(r.error||'Could not save');
     const i = TRAVEL.expenses.findIndex(e=>String(e.ExpenseID)===String(r.expense.ExpenseID));
     if(i>=0) TRAVEL.expenses[i] = r.expense; else TRAVEL.expenses.push(r.expense);
+    TRAVEL.expenseProjects = (TRAVEL.expenseProjects||[])
+      .filter(p=>String(p.ExpenseID)!==String(r.expense.ExpenseID))
+      .concat((r.projects||[]).map(p=>({ ExpenseID:r.expense.ExpenseID, ProjectID:p.projectId, Share:p.share })));
     TRV_EDIT_EXP = '';
     $('exModal').classList.add('hidden');
     travelRender();

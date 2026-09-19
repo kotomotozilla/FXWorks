@@ -27,14 +27,14 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.240';
+const BUILD = '2026-08-08.241';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
                  queue: 'ParseQueue', queueText: 'ParseQueueText', queueFile: 'ParseQueueFile',
                  signatures: 'Signatures', invoiceQueue: 'InvoiceQueue', terms: 'ContractTerms2', payments: 'Payments', counterparties: 'Counterparties', requisites: 'Requisites', employees: 'Employees', contracts: 'Contracts', invoices: 'Invoices', attachments: 'Attachments', projects: 'Projects', assignments: 'Assignments', entries: 'Entries',
                  activities: 'Activities', expenses: 'Expenses', expenseFiles: 'ExpenseFiles',
-                 inbox: 'Inbox' };
+                 inbox: 'Inbox', expenseProjects: 'ExpenseProjects' };
 
 const HEADERS = {
   counterparties: ['CounterpartyID', 'Name', 'Type', 'Address', 'Email', 'Phone', 'Password', 'HasReportingAccess', 'Rate', 'Currency', 'RateContractID', 'CreatedAt', 'OrgID'],
@@ -131,6 +131,10 @@ const HEADERS = {
   // A document that has been read but not yet placed. It arrives by upload or by mail, and
   // the reading has to outlive the page that was open at the time — or a document that came
   // in overnight would have to be read again in the morning.
+  // One expense, several projects. A trip is often made for more than one of them, and the
+  // flight is not owned by whichever it was booked under. Share is a percentage; equal by
+  // default, because that is the honest answer when nobody has a better one.
+  expenseProjects: ['LinkID', 'ExpenseID', 'ProjectID', 'Share', 'CreatedAt', 'OrgID'],
   inbox:       ['InboxID', 'AttachmentID', 'Status', 'Source', 'MailId', 'MailFrom', 'MailSubject',
                 'MailDate', 'FileName', 'DocType', 'DocDate', 'Amount', 'Currency', 'Supplier',
                 'Category', 'ServiceFrom', 'ServiceTo', 'Description', 'SuggestActivityID',
@@ -6207,6 +6211,7 @@ function testFx() {
 
 function setup() {
   getSheet_(SHEETS.activities); getSheet_(SHEETS.expenses); getSheet_(SHEETS.expenseFiles); getSheet_(SHEETS.inbox);
+  getSheet_(SHEETS.expenseProjects);
   getSheet_(SHEETS.counterparties); getSheet_(SHEETS.requisites); getSheet_(SHEETS.documents); getSheet_(SHEETS.blocks); getSheet_(SHEETS.terms); getSheet_(SHEETS.payments); getSheet_(SHEETS.employees); getSheet_(SHEETS.contracts); getSheet_(SHEETS.invoices); getSheet_(SHEETS.attachments); getSheet_(SHEETS.projects); getSheet_(SHEETS.assignments); getSheet_(SHEETS.entries);
   ensureCounterparties_();
   SpreadsheetApp.getActive().toast('Sheets created.');
@@ -6453,7 +6458,8 @@ function travelList_(d) {
     return p === 'activity' || p === 'expense' || p === 'inbox';
   });
   return { ok: true, activities: readAll_(SHEETS.activities), expenses: readAll_(SHEETS.expenses),
-           links: readAll_(SHEETS.expenseFiles), files: files, inbox: readAll_(SHEETS.inbox) };
+           links: readAll_(SHEETS.expenseFiles), files: files, inbox: readAll_(SHEETS.inbox),
+           expenseProjects: readAll_(SHEETS.expenseProjects) };
 }
 
 // ── Raising an activity, then reporting on it ────────────────────────────────
@@ -6570,6 +6576,59 @@ function saveTripDestinations_(d) {
 }
 
 // ── Expense lines ────────────────────────────────────────────────────────────
+// ── An expense across projects ───────────────────────────────────────────────
+function expProjects_(expenseId) {
+  return readAll_(SHEETS.expenseProjects)
+    .filter(function (r) { return String(r.ExpenseID) === String(expenseId); })
+    .map(function (r) { return { linkId: String(r.LinkID), projectId: String(r.ProjectID),
+                                 share: num_(r.Share) }; });
+}
+
+// Shares are what the person typed; they are normalised so they add up to a hundred, because
+// a split that does not is a split that will not reconcile later.
+function expNormShares_(rows) {
+  var kept = (rows || []).filter(function (r) { return !!trim_(r.projectId); });
+  if (!kept.length) return [];
+  var total = 0;
+  kept.forEach(function (r) { r.share = num_(r.share); if (r.share > 0) total += r.share; });
+  if (total <= 0) {
+    var even = round2_(100 / kept.length);
+    kept.forEach(function (r) { r.share = even; });
+    kept[kept.length - 1].share = round2_(100 - even * (kept.length - 1));
+    return kept;
+  }
+  var running = 0;
+  kept.forEach(function (r, i) {
+    if (i < kept.length - 1) { r.share = round2_(r.share / total * 100); running += r.share; }
+    else r.share = round2_(100 - running);
+  });
+  return kept;
+}
+
+// Money split by share, to the cent. The last project takes the rounding difference so that
+// the parts add back up to the expense exactly — a penny adrift here becomes an hour of
+// looking later.
+function expSplit_(amount, shares) {
+  var total = round2_(num_(amount)), out = [], running = 0;
+  shares.forEach(function (s, i) {
+    var part = (i < shares.length - 1) ? round2_(total * num_(s.share) / 100) : round2_(total - running);
+    running = round2_(running + part);
+    out.push({ projectId: s.projectId, share: s.share, amount: part });
+  });
+  return out;
+}
+
+function expSaveProjects_(expenseId, rows) {
+  var shares = expNormShares_(rows);
+  deleteRowsWhere_(SHEETS.expenseProjects, 'ExpenseID', expenseId);
+  var now = new Date().toISOString();
+  shares.forEach(function (s) {
+    appendRow_(SHEETS.expenseProjects, { LinkID: Utilities.getUuid(), ExpenseID: expenseId,
+                                         ProjectID: s.projectId, Share: s.share, CreatedAt: now });
+  });
+  return shares;
+}
+
 function expenseParent_(t) { t = trim_(t).toLowerCase(); return (t === 'activity' || t === 'project') ? t : 'none'; }
 
 function saveExpense_(d) {
@@ -6589,13 +6648,22 @@ function saveExpense_(d) {
   USD_RATE_CACHE = {};
   var fx = computeFx_(currency, amount, date);
 
+  // Several projects, or one, or none. The single ProjectID column is kept in step with the
+  // list so that everything reading it keeps working: it holds the project when there is
+  // exactly one, and nothing when the expense is shared.
+  var wanted = Array.isArray(d.projects) ? d.projects.map(function (p) {
+    return { projectId: trim_(p && p.projectId), share: num_(p && p.share) };
+  }) : null;
   var projectId = trim_(d.projectId);
+  if (!wanted && projectId) wanted = [{ projectId: projectId, share: 100 }];
   // A line under an activity belongs to whatever that is for, unless it says otherwise.
-  if (!projectId && parentType === 'activity') {
+  if ((!wanted || !wanted.length) && parentType === 'activity') {
     var a = findRow_(SHEETS.activities, 'ActivityID', parentId);
-    if (a) projectId = trim_(a.ProjectID);
+    if (a && trim_(a.ProjectID)) wanted = [{ projectId: trim_(a.ProjectID), share: 100 }];
   }
-  if (parentType === 'project') projectId = parentId;
+  if (parentType === 'project') wanted = [{ projectId: parentId, share: 100 }];
+  var shares = expNormShares_(wanted || []);
+  projectId = shares.length === 1 ? shares[0].projectId : '';
 
   var f = {
     Date: date, ServiceFrom: from, ServiceTo: to,
@@ -6608,13 +6676,17 @@ function saveExpense_(d) {
   if (id) {
     if (!findRow_(SHEETS.expenses, 'ExpenseID', id)) return { ok: false, error: 'Expense not found' };
     updateRow_(SHEETS.expenses, 'ExpenseID', id, f);
-    return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', id) };
+    expSaveProjects_(id, shares);
+    return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', id),
+             projects: expProjects_(id) };
   }
   f.ExpenseID = Utilities.getUuid();
   f.Source = 'manual';
   f.CreatedAt = new Date().toISOString();
   appendRow_(SHEETS.expenses, f);
-  return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', f.ExpenseID) };
+  expSaveProjects_(f.ExpenseID, shares);
+  return { ok: true, expense: findRow_(SHEETS.expenses, 'ExpenseID', f.ExpenseID),
+           projects: expProjects_(f.ExpenseID) };
 }
 
 // The line goes; the files it pointed at stay, since the same document often proves another
@@ -6624,6 +6696,7 @@ function deleteExpense_(d) {
   var id = trim_(d.expenseId);
   if (!findRow_(SHEETS.expenses, 'ExpenseID', id)) return { ok: false, error: 'Expense not found' };
   deleteRowsWhere_(SHEETS.expenseFiles, 'ExpenseID', id);
+  deleteRowsWhere_(SHEETS.expenseProjects, 'ExpenseID', id);
   deleteRowsWhere_(SHEETS.expenses, 'ExpenseID', id);
   return { ok: true };
 }
