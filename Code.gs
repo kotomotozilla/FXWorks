@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.248';
+const BUILD = '2026-08-08.251';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -6639,7 +6639,19 @@ function saveActivityReport_(d) {
   // Reported is what the record shows, not what somebody remembered to tick.
   f.Status = (f.ReportDate || f.Activities || f.ActualEnd) ? 'Reported' : 'Requested';
   updateRow_(SHEETS.activities, 'ActivityID', id, f);
-  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id) };
+
+  // The projects the trip is made for are part of the trip, not a thing to be committed on
+  // their own. They arrive with everything else on the page and are written onto its expense
+  // lines in the same breath.
+  var applied = { updated: 0, expenses: [] }, split = null;
+  if (Array.isArray(d.projects)) {
+    var saved = activityProjectsSave_({ passcode: d.passcode, activityId: id, projects: d.projects });
+    if (!saved.ok) return saved;
+    split = saved.projects;
+    applied = { updated: saved.updated || 0, expenses: saved.expenses || [] };
+  }
+  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id),
+           projects: split, updated: applied.updated, expenses: applied.expenses };
 }
 
 function deleteActivity_(d) {
@@ -6768,7 +6780,11 @@ function activityProjectsSave_(d) {
     Projects: split.length ? JSON.stringify(split) : '',
     ProjectID: split.length === 1 ? split[0].projectId : ''
   });
-  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id), projects: split };
+  // Saving is applying. Two buttons for one intention only invited the trip and its lines to
+  // drift apart — and they did: a split cleared here went on counting down there.
+  var applied = activityProjectsApply_({ passcode: d.passcode, activityId: id });
+  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id), projects: split,
+           updated: applied.updated || 0, expenses: applied.expenses || [] };
 }
 
 function activityProjectsApply_(d) {
@@ -6818,19 +6834,20 @@ function saveExpense_(d) {
   // Several projects, or one, or none. The single ProjectID column is kept in step with the
   // list so that everything reading it keeps working: it holds the project when there is
   // exactly one, and nothing when the expense is shared.
-  var wanted = Array.isArray(d.projects) ? d.projects.map(function (p) {
+  // "No projects" and "nothing said about projects" are different answers. An empty list sent
+  // from the form means the person took them off, and it must stay off — inheriting the trip's
+  // split there made clearing a single line impossible, and silently so.
+  var told = Array.isArray(d.projects);
+  var wanted = told ? d.projects.map(function (p) {
     return { projectId: trim_(p && p.projectId), share: num_(p && p.share) };
   }) : null;
   var projectId = trim_(d.projectId);
-  if (!wanted && projectId) wanted = [{ projectId: projectId, share: 100 }];
+  if (!told && projectId) { wanted = [{ projectId: projectId, share: 100 }]; told = true; }
   // A line under an activity is made for whatever the trip is made for, unless it says
   // otherwise — including the split, which is the usual case and the tedious one to retype.
-  if ((!wanted || !wanted.length) && parentType === 'activity') {
+  if (!told && parentType === 'activity') {
     var act = findRow_(SHEETS.activities, 'ActivityID', parentId);
-    var inherited = actProjects_(act);
-    if (inherited.length) wanted = inherited.map(function (s) {
-      return { projectId: s.projectId, share: s.share };
-    });
+    wanted = actProjects_(act).map(function (s) { return { projectId: s.projectId, share: s.share }; });
   }
   if (parentType === 'project') wanted = [{ projectId: parentId, share: 100 }];
   var shares = expNormShares_(wanted || []);
