@@ -604,6 +604,14 @@
   </div>
 </div></div>
 
+<div id="costLinesModal" class="modal hidden"><div class="box wide">
+  <h2><span id="costLinesTitle">Expenses</span><button class="x" onclick="closeModal('costLinesModal')">×</button></h2>
+  <div id="costLinesSum" class="muted" style="font-size:13px;margin-bottom:8px"></div>
+  <div id="costLinesBody"></div>
+  <div style="height:12px"></div>
+  <div class="acts"><button class="btn ghost sm" onclick="closeModal('costLinesModal')">Close</button></div>
+</div></div>
+
 <div id="svcModal" class="modal top hidden"><div class="box wide">
   <h2><span id="svcTitle">Service dates</span><button class="x" onclick="closeModal('svcModal')">×</button></h2>
   <div id="svcErr"></div>
@@ -1205,7 +1213,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.257';
+const BUILD = '2026-08-08.259';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 // A currency with no symbol of its own is written with its code. It used to fall back to a
@@ -3722,6 +3730,61 @@ function invoicedCell(c, outgoing, framework, hourly){
   if(over.length)  out += `<span class="muted det" style="font-size:11px">${over.join(', ')} ${base.over}</span>`;
   return out;
 }
+// What is behind a Direct figure: the expenses themselves, grouped by the trip they were on,
+// each at the amount that reached this contract or project — not at what was paid, which for
+// a shared expense is a different and larger number.
+function costLines(kind, key){
+  const COST_REPORT = COST_DATA;
+  if(!COST_REPORT) return;
+  let lines = [], title = '';
+  if(kind==='contract'){
+    const c = (COST_REPORT.contracts||[]).find(x=>String(x.id)===String(key));
+    if(!c) return;
+    lines = c.directLines||[]; title = `Expenses · ${c.number||''}`;
+  }else{
+    const p = (COST_REPORT.offContract||[]).find(x=>String(x.project||'')===String(key));
+    if(!p) return;
+    lines = p.directLines||[]; title = `Expenses · ${p.project||'not tied to a project'}`;
+  }
+  $('costLinesTitle').textContent = title;
+
+  const byTrip = {};
+  lines.forEach(l=>{ const k = l.trip || '— not on a trip —'; (byTrip[k] = byTrip[k]||[]).push(l); });
+  const trips = Object.keys(byTrip).sort();
+  let total = 0, personal = 0;
+  lines.forEach(l=>{ total += (+l.usd||0); if(l.paidBy==='personal') personal += (+l.usd||0); });
+  $('costLinesSum').innerHTML = `${lines.length} expense(s) · $${money(Math.round(total*100)/100)}`
+    + (personal?` · <span style="color:var(--warn)">$${money(Math.round(personal*100)/100)} paid personally</span>`:'')
+    + `. Amounts are the part that reaches this ${kind==='contract'?'contract':'project'}.`;
+
+  $('costLinesBody').innerHTML = '<div class="scroll"><table class="nosort"><tbody>'
+    + trips.map(t=>{
+        const rows = byTrip[t].slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+        const sum = rows.reduce((n,l)=>n+(+l.usd||0),0);
+        return `<tr><td colspan="7" style="background:#EEF3F8;padding:8px"><b>${esc(t)}</b>`
+          + `<span class="muted"> · ${rows.length} expense(s) · $${money(Math.round(sum*100)/100)}</span></td></tr>`
+          + '<tr><th>Date</th><th>Service</th><th></th><th>Supplier</th>'
+          + '<th class="num" title="the part that reaches this contract or project">Here</th>'
+          + '<th class="num" title="what was paid for the expense in full">Full</th>'
+          + '<th class="num">USD here</th></tr>'
+          + rows.map(l=>`<tr><td style="white-space:nowrap">${esc(trvDay(l.date))}</td>`
+              + `<td class="muted" style="font-size:13px;white-space:nowrap">${esc(trvRange(l.from,l.to))||'—'}</td>`
+              + `<td title="${esc(l.category||'')}" style="font-size:16px">${trvCatIcon(l.category)}</td>`
+              + `<td>${esc(l.supplier||'')}`
+              + (l.paidBy==='personal'?` <span class="muted" style="color:var(--warn);font-size:11px">personal</span>`:'')
+              + (l.project?`<div class="muted" style="font-size:11px">${esc(l.project)}`
+                           + (l.share!==null && l.share<100?` · ${money(l.share)}%`:'') + `</div>`:'')
+              + `</td>`
+              + `<td class="num" style="white-space:nowrap">${trvAmt(l.currency, l.amount)}</td>`
+              + `<td class="num muted" style="white-space:nowrap">${trvAmt(l.currency, l.fullAmount)}`
+              + (l.fullUsd && Math.abs(l.fullUsd - l.usd) > 0.005
+                  ? `<div style="font-size:11px">$${money(l.fullUsd)}</div>` : '') + `</td>`
+              + `<td class="num">$${money(l.usd)}</td></tr>`).join('');
+      }).join('')
+    + '</tbody></table></div>';
+  $('costLinesModal').classList.remove('hidden');
+}
+
 function costGroup(rows, title, outgoing){
   const head = `<tr><td colspan="9" style="background:#EEF3F8;padding:10px 8px;font-size:14px"><b>${esc(title)}</b>`
       + `<span class="muted"> · ${rows.length} contract(s)</span></td></tr>`
@@ -3803,7 +3866,8 @@ function costGroup(rows, title, outgoing){
       <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}${bucketGap(c.jobCost)?' partial':''}</span>`:''}${gapNote(c.jobCost)}${people}
         ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
       <td class="num" title="${esc(c.directCount?bucketText(c.direct).replace(/<br>/g,', ').replace(/<[^>]+>/g,''):'')}">${c.directCount
-        ? `$${money(c.direct.usd)}<br><span class="muted" title="${esc((c.directBy||[]).map(p=>p.project+' $'+money(p.usd)).join(', '))}">${c.directCount} expense(s)${bucketGap(c.direct)?' · partial':''}</span>`
+        ? `<a href="#" onclick="costLines('contract','${esc(c.id)}');return false">$${money(c.direct.usd)}</a>`
+          + `<br><span class="muted" title="${esc((c.directBy||[]).map(p=>p.project+' $'+money(p.usd)).join(', '))}">${c.directCount} expense(s)${bucketGap(c.direct)?' · partial':''}</span>`
         : '<span class="muted">—</span>'}</td>
       <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}${bucketGap(c.ownCost)?' partial':''}</span>`:''}${gapNote(c.ownCost)}
         ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
@@ -3870,7 +3934,8 @@ function renderCosts(r){
           <td class="num">${bucketText(p.cost)}<br><span class="muted">${p.cost.usd?'$'+money(p.cost.usd):''}</span></td>
           <td class="num muted">${bucketText(p.pending)}</td>
           <td class="num" title="${esc([cats,trips].filter(Boolean).join(' · '))}">${p.directCount
-            ? `$${money(p.direct.usd)}<br><span class="muted">${p.directCount} expense(s)${bucketGap(p.direct)?' · partial':''}</span>`
+            ? `<a href="#" onclick="costLines('project','${esc(p.project||'')}');return false">$${money(p.direct.usd)}</a>`
+              + `<br><span class="muted">${p.directCount} expense(s)${bucketGap(p.direct)?' · partial':''}</span>`
             : '<span class="muted">—</span>'}</td></tr>`;
       }).join('')
       : `<tr><td class="empty" colspan="6">Nothing outside contracts in this period.${r.projectsNoContract?` There ${r.projectsNoContract===1?'is':'are'} ${r.projectsNoContract} project(s) with no contract, but nothing has been reported or spent against them.`:''}</td></tr>`)

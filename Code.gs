@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.257';
+const BUILD = '2026-08-08.259';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -5348,6 +5348,30 @@ function costReport_(d) {
         var single = trim_(x.ProjectID);
         mine = single ? [{ projectId: single, share: 100 }] : [];
       }
+      var actOf = function () {
+        return (trim_(x.ParentType) === 'activity')
+          ? findRow_(SHEETS.activities, 'ActivityID', trim_(x.ParentID)) : null;
+      };
+      // The figure is a total of particular things, and the question "which ones?" is the
+      // first one asked of it. They travel with it rather than needing another trip back.
+      var detailOf = function (amount, projectId) {
+        var act = actOf();
+        var pr3 = projectId ? projById[projectId] : null;
+        return { expenseId: String(x.ExpenseID), date: isoDate_(x.Date),
+                 from: isoDate_(x.ServiceFrom), to: isoDate_(x.ServiceTo),
+                 category: trim_(x.Category), supplier: trim_(x.Supplier),
+                 currency: trim_(x.Currency), amount: round2_(amount),
+                 usd: toUsd_(x.Currency, amount, dt),
+                 // What was actually paid, beside the part that reached here: without it a
+                 // shared expense reads as a smaller purchase than it was.
+                 fullAmount: round2_(num_(x.Amount)),
+                 fullUsd: toUsd_(x.Currency, num_(x.Amount), dt),
+                 paidBy: paidBy_(x.PaidBy),
+                 share: projectId ? null : 100,
+                 project: pr3 ? trim_(pr3.Name) : '',
+                 trip: act ? (trim_(act.Destinations) || trim_(act.Reference)) : '',
+                 tripId: act ? String(act.ActivityID) : '' };
+      };
       var noteOn = function (row, amount) {
         var cat = trim_(x.Category) || 'Other';
         row.byCategory[cat] = round2_((row.byCategory[cat] || 0) + toUsd_(x.Currency, amount, dt));
@@ -5358,7 +5382,7 @@ function costReport_(d) {
         if (paidBy_(x.PaidBy) === 'personal') row.personal = round2_(row.personal + toUsd_(x.Currency, amount, dt));
       };
       var blank = function (name) {
-        return { project: name, bucket: emptyBucket_(), count: 0, seen: {},
+        return { project: name, bucket: emptyBucket_(), count: 0, seen: {}, lines: [],
                  byCategory: {}, byActivity: {}, personal: 0 };
       };
       if (!mine.length) {
@@ -5366,6 +5390,7 @@ function costReport_(d) {
         addTo_(o.bucket, x.Currency, num_(x.Amount), dt);
         if (!o.seen[String(x.ExpenseID)]) { o.seen[String(x.ExpenseID)] = 1; o.count++; }
         noteOn(o, num_(x.Amount));
+        if (o.lines.length < 300) o.lines.push(detailOf(num_(x.Amount), ''));
         return;
       }
       var parts = expSplit_(num_(x.Amount), expNormShares_(mine));
@@ -5378,11 +5403,17 @@ function costReport_(d) {
           addTo_(off.bucket, x.Currency, p.amount, dt);
           if (!off.seen[String(x.ExpenseID)]) { off.seen[String(x.ExpenseID)] = 1; off.count++; }
           noteOn(off, p.amount);
+          if (off.lines.length < 300) {
+            var d1 = detailOf(p.amount, p.projectId); d1.share = p.share; off.lines.push(d1);
+          }
           return;
         }
         var e = directByContract[contractId] = directByContract[contractId]
-          || { bucket: emptyBucket_(), count: 0, seen: {}, byProject: {} };
+          || { bucket: emptyBucket_(), count: 0, seen: {}, byProject: {}, lines: [] };
         addTo_(e.bucket, x.Currency, p.amount, dt);
+        if (e.lines.length < 300) {
+          var d2 = detailOf(p.amount, p.projectId); d2.share = p.share; e.lines.push(d2);
+        }
         // One expense, however many of its projects lead here. Counting the parts made a
         // flight shared between two projects of the same contract look like two flights.
         if (!e.seen[String(x.ExpenseID)]) { e.seen[String(x.ExpenseID)] = 1; e.count++; }
@@ -5544,6 +5575,7 @@ function costReport_(d) {
       directBy: Object.keys((directByContract[id] || {}).byProject || {}).map(function (k) {
         return { project: k, usd: directByContract[id].byProject[k] };
       }).sort(function (a, b) { return b.usd - a.usd; }),
+      directLines: (directByContract[id] || {}).lines || [],
       invoiced: invoiced, invoiceCount: invoiceCount, invoiceDuplicates: invDuplicates,
       // what the counterparty of this contract has earned under it
       ownCost: perf.cost, ownPending: perf.pending, ownReports: perf.reports, ownPending_n: perf.reportsPending,
@@ -5589,6 +5621,7 @@ function costReport_(d) {
     row.direct = d.bucket;
     row.directCount = d.count;
     row.personal = round2_(d.personal);
+    row.directLines = d.lines || [];
     row.categories = Object.keys(d.byCategory).map(function (n) { return { name: n, usd: d.byCategory[n] }; })
       .sort(function (a, b) { return b.usd - a.usd; }).slice(0, 6);
     row.activities = Object.keys(d.byActivity).map(function (n) { return { name: n, usd: d.byActivity[n] }; })
