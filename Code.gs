@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.245';
+const BUILD = '2026-08-08.246';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -112,7 +112,10 @@ const HEADERS = {
   activities:  ['ActivityID', 'Type', 'Reference', 'Status', 'RequestedBy', 'Purpose', 'CounterpartyID',
                 'Counterparty', 'Destinations', 'ProjectID', 'StartDate', 'EndDate', 'ActualStart', 'ActualEnd',
                 'EstimatedCost', 'Currency', 'ReportDate', 'Activities', 'Meetings', 'Notes', 'ReportNotes',
-                'NoPersonal', 'ReportPdfID', 'ReportPdfUrl', 'ReportPdfAt', 'ReportPdfStatus',
+                // Projects: the split the trip is made for, as JSON. It is a default, not a
+                // record of cost — the cost is on the expense lines, where it can be argued
+                // with line by line. This is what new lines start from.
+                'NoPersonal', 'Projects', 'ReportPdfID', 'ReportPdfUrl', 'ReportPdfAt', 'ReportPdfStatus',
                 'ReportPdfError', 'ReportPdfQueuedAt', 'SvcScanStatus', 'SvcScanAt',
                 'SvcScanError', 'SvcScanResult', 'Source', 'CreatedAt', 'OrgID'],
   // ServiceFrom/ServiceTo: a hotel over a month end or a year of insurance paid at once
@@ -278,6 +281,7 @@ function route_(action, d) {
     case 'save_activity':      return saveActivity_(d);
     case 'save_activity_report': return saveActivityReport_(d);
     case 'delete_activity':    return deleteActivity_(d);
+    case 'activity_projects_apply': return activityProjectsApply_(d);
     case 'save_expense':       return saveExpense_(d);
     case 'exp_read':           return expRead_(d);
     case 'exp_service_scan':   return expServiceScan_(d);
@@ -6571,12 +6575,19 @@ function saveActivity_(d) {
   requireAdmin_(d);
   ensureActivities_();
   var id = trim_(d.activityId);
+  // What the trip is made for. New expense lines start from this, and it can be written onto
+  // the existing ones on request — never on its own, because a line may have been split
+  // differently on purpose.
+  var split = expNormShares_(Array.isArray(d.projects)
+    ? d.projects.map(function (p) { return { projectId: trim_(p && p.projectId), share: num_(p && p.share) }; })
+    : (trim_(d.projectId) ? [{ projectId: trim_(d.projectId), share: 100 }] : []));
   var f = {
     Type: activityType_(d.type),
     Purpose: trim_(d.purpose),
     Counterparty: trim_(d.counterparty),
     Destinations: trim_(d.destinations),
-    ProjectID: trim_(d.projectId),
+    Projects: split.length ? JSON.stringify(split) : '',
+    ProjectID: split.length === 1 ? split[0].projectId : '',
     StartDate: trim_(d.startDate), EndDate: trim_(d.endDate),
     EstimatedCost: (d.estimatedCost === '' || d.estimatedCost == null) ? '' : num_(d.estimatedCost),
     Currency: trim_(d.currency).toUpperCase(),
@@ -6713,6 +6724,53 @@ function expSaveProjects_(expenseId, rows) {
   return shares;
 }
 
+// The split a trip is made for. Stored as JSON on the activity because it is one small
+// thing that belongs to it, not a table anybody queries.
+function actProjects_(a) {
+  if (!a) return [];
+  var raw = trim_(a.Projects);
+  if (raw) {
+    try {
+      var parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return expNormShares_(parsed.map(function (p) {
+          return { projectId: trim_(p && p.projectId), share: num_(p && p.share) };
+        }));
+      }
+    } catch (e) {}
+  }
+  var one = trim_(a.ProjectID);
+  return one ? [{ projectId: one, share: 100 }] : [];
+}
+
+// Writing the trip's split onto every line it has. Asked for, never automatic: a line may
+// have been split differently on purpose, and quietly flattening that would be worse than
+// making somebody press a button.
+function activityProjectsApply_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var id = trim_(d.activityId);
+  var a = findRow_(SHEETS.activities, 'ActivityID', id);
+  if (!a) return { ok: false, error: 'Activity not found' };
+  var shares = actProjects_(a);
+  var done = 0, skipped = 0;
+  readAll_(SHEETS.expenses).forEach(function (x) {
+    if (trim_(x.ParentType) !== 'activity' || String(x.ParentID) !== String(id)) return;
+    var own = expProjects_(x.ExpenseID);
+    if (truthy_(d.onlyEmpty) && own.length) { skipped++; return; }
+    expSaveProjects_(String(x.ExpenseID), shares.map(function (s) {
+      return { projectId: s.projectId, share: s.share };
+    }));
+    updateRow_(SHEETS.expenses, 'ExpenseID', String(x.ExpenseID),
+               { ProjectID: shares.length === 1 ? shares[0].projectId : '' });
+    done++;
+  });
+  return { ok: true, updated: done, skipped: skipped, projects: shares,
+           expenses: readAll_(SHEETS.expenses).filter(function (x) {
+             return trim_(x.ParentType) === 'activity' && String(x.ParentID) === String(id);
+           }) };
+}
+
 function expenseParent_(t) { t = trim_(t).toLowerCase(); return (t === 'activity' || t === 'project') ? t : 'none'; }
 
 function saveExpense_(d) {
@@ -6740,10 +6798,14 @@ function saveExpense_(d) {
   }) : null;
   var projectId = trim_(d.projectId);
   if (!wanted && projectId) wanted = [{ projectId: projectId, share: 100 }];
-  // A line under an activity belongs to whatever that is for, unless it says otherwise.
+  // A line under an activity is made for whatever the trip is made for, unless it says
+  // otherwise — including the split, which is the usual case and the tedious one to retype.
   if ((!wanted || !wanted.length) && parentType === 'activity') {
-    var a = findRow_(SHEETS.activities, 'ActivityID', parentId);
-    if (a && trim_(a.ProjectID)) wanted = [{ projectId: trim_(a.ProjectID), share: 100 }];
+    var act = findRow_(SHEETS.activities, 'ActivityID', parentId);
+    var inherited = actProjects_(act);
+    if (inherited.length) wanted = inherited.map(function (s) {
+      return { projectId: s.projectId, share: s.share };
+    });
   }
   if (parentType === 'project') wanted = [{ projectId: parentId, share: 100 }];
   var shares = expNormShares_(wanted || []);
