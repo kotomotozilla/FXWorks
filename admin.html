@@ -1207,7 +1207,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.241';
+const BUILD = '2026-08-08.242';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3722,20 +3722,24 @@ function invoicedCell(c, outgoing, framework, hourly){
   return out;
 }
 function costGroup(rows, title, outgoing){
-  const head = `<tr><td colspan="8" style="background:#EEF3F8;padding:10px 8px;font-size:14px"><b>${esc(title)}</b>`
+  const head = `<tr><td colspan="9" style="background:#EEF3F8;padding:10px 8px;font-size:14px"><b>${esc(title)}</b>`
       + `<span class="muted"> · ${rows.length} contract(s)</span></td></tr>`
     + '<tr><th>Contract</th><th>Counterparty</th><th class="num">Price</th>'
     + '<th class="num">Sub-contracted</th><th class="num">Work done for it</th>'
+    + '<th class="num" title="travel and other money spent on the job, at each project\'s share">Direct</th>'
     + '<th class="num">Earned under it</th><th class="num">Invoiced</th>'
     + `<th class="num">${outgoing?'Left of the budget':'Margin'}</th></tr>`;
-  if(!rows.length) return head + '<tr><td class="empty" colspan="8">Nothing in this period.</td></tr>';
+  if(!rows.length) return head + '<tr><td class="empty" colspan="9">Nothing in this period.</td></tr>';
 
-  let tPrice=0, tSub=0, tJob=0, tOwn=0, tInv=0, tLeft=0, anyLeft=false, anyGap=false;
+  let tPrice=0, tSub=0, tJob=0, tOwn=0, tInv=0, tLeft=0, tDirect=0, anyLeft=false, anyGap=false;
   const body = rows.map(c=>{
     // Cost of a contract = what was sub-contracted plus the work done for it. What the
     // counterparty earned under their own contract is a separate figure — adding both
     // would count the same money twice.
-    const totalUsd = Math.round((c.subCost.usd + c.jobCost.usd)*100)/100;
+    // Cost of a contract = sub-contracts, plus the work done for it, plus what was spent
+    // getting it done. A flight to the customer is as much a cost of the job as an hour.
+    const directUsd = c.direct ? c.direct.usd : 0;
+    const totalUsd = Math.round((c.subCost.usd + c.jobCost.usd + directUsd)*100)/100;
     // A framework agreement carries no total of its own — clause 1.4 of the Eller one says
     // so outright. Its value is the work orders issued under it, and the margin is measured
     // against that.
@@ -3753,10 +3757,11 @@ function costGroup(rows, title, outgoing){
     const spentUsd = framework ? (c.confirmed ? c.confirmed.usd : 0) : totalUsd;
     // A margin worked out from a sum that is missing part of itself is not a small error,
     // it is a plausible wrong number. Better no figure than that one.
-    const gap = bucketGap(c.subCost) || bucketGap(c.jobCost)
+    const gap = bucketGap(c.subCost) || bucketGap(c.jobCost) || (c.direct?bucketGap(c.direct):'')
              || (framework ? (bucketGap(c.confirmed) || bucketGap(c.workOrderValue)) : '');
     const left = (budgetUsd && !gap) ? Math.round((budgetUsd - spentUsd)*100)/100 : null;
     tPrice += budgetUsd||0; tSub += c.subCost.usd; tJob += c.jobCost.usd; tOwn += c.ownCost.usd;
+    tDirect += directUsd;
     tInv += (c.invoiced?c.invoiced.usd:0);
     if(gap) anyGap = true;
     if(left!==null){ tLeft += left; anyLeft = true; }
@@ -3793,6 +3798,7 @@ function costGroup(rows, title, outgoing){
         ${(c.subs||[]).length?`<span class="muted det" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}${x.purchased?' <i>bought</i>':''}`).join('<br>')}</span>`:''}</td>
       <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}${bucketGap(c.jobCost)?' partial':''}</span>`:''}${gapNote(c.jobCost)}${people}
         ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
+      <td class="num">${c.directCount?bucketText(c.direct):'<span class="muted">—</span>'}${c.directCount?`<br><span class="muted" title="${esc((c.directBy||[]).map(p=>p.project+' $'+money(p.usd)).join(', '))}">${c.directCount} expense(s) · $${money(c.direct.usd)}${bucketGap(c.direct)?' partial':''}</span>`:''}${c.directCount?gapNote(c.direct):''}</td>
       <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}${bucketGap(c.ownCost)?' partial':''}</span>`:''}${gapNote(c.ownCost)}
         ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
       <td class="num">${invoicedCell(c, outgoing, framework, hourly)}</td>
@@ -3807,7 +3813,7 @@ function costGroup(rows, title, outgoing){
   const totals = `<tr><td colspan="2" style="background:#EEF3F8"><b>Total, USD equivalent</b>`
     + (anyGap?`<br><span style="color:var(--warn);font-size:11px">partial — some amounts had no rate</span>`:'')
     + `</td>`
-    + t(tPrice) + t(tSub) + t(tJob) + t(tOwn) + t(tInv)
+    + t(tPrice) + t(tSub) + t(tJob) + t(tDirect) + t(tOwn) + t(tInv)
     + (anyLeft
         ? `<td class="num" style="background:#EEF3F8"><b><span style="color:${tLeft<0?'var(--warn)':'inherit'}">${tLeft<0?'−':''}$${money(Math.abs(Math.round(tLeft*100)/100))}</span></b></td>`
         : '<td style="background:#EEF3F8"></td>')

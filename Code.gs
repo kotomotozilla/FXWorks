@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.241';
+const BUILD = '2026-08-08.242';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -5319,6 +5319,59 @@ function costReport_(d) {
     }
   });
 
+  // ── Direct costs ───────────────────────────────────────────────────────────
+  // A trip is not labour: it is money spent on a job, and it belongs to the job whatever the
+  // performers did. An expense reaches a contract through its projects, and where it serves
+  // several it arrives in parts — the shares are already settled on the line, and split to
+  // the cent, so the parts add back up to what was paid.
+  var directByContract = {}, directOff = {};
+  (function () {
+    var lines = readAll_(SHEETS.expenses);
+    var shares = readAll_(SHEETS.expenseProjects);
+    var byExpense = {};
+    shares.forEach(function (s) {
+      (byExpense[String(s.ExpenseID)] = byExpense[String(s.ExpenseID)] || [])
+        .push({ projectId: String(s.ProjectID), share: num_(s.Share) });
+    });
+    lines.forEach(function (x) {
+      // An expense has one date that matters here: when the service was delivered, or failing
+      // that when it was paid for.
+      var dt = isoDate_(x.ServiceFrom) || isoDate_(x.Date);
+      if (byReportDate && !inRange(dt)) return;
+      var mine = byExpense[String(x.ExpenseID)];
+      if (!mine || !mine.length) {
+        var single = trim_(x.ProjectID);
+        mine = single ? [{ projectId: single, share: 100 }] : [];
+      }
+      if (!mine.length) {
+        var k = 'none';
+        var o = directOff[k] = directOff[k] || { project: '', bucket: emptyBucket_(), count: 0 };
+        addTo_(o.bucket, x.Currency, num_(x.Amount), dt);
+        o.count++;
+        return;
+      }
+      var parts = expSplit_(num_(x.Amount), expNormShares_(mine));
+      parts.forEach(function (p) {
+        var pr = projById[p.projectId];
+        var contractId = pr ? topOf(trim_(pr.ContractID)) : '';
+        if (!contractId) {
+          var key = p.projectId || 'none';
+          var off = directOff[key] = directOff[key]
+            || { project: pr ? trim_(pr.Name) : '', bucket: emptyBucket_(), count: 0 };
+          addTo_(off.bucket, x.Currency, p.amount, dt);
+          off.count++;
+          return;
+        }
+        var e = directByContract[contractId] = directByContract[contractId]
+          || { bucket: emptyBucket_(), count: 0, byProject: {} };
+        addTo_(e.bucket, x.Currency, p.amount, dt);
+        e.count++;
+        var name = pr ? (trim_(pr.Name) || p.projectId) : p.projectId;
+        e.byProject[name] = round2_((e.byProject[name] || 0) + toUsd_(x.Currency, p.amount, dt));
+      });
+    });
+  })();
+
   var rows = [];
   contracts.forEach(function (c) {
     if (trim_(c.ParentContractID)) return;
@@ -5465,6 +5518,12 @@ function costReport_(d) {
                  acceptance: trim_(x.TargetAcceptance), pricing: trim_(x.PricingModel) };
       }).sort(function (a, b) { return String(a.number).localeCompare(String(b.number)); }),
       subCount: plainSubs, subCost: subCost, subs: subList, extReports: job.extReports,
+      // Travel and everything else spent on the job, at the share each project carries.
+      direct: (directByContract[id] || {}).bucket || emptyBucket_(),
+      directCount: (directByContract[id] || {}).count || 0,
+      directBy: Object.keys((directByContract[id] || {}).byProject || {}).map(function (k) {
+        return { project: k, usd: directByContract[id].byProject[k] };
+      }).sort(function (a, b) { return b.usd - a.usd; }),
       invoiced: invoiced, invoiceCount: invoiceCount, invoiceDuplicates: invDuplicates,
       // what the counterparty of this contract has earned under it
       ownCost: perf.cost, ownPending: perf.pending, ownReports: perf.reports, ownPending_n: perf.reportsPending,
@@ -5519,7 +5578,14 @@ function costReport_(d) {
 
   return { ok: true, from: from, to: to, dateField: dateField,
            contracts: rows, projectsNoContract: noContract, trace: trace,
-           offContract: Object.keys(offRows).map(function (k) { return offRows[k]; }) };
+           offContract: Object.keys(offRows).map(function (k) { return offRows[k]; }),
+           // Spent on jobs that reach no contract — a project without one, or an expense
+           // nobody has tied to a project yet.
+           directOff: Object.keys(directOff).map(function (k) {
+             return { project: directOff[k].project, bucket: directOff[k].bucket,
+                      count: directOff[k].count };
+           }).filter(function (r) { return r.count > 0; })
+             .sort(function (a, b) { return b.bucket.usd - a.bucket.usd; }) };
 }
 
 // ── Performance uplift ────────────────────────────────────────────────────────
