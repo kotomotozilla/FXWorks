@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.254';
+const BUILD = '2026-08-08.255';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -5573,6 +5573,25 @@ function costReport_(d) {
     else if (st === 'submitted') { addTo_(row.pending, a.Currency, reportTotal_(a), dt); }
   });
 
+  // A project with no contract may have had work reported against it, money spent on it, or
+  // both. One row either way: two tables about the same project asked the reader to add them
+  // up by eye.
+  Object.keys(directOff).forEach(function (key) {
+    var d = directOff[key];
+    var pr2 = key === 'none' ? null : projById[key];
+    if (!offRows[key]) offRows[key] = { project: d.project || (pr2 ? trim_(pr2.Name) : ''),
+                                        customer: pr2 ? trim_(pr2.Customer) : '', people: {},
+                                        cost: emptyBucket_(), pending: emptyBucket_(), reports: 0 };
+    var row = offRows[key];
+    row.direct = d.bucket;
+    row.directCount = d.count;
+    row.personal = round2_(d.personal);
+    row.categories = Object.keys(d.byCategory).map(function (n) { return { name: n, usd: d.byCategory[n] }; })
+      .sort(function (a, b) { return b.usd - a.usd; }).slice(0, 6);
+    row.activities = Object.keys(d.byActivity).map(function (n) { return { name: n, usd: d.byActivity[n] }; })
+      .sort(function (a, b) { return b.usd - a.usd; }).slice(0, 6);
+  });
+
   var noContract = 0;
   projects.forEach(function (p) { if (!trim_(p.ContractID)) noContract++; });
 
@@ -5595,20 +5614,7 @@ function costReport_(d) {
 
   return { ok: true, from: from, to: to, dateField: dateField,
            contracts: rows, projectsNoContract: noContract, trace: trace,
-           offContract: Object.keys(offRows).map(function (k) { return offRows[k]; }),
-           // Spent on jobs that reach no contract — a project without one, or an expense
-           // nobody has tied to a project yet.
-           directOff: Object.keys(directOff).map(function (k) {
-             var r = directOff[k];
-             var top = function (map) {
-               return Object.keys(map).map(function (n) { return { name: n, usd: map[n] }; })
-                 .sort(function (a, b) { return b.usd - a.usd; }).slice(0, 6);
-             };
-             return { project: r.project, bucket: r.bucket, count: r.count,
-                      categories: top(r.byCategory), activities: top(r.byActivity),
-                      personal: round2_(r.personal) };
-           }).filter(function (r) { return r.count > 0; })
-             .sort(function (a, b) { return b.bucket.usd - a.bucket.usd; }) };
+           offContract: Object.keys(offRows).map(function (k) { return offRows[k]; }) };
 }
 
 // ── Performance uplift ────────────────────────────────────────────────────────

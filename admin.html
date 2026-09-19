@@ -282,13 +282,7 @@
       <div class="panel">
         <h2 style="font-size:16px">Projects without a contract</h2>
         <div class="scroll"><table id="costOffTable" class="cost"><tbody><tr><td class="empty">—</td></tr></tbody></table></div>
-        <div id="costDirectOffWrap" class="hidden" style="margin-top:14px">
-          <h2 style="font-size:16px">Expenses that reach no contract</h2>
-          <p class="muted" style="font-size:12px">Money spent on a project that has no contract, or on
-            nothing named at all. It is recorded and evidenced like any other expense; it simply has no
-            contract to be a cost of, so it appears here rather than in the tables above.</p>
-          <div class="scroll"><table id="costDirectOffTable" class="cost"><tbody></tbody></table></div>
-        </div>
+      </div>
       </div>
     </section>
 
@@ -1211,7 +1205,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.254';
+const BUILD = '2026-08-08.255';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 // A currency with no symbol of its own is written with its code. It used to fall back to a
@@ -3761,7 +3755,10 @@ function costGroup(rows, title, outgoing){
     // What has been drawn against a framework is not in its own columns: the work bought
     // under it is a cost of the contract it was bought for, and sits there. What it has
     // used up is what its orders have confirmed.
-    const spentUsd = framework ? (c.confirmed ? c.confirmed.usd : 0) : totalUsd;
+    // A framework's spend is what its orders confirmed — plus what was spent getting them
+    // done. Leaving the travel out flattered every margin it appeared in.
+    const spentUsd = framework ? Math.round(((c.confirmed ? c.confirmed.usd : 0) + directUsd)*100)/100
+                               : totalUsd;
     // A margin worked out from a sum that is missing part of itself is not a small error,
     // it is a plausible wrong number. Better no figure than that one.
     const gap = bucketGap(c.subCost) || bucketGap(c.jobCost) || (c.direct?bucketGap(c.direct):'')
@@ -3805,7 +3802,9 @@ function costGroup(rows, title, outgoing){
         ${(c.subs||[]).length?`<span class="muted det" style="font-size:11px">${c.subs.map(x=>`${esc(x.who)} ${cur(x.currency)}${money(x.amount)}${x.purchased?' <i>bought</i>':''}`).join('<br>')}</span>`:''}</td>
       <td class="num">${bucketText(c.jobCost)}${c.jobReports?`<br><span class="muted">${c.jobReports} report(s) · $${money(c.jobCost.usd)}${bucketGap(c.jobCost)?' partial':''}</span>`:''}${gapNote(c.jobCost)}${people}
         ${c.jobPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.jobPending).replace(/<br>/g,', ')}</span>`:''}</td>
-      <td class="num">${c.directCount?bucketText(c.direct):'<span class="muted">—</span>'}${c.directCount?`<br><span class="muted" title="${esc((c.directBy||[]).map(p=>p.project+' $'+money(p.usd)).join(', '))}">${c.directCount} expense(s) · $${money(c.direct.usd)}${bucketGap(c.direct)?' partial':''}</span>`:''}${c.directCount?gapNote(c.direct):''}</td>
+      <td class="num" title="${esc(c.directCount?bucketText(c.direct).replace(/<br>/g,', ').replace(/<[^>]+>/g,''):'')}">${c.directCount
+        ? `$${money(c.direct.usd)}<br><span class="muted" title="${esc((c.directBy||[]).map(p=>p.project+' $'+money(p.usd)).join(', '))}">${c.directCount} expense(s)${bucketGap(c.direct)?' · partial':''}</span>`
+        : '<span class="muted">—</span>'}</td>
       <td class="num">${bucketText(c.ownCost)}${c.ownReports?`<br><span class="muted">${c.ownReports} report(s) · $${money(c.ownCost.usd)}${bucketGap(c.ownCost)?' partial':''}</span>`:''}${gapNote(c.ownCost)}
         ${c.ownPending.usd?`<br><span class="muted" style="font-size:11px">pending ${bucketText(c.ownPending).replace(/<br>/g,', ')}</span>`:''}</td>
       <td class="num">${invoicedCell(c, outgoing, framework, hourly)}</td>
@@ -3851,53 +3850,35 @@ function renderCosts(r){
   const ob=$('costOffTable').querySelector('tbody');
   const off=(r.offContract||[]).slice().sort((a,b)=>b.cost.usd-a.cost.usd);
   let offTot=0;
+  let offDirect=0;
+  // Reported work and money spent, in one row per project: two tables about the same project
+  // left the reader adding them up by eye.
   ob.innerHTML = '<tr><th>Project</th><th>Customer</th><th>Who reported</th>'
-    + '<th class="num">Cost</th><th class="num">Not yet accepted</th></tr>'
+    + '<th class="num">Cost</th><th class="num">Not yet accepted</th>'
+    + '<th class="num" title="travel and other money spent on the project">Direct</th></tr>'
     + (off.length ? off.map(p=>{
         offTot+=p.cost.usd;
+        offDirect += (p.direct?p.direct.usd:0);
         const people = Object.keys(p.people||{});
+        const cats = (p.categories||[]).map(c=>`${trvCatIcon(c.name)} ${esc(c.name)} $${money(c.usd)}`).join(', ');
+        const trips = (p.activities||[]).map(t=>`${esc(t.name)} $${money(t.usd)}`).join(', ');
         return `<tr>
-          <td>${esc(p.project||'—')}</td>
+          <td>${esc(p.project||'— not tied to a project —')}
+            ${p.personal?`<div class="det" style="font-size:11px;color:var(--warn)">$${money(p.personal)} paid personally</div>`:''}</td>
           <td class="muted">${esc(p.customer||'—')}</td>
           <td>${people.length ? people.map(n=>`${esc(n)} <span class="muted">${bucketText(p.people[n]).replace(/<br>/g,', ')}</span>`).join('<br>') : '—'}</td>
           <td class="num">${bucketText(p.cost)}<br><span class="muted">${p.cost.usd?'$'+money(p.cost.usd):''}</span></td>
-          <td class="num muted">${bucketText(p.pending)}</td></tr>`;
+          <td class="num muted">${bucketText(p.pending)}</td>
+          <td class="num" title="${esc([cats,trips].filter(Boolean).join(' · '))}">${p.directCount
+            ? `$${money(p.direct.usd)}<br><span class="muted">${p.directCount} expense(s)${bucketGap(p.direct)?' · partial':''}</span>`
+            : '<span class="muted">—</span>'}</td></tr>`;
       }).join('')
-      : `<tr><td class="empty" colspan="5">No reports outside contracts in this period.${r.projectsNoContract?` There ${r.projectsNoContract===1?'is':'are'} ${r.projectsNoContract} project(s) with no contract, but nothing has been reported against them.`:''}</td></tr>`)
+      : `<tr><td class="empty" colspan="6">Nothing outside contracts in this period.${r.projectsNoContract?` There ${r.projectsNoContract===1?'is':'are'} ${r.projectsNoContract} project(s) with no contract, but nothing has been reported or spent against them.`:''}</td></tr>`)
     + (off.length ? `<tr><td colspan="3" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>
         <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(offTot*100)/100)}</b></td>
-        <td style="background:#EEF3F8"></td></tr>` : '');
+        <td style="background:#EEF3F8"></td>
+        <td class="num" style="background:#EEF3F8"><b>${offDirect?'$'+money(Math.round(offDirect*100)/100):''}</b></td></tr>` : '');
 
-  // Spending that reaches no contract. Kept out of the table above because that one is about
-  // reported work, and these are not hours — they are money, and mixing the two would make
-  // both columns mean less.
-  const dOff = (r.directOff||[]).slice().sort((a,b)=>b.bucket.usd-a.bucket.usd);
-  $('costDirectOffWrap').classList.toggle('hidden', !dOff.length);
-  if(dOff.length){
-    let dTot = 0;
-    $('costDirectOffTable').querySelector('tbody').innerHTML =
-      '<tr><th>Project</th><th class="num">Expenses</th><th>What it went on</th>'
-      + '<th>Where from</th><th class="num">Spent</th></tr>'
-      + dOff.map(p=>{
-          dTot += p.bucket.usd;
-          const cats = (p.categories||[]).map(c=>`${trvCatIcon(c.name)} ${esc(c.name)} <span class="muted">$${money(c.usd)}</span>`).join('<br>');
-          const trips = (p.activities||[]).map(t=>`${esc(t.name)} <span class="muted">$${money(t.usd)}</span>`).join('<br>');
-          return `<tr><td>${esc(p.project||'— not tied to a project —')}`
-            + (p.personal?`<div class="muted det" style="font-size:11px;color:var(--warn)">`
-                          + `$${money(p.personal)} paid personally</div>`:'')
-            + `</td>`
-            + `<td class="num muted">${p.count}</td>`
-            + `<td style="font-size:12px">${cats||'—'}</td>`
-            + `<td style="font-size:12px">${trips||'—'}</td>`
-            // One figure, in the currency everything else in this table is in. The amounts as
-            // they were actually spent are worth having, but as a list beside three columns of
-            // dollars they read as a total and are not one.
-            + `<td class="num" title="${esc(bucketText(p.bucket).replace(/<br>/g,', ').replace(/<[^>]+>/g,''))}">`
-            + `$${money(p.bucket.usd)}${bucketGap(p.bucket)?'<br><span class="muted" style="font-size:11px">partial — some amounts had no rate</span>':''}</td></tr>`;
-        }).join('')
-      + `<tr><td colspan="4" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>`
-      + `<td class="num" style="background:#EEF3F8"><b>$${money(Math.round(dTot*100)/100)}</b></td></tr>`;
-  }
 }
 
 // ── Sorting & filtering engine (shared by all lists) ──
