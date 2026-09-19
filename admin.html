@@ -1211,7 +1211,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.247';
+const BUILD = '2026-08-08.248';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 // A currency with no symbol of its own is written with its code. It used to fall back to a
@@ -6315,9 +6315,11 @@ function trvDetail(a, lines, files){
      + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`
      + `<b style="font-size:14px">Projects</b>`
      + `<div class="acts"><button class="btn sm" onclick="trvActProjSave('${id}',this)">Save projects</button>`
-     + (split.length && lines.length
+     + (lines.length
          ? `<button class="btn ghost sm" onclick="trvActProjApply('${id}',this)" `
-           + `title="write this split onto every expense line on the trip">Apply to ${lines.length} line(s)</button>`
+           + `title="${split.length ? 'write this split onto every expense line on the trip'
+                                    : 'take the projects off every expense line on the trip'}">`
+           + `${split.length ? 'Apply to' : 'Clear on'} ${lines.length} line(s)</button>`
          : '') + `</div></div>`
      + `<div id="trvProjErr_${id}"></div>`
      + `<div id="trp_projects" style="margin-top:8px"></div>`
@@ -6327,7 +6329,10 @@ function trvDetail(a, lines, files){
      + `<div style="flex:0 0 auto"><button class="btn ghost sm" onclick="trvProjEven()">Split equally</button></div>`
      + `</div>`
      + `<div class="muted" style="font-size:12px;margin-top:4px">New expense lines start from this split. `
-     + `Lines already here keep what they have until you apply it to them.</div></div>`;
+     + `Lines already here keep what they have until you apply it to them`
+     + (lines.length ? ` — <b>${lines.filter(x=>trvProjOf(x.ExpenseID).length).length} of ${lines.length}</b> `
+                       + `carry a project now` : '')
+     + `.</div></div>`;
 
   // The report, filled in as it goes
   h += `<div style="margin-top:14px;padding:12px;border:1px solid #DDE3EA;border-radius:10px">`
@@ -6455,9 +6460,13 @@ function trvProjShare(i, v){ if(TRV_EXP_PROJ[i]) TRV_EXP_PROJ[i].share = +v||0; 
 // What a line is split across, as stored.
 // Under the supplier, where the money goes. Silent when there is one project or none — the
 // ordinary case does not need decorating.
+// What a line is booked to, said on the line. It used to be shown only when there were two
+// or more, so applying a trip's split to its lines changed the costs report with nothing on
+// screen to say it had happened.
 function trvProjChip(x){
   const rows = trvProjOf(x.ExpenseID);
-  if(rows.length < 2) return '';
+  if(!rows.length) return `<div class="muted" style="font-size:12px;color:#8A94A6">no project</div>`;
+  if(rows.length === 1) return `<div class="muted" style="font-size:12px">${esc(trvProjName(rows[0].projectId)||'—')}</div>`;
   const detail = rows.map(p=>`${trvProjName(p.projectId)||'—'} ${money(p.share)}%`).join(', ');
   return `<div class="muted" style="font-size:12px" title="${esc(detail)}">${rows.length} projects</div>`;
 }
@@ -6600,10 +6609,15 @@ async function trvActProjSave(actId, btn){
 async function trvActProjApply(actId, btn){
   const a = trvAct(actId), split = trvActProj(a);
   const lines = trvLinesOf(actId);
-  if(!split.length || !lines.length) return;
+  if(!lines.length) return;
   const how = split.map(p=>`${trvProjName(p.projectId)||'—'} ${money(p.share)}%`).join(', ');
-  if(!confirm(`Set every expense line on this trip to: ${how}?\n`
-    + `${lines.length} line(s) — anything split differently by hand is overwritten.`)) return;
+  // With no split on the trip this is the way back: the lines are cleared, and they leave the
+  // contract they were counted against in Costs.
+  if(!confirm(split.length
+    ? `Set every expense line on this trip to: ${how}?\n`
+      + `${lines.length} line(s) — anything split differently by hand is overwritten.`
+    : `Take the projects off every expense line on this trip?\n`
+      + `${lines.length} line(s) — they will stop counting against any contract in Costs.`)) return;
   const done = busy(btn);
   try{
     const r = await api('activity_projects_apply',{ activityId: actId });
@@ -6616,7 +6630,9 @@ async function trvActProjApply(actId, btn){
       .filter(p=>!lines.some(l=>String(l.ExpenseID)===String(p.ExpenseID)))
       .concat(lines.flatMap(l=>(r.projects||[]).map(p=>
         ({ ExpenseID:l.ExpenseID, ProjectID:p.projectId, Share:p.share }))));
-    trvSay('ok', `${r.updated} line(s) set to ${esc(how)}.`);
+    notice('trvProjErr_'+actId,'ok', split.length
+      ? `${r.updated} line(s) set to ${esc(how)}.`
+      : `${r.updated} line(s) no longer belong to any project.`);
     travelRender();
   }catch(e){ notice('trvProjErr_'+actId,'err',esc(e.message)); }
   finally{ done(); }
