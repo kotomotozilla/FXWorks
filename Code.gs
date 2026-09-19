@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.246';
+const BUILD = '2026-08-08.247';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -281,6 +281,7 @@ function route_(action, d) {
     case 'save_activity':      return saveActivity_(d);
     case 'save_activity_report': return saveActivityReport_(d);
     case 'delete_activity':    return deleteActivity_(d);
+    case 'activity_projects_save':  return activityProjectsSave_(d);
     case 'activity_projects_apply': return activityProjectsApply_(d);
     case 'save_expense':       return saveExpense_(d);
     case 'exp_read':           return expRead_(d);
@@ -6578,9 +6579,15 @@ function saveActivity_(d) {
   // What the trip is made for. New expense lines start from this, and it can be written onto
   // the existing ones on request — never on its own, because a line may have been split
   // differently on purpose.
-  var split = expNormShares_(Array.isArray(d.projects)
-    ? d.projects.map(function (p) { return { projectId: trim_(p && p.projectId), share: num_(p && p.share) }; })
-    : (trim_(d.projectId) ? [{ projectId: trim_(d.projectId), share: 100 }] : []));
+  // The split lives on the trip's page now. A request saved without one must leave whatever
+  // is there alone rather than clearing it.
+  var told = Array.isArray(d.projects) || trim_(d.projectId);
+  var current = id ? actProjects_(findRow_(SHEETS.activities, 'ActivityID', id)) : [];
+  var split = told
+    ? expNormShares_(Array.isArray(d.projects)
+        ? d.projects.map(function (p) { return { projectId: trim_(p && p.projectId), share: num_(p && p.share) }; })
+        : [{ projectId: trim_(d.projectId), share: 100 }])
+    : current;
   var f = {
     Type: activityType_(d.type),
     Purpose: trim_(d.purpose),
@@ -6746,6 +6753,24 @@ function actProjects_(a) {
 // Writing the trip's split onto every line it has. Asked for, never automatic: a line may
 // have been split differently on purpose, and quietly flattening that would be worse than
 // making somebody press a button.
+// Saving just the split, without touching anything else the trip holds. The request form no
+// longer carries it — the split belongs on the trip's own page, beside the expenses it
+// governs — so it needs a way in of its own.
+function activityProjectsSave_(d) {
+  requireAdmin_(d);
+  ensureActivities_();
+  var id = trim_(d.activityId);
+  if (!findRow_(SHEETS.activities, 'ActivityID', id)) return { ok: false, error: 'Activity not found' };
+  var split = expNormShares_(Array.isArray(d.projects)
+    ? d.projects.map(function (p) { return { projectId: trim_(p && p.projectId), share: num_(p && p.share) }; })
+    : []);
+  updateRow_(SHEETS.activities, 'ActivityID', id, {
+    Projects: split.length ? JSON.stringify(split) : '',
+    ProjectID: split.length === 1 ? split[0].projectId : ''
+  });
+  return { ok: true, activity: findRow_(SHEETS.activities, 'ActivityID', id), projects: split };
+}
+
 function activityProjectsApply_(d) {
   requireAdmin_(d);
   ensureActivities_();

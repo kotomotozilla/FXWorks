@@ -651,16 +651,6 @@
     <div style="flex:0 0 150px"><label>Budget</label><input id="ac_est" type="number" step="0.01"></div>
     <div style="flex:0 0 110px"><label>Currency</label><select id="ac_cur"></select></div>
   </div>
-  <div><label>Projects this trip is made for</label>
-    <div id="ac_projects"></div>
-    <div class="row" style="align-items:flex-end;margin-top:6px">
-      <div style="flex:1;min-width:200px"><select id="ac_addproj"></select></div>
-      <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="trvProjAdd()">Add project</button></div>
-      <div style="flex:0 0 auto"><button class="btn ghost sm" onclick="trvProjEven()">Split equally</button></div>
-    </div>
-    <div class="muted" style="font-size:12px;margin-top:4px">New expense lines start from this split.
-      Existing lines keep what they have until you apply it to them, inside the trip.</div>
-  </div>
   <div><label>Reference</label>
     <input id="ac_ref" placeholder="left blank — built from the date and destinations"></div>
   <div><label>Notes (optional)</label><textarea id="ac_notes" rows="2"></textarea></div>
@@ -1221,7 +1211,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.246';
+const BUILD = '2026-08-08.247';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 // A currency with no symbol of its own is written with its code. It used to fall back to a
@@ -6288,6 +6278,10 @@ function trvRenderDetail(){
   $('trDetailTitle').textContent = (a.Destinations||a.Reference||'Trip')
     + (a.StartDate?' · '+trvRange(a.StartDate, a.EndDate):'');
   $('trDetail').innerHTML = trvDetail(a, trvLinesOf(id), trvFilesOf(id));
+  // The split editor lives in the page that was just drawn, so it is filled in after.
+  trvProjUse('trp_projects','trp_addproj','activity');
+  TRV_EXP_PROJ = trvActProj(a);
+  trvProjRender();
 }
 
 function trvDetail(a, lines, files){
@@ -6313,6 +6307,27 @@ function trvDetail(a, lines, files){
      + (a.Notes?`<div class="muted" style="font-size:13px;margin-top:4px">${esc(a.Notes)}</div>`:'')
      + `</div>`
      + `<button class="btn ghost sm" onclick="editActivity('${id}')">Edit request</button></div>`;
+
+  // What the trip is made for. Here rather than in the request form: it governs the expenses
+  // below it, and it is read and changed while looking at them.
+  const split = trvActProj(a);
+  h += `<div style="margin-top:14px;padding:12px;border:1px solid #DDE3EA;border-radius:10px">`
+     + `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`
+     + `<b style="font-size:14px">Projects</b>`
+     + `<div class="acts"><button class="btn sm" onclick="trvActProjSave('${id}',this)">Save projects</button>`
+     + (split.length && lines.length
+         ? `<button class="btn ghost sm" onclick="trvActProjApply('${id}',this)" `
+           + `title="write this split onto every expense line on the trip">Apply to ${lines.length} line(s)</button>`
+         : '') + `</div></div>`
+     + `<div id="trvProjErr_${id}"></div>`
+     + `<div id="trp_projects" style="margin-top:8px"></div>`
+     + `<div class="row" style="align-items:flex-end;margin-top:6px">`
+     + `<div style="flex:1;min-width:200px"><select id="trp_addproj"></select></div>`
+     + `<div style="flex:0 0 auto"><button class="btn ghost sm" onclick="trvProjAdd()">Add project</button></div>`
+     + `<div style="flex:0 0 auto"><button class="btn ghost sm" onclick="trvProjEven()">Split equally</button></div>`
+     + `</div>`
+     + `<div class="muted" style="font-size:12px;margin-top:4px">New expense lines start from this split. `
+     + `Lines already here keep what they have until you apply it to them.</div></div>`;
 
   // The report, filled in as it goes
   h += `<div style="margin-top:14px;padding:12px;border:1px solid #DDE3EA;border-radius:10px">`
@@ -6540,9 +6555,7 @@ function trvOpenActivity(a){
   $('ac_end').value = a && a.EndDate ? fmtDate(a.EndDate) : '';
   $('ac_est').value = a && a.EstimatedCost!=='' && a.EstimatedCost!=null ? a.EstimatedCost : '';
   $('ac_cur').innerHTML = trvCurOptions(a ? a.Currency : 'EUR');
-  trvProjUse('ac_projects','ac_addproj','activity');
-  TRV_EXP_PROJ = trvActProj(a);
-  trvProjRender();
+
   $('ac_ref').value = a ? (a.Reference||'') : '';
   $('ac_notes').value = a ? (a.Notes||'') : '';
   $('acModal').classList.remove('hidden');
@@ -6556,7 +6569,7 @@ async function saveActivityForm(btn){
       destinations:$('ac_dest').value, counterparty:$('ac_cp').value, purpose:$('ac_purpose').value,
       startDate:$('ac_start').value, endDate:$('ac_end').value,
       estimatedCost:$('ac_est').value, currency:$('ac_cur').value,
-      projects: TRV_EXP_PROJ, notes:$('ac_notes').value
+      notes:$('ac_notes').value
     });
     if(!r.ok) throw new Error(r.error||'Could not save');
     trvPutAct(r.activity);
@@ -6570,6 +6583,20 @@ async function saveActivityForm(btn){
 
 // The trip's split, written onto its lines. Asked for rather than automatic: a line may have
 // been split differently on purpose, and flattening that quietly is worse than a button.
+async function trvActProjSave(actId, btn){
+  const done = busy(btn);
+  try{
+    const r = await api('activity_projects_save',{ activityId: actId, projects: TRV_EXP_PROJ });
+    if(!r.ok) throw new Error(r.error||'Could not save');
+    trvPutAct(r.activity);
+    notice('trvProjErr_'+actId,'ok', (r.projects||[]).length
+      ? `Saved. New expense lines will start from this.`
+      : 'Saved — no projects set.');
+    travelRender();
+  }catch(e){ notice('trvProjErr_'+actId,'err',esc(e.message)); }
+  finally{ done(); }
+}
+
 async function trvActProjApply(actId, btn){
   const a = trvAct(actId), split = trvActProj(a);
   const lines = trvLinesOf(actId);
@@ -6591,7 +6618,7 @@ async function trvActProjApply(actId, btn){
         ({ ExpenseID:l.ExpenseID, ProjectID:p.projectId, Share:p.share }))));
     trvSay('ok', `${r.updated} line(s) set to ${esc(how)}.`);
     travelRender();
-  }catch(e){ trvSay('err',esc(e.message)); }
+  }catch(e){ notice('trvProjErr_'+actId,'err',esc(e.message)); }
   finally{ done(); }
 }
 
