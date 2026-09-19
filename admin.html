@@ -282,6 +282,13 @@
       <div class="panel">
         <h2 style="font-size:16px">Projects without a contract</h2>
         <div class="scroll"><table id="costOffTable" class="cost"><tbody><tr><td class="empty">—</td></tr></tbody></table></div>
+        <div id="costDirectOffWrap" class="hidden" style="margin-top:14px">
+          <h2 style="font-size:16px">Expenses that reach no contract</h2>
+          <p class="muted" style="font-size:12px">Money spent on a project that has no contract, or on
+            nothing named at all. It is recorded and evidenced like any other expense; it simply has no
+            contract to be a cost of, so it appears here rather than in the tables above.</p>
+          <div class="scroll"><table id="costDirectOffTable" class="cost"><tbody></tbody></table></div>
+        </div>
       </div>
     </section>
 
@@ -1207,7 +1214,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.242';
+const BUILD = '2026-08-08.243';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 const cur = c=>SYM[c]||'$';
@@ -3860,6 +3867,26 @@ function renderCosts(r){
     + (off.length ? `<tr><td colspan="3" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>
         <td class="num" style="background:#EEF3F8"><b>$${money(Math.round(offTot*100)/100)}</b></td>
         <td style="background:#EEF3F8"></td></tr>` : '');
+
+  // Spending that reaches no contract. Kept out of the table above because that one is about
+  // reported work, and these are not hours — they are money, and mixing the two would make
+  // both columns mean less.
+  const dOff = (r.directOff||[]).slice().sort((a,b)=>b.bucket.usd-a.bucket.usd);
+  $('costDirectOffWrap').classList.toggle('hidden', !dOff.length);
+  if(dOff.length){
+    let dTot = 0;
+    $('costDirectOffTable').querySelector('tbody').innerHTML =
+      '<tr><th>Project</th><th class="num">Expenses</th><th class="num">Spent</th></tr>'
+      + dOff.map(p=>{
+          dTot += p.bucket.usd;
+          return `<tr><td>${esc(p.project||'— not tied to a project —')}</td>`
+            + `<td class="num muted">${p.count}</td>`
+            + `<td class="num">${bucketText(p.bucket)}<br><span class="muted">`
+            + `${p.bucket.usd?'$'+money(p.bucket.usd):''}${bucketGap(p.bucket)?' partial':''}</span></td></tr>`;
+        }).join('')
+      + `<tr><td colspan="2" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>`
+      + `<td class="num" style="background:#EEF3F8"><b>$${money(Math.round(dTot*100)/100)}</b></td></tr>`;
+  }
 }
 
 // ── Sorting & filtering engine (shared by all lists) ──
