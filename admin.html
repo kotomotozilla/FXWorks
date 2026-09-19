@@ -1214,10 +1214,13 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.243';
+const BUILD = '2026-08-08.244';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
-const cur = c=>SYM[c]||'$';
+// A currency with no symbol of its own is written with its code. It used to fall back to a
+// dollar sign, which turned 102,283.69 Hong Kong dollars into what read as a hundred thousand
+// US ones — the same figure, a different order of magnitude, and nothing on screen to say so.
+const cur = c=>{ c = String(c||'').toUpperCase(); return SYM[c] || (c ? c+' ' : ''); };
 const esc = s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const money = n=>(Math.round((+n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const hrs = n=>(n===''||n==null)?'—':(Math.round((+n||0)*100)/100).toLocaleString('en-US');
@@ -3876,15 +3879,23 @@ function renderCosts(r){
   if(dOff.length){
     let dTot = 0;
     $('costDirectOffTable').querySelector('tbody').innerHTML =
-      '<tr><th>Project</th><th class="num">Expenses</th><th class="num">Spent</th></tr>'
+      '<tr><th>Project</th><th class="num">Expenses</th><th>What it went on</th>'
+      + '<th>Where from</th><th class="num">Spent</th></tr>'
       + dOff.map(p=>{
           dTot += p.bucket.usd;
-          return `<tr><td>${esc(p.project||'— not tied to a project —')}</td>`
+          const cats = (p.categories||[]).map(c=>`${trvCatIcon(c.name)} ${esc(c.name)} <span class="muted">$${money(c.usd)}</span>`).join('<br>');
+          const trips = (p.activities||[]).map(t=>`${esc(t.name)} <span class="muted">$${money(t.usd)}</span>`).join('<br>');
+          return `<tr><td>${esc(p.project||'— not tied to a project —')}`
+            + (p.personal?`<div class="muted det" style="font-size:11px;color:var(--warn)">`
+                          + `$${money(p.personal)} paid personally</div>`:'')
+            + `</td>`
             + `<td class="num muted">${p.count}</td>`
+            + `<td style="font-size:12px">${cats||'—'}</td>`
+            + `<td style="font-size:12px">${trips||'—'}</td>`
             + `<td class="num">${bucketText(p.bucket)}<br><span class="muted">`
             + `${p.bucket.usd?'$'+money(p.bucket.usd):''}${bucketGap(p.bucket)?' partial':''}</span></td></tr>`;
         }).join('')
-      + `<tr><td colspan="2" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>`
+      + `<tr><td colspan="4" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>`
       + `<td class="num" style="background:#EEF3F8"><b>$${money(Math.round(dTot*100)/100)}</b></td></tr>`;
   }
 }

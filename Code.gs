@@ -27,7 +27,7 @@ const CONFIG = {
 };
 
 // Bump this on every backend change so the admin panel can confirm the new code is deployed.
-const BUILD = '2026-08-08.243';
+const BUILD = '2026-08-08.244';
 
 // ─────────────────────────────────────────────────────────────────────────────
 const SHEETS = { documents: 'Documents2', blocks: 'Blocks2', sentText: 'SentText2',
@@ -5343,11 +5343,23 @@ function costReport_(d) {
         var single = trim_(x.ProjectID);
         mine = single ? [{ projectId: single, share: 100 }] : [];
       }
+      var noteOn = function (row, amount) {
+        var cat = trim_(x.Category) || 'Other';
+        row.byCategory[cat] = round2_((row.byCategory[cat] || 0) + toUsd_(x.Currency, amount, dt));
+        var act = (trim_(x.ParentType) === 'activity')
+          ? findRow_(SHEETS.activities, 'ActivityID', trim_(x.ParentID)) : null;
+        var where = act ? (trim_(act.Destinations) || trim_(act.Reference)) : 'not on a trip';
+        row.byActivity[where] = round2_((row.byActivity[where] || 0) + toUsd_(x.Currency, amount, dt));
+        if (paidBy_(x.PaidBy) === 'personal') row.personal = round2_(row.personal + toUsd_(x.Currency, amount, dt));
+      };
+      var blank = function (name) {
+        return { project: name, bucket: emptyBucket_(), count: 0, byCategory: {}, byActivity: {}, personal: 0 };
+      };
       if (!mine.length) {
-        var k = 'none';
-        var o = directOff[k] = directOff[k] || { project: '', bucket: emptyBucket_(), count: 0 };
+        var o = directOff['none'] = directOff['none'] || blank('');
         addTo_(o.bucket, x.Currency, num_(x.Amount), dt);
         o.count++;
+        noteOn(o, num_(x.Amount));
         return;
       }
       var parts = expSplit_(num_(x.Amount), expNormShares_(mine));
@@ -5356,10 +5368,10 @@ function costReport_(d) {
         var contractId = pr ? topOf(trim_(pr.ContractID)) : '';
         if (!contractId) {
           var key = p.projectId || 'none';
-          var off = directOff[key] = directOff[key]
-            || { project: pr ? trim_(pr.Name) : '', bucket: emptyBucket_(), count: 0 };
+          var off = directOff[key] = directOff[key] || blank(pr ? trim_(pr.Name) : '');
           addTo_(off.bucket, x.Currency, p.amount, dt);
           off.count++;
+          noteOn(off, p.amount);
           return;
         }
         var e = directByContract[contractId] = directByContract[contractId]
@@ -5582,8 +5594,14 @@ function costReport_(d) {
            // Spent on jobs that reach no contract — a project without one, or an expense
            // nobody has tied to a project yet.
            directOff: Object.keys(directOff).map(function (k) {
-             return { project: directOff[k].project, bucket: directOff[k].bucket,
-                      count: directOff[k].count };
+             var r = directOff[k];
+             var top = function (map) {
+               return Object.keys(map).map(function (n) { return { name: n, usd: map[n] }; })
+                 .sort(function (a, b) { return b.usd - a.usd; }).slice(0, 6);
+             };
+             return { project: r.project, bucket: r.bucket, count: r.count,
+                      categories: top(r.byCategory), activities: top(r.byActivity),
+                      personal: round2_(r.personal) };
            }).filter(function (r) { return r.count > 0; })
              .sort(function (a, b) { return b.bucket.usd - a.bucket.usd; }) };
 }
