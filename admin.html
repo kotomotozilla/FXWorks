@@ -1214,7 +1214,7 @@
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIJkaVEjDpadhpaNQWOjVzUMSn-DoF-IfnIYNNLgT-3V_gULgaOf5pVuRkO8T3zEIXmQ/exec';
 const SYM = {USD:'$', EUR:'€', AED:'AED ', SGD:'S$'};
 const COMPANY = 'Fraktalex Limited';
-const BUILD = '2026-08-08.244';
+const BUILD = '2026-08-08.245';
 let BE_BUILD = '';
 const $ = id=>document.getElementById(id);
 // A currency with no symbol of its own is written with its code. It used to fall back to a
@@ -3892,8 +3892,11 @@ function renderCosts(r){
             + `<td class="num muted">${p.count}</td>`
             + `<td style="font-size:12px">${cats||'—'}</td>`
             + `<td style="font-size:12px">${trips||'—'}</td>`
-            + `<td class="num">${bucketText(p.bucket)}<br><span class="muted">`
-            + `${p.bucket.usd?'$'+money(p.bucket.usd):''}${bucketGap(p.bucket)?' partial':''}</span></td></tr>`;
+            // One figure, in the currency everything else in this table is in. The amounts as
+            // they were actually spent are worth having, but as a list beside three columns of
+            // dollars they read as a total and are not one.
+            + `<td class="num" title="${esc(bucketText(p.bucket).replace(/<br>/g,', ').replace(/<[^>]+>/g,''))}">`
+            + `$${money(p.bucket.usd)}${bucketGap(p.bucket)?'<br><span class="muted" style="font-size:11px">partial — some amounts had no rate</span>':''}</td></tr>`;
         }).join('')
       + `<tr><td colspan="4" style="background:#EEF3F8"><b>Total, USD equivalent</b></td>`
       + `<td class="num" style="background:#EEF3F8"><b>$${money(Math.round(dTot*100)/100)}</b></td></tr>`;
